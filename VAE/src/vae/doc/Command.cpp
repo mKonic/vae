@@ -1,0 +1,321 @@
+#include "vaepch.h"
+#include "vae/doc/Command.h"
+
+#include <algorithm>
+
+namespace vae::doc {
+
+    // ---------------------------------------------------------------- SetProp
+
+    void SetPropCommand::Apply(Document& document) {
+        if (!m_Captured) { m_Old = document.GetProp(m_Node, m_Prop); m_Captured = true; }
+        document.SetProp(m_Node, m_Prop, m_New);
+    }
+
+    void SetPropCommand::Undo(Document& document) { document.SetProp(m_Node, m_Prop, m_Old); }
+
+    bool SetPropCommand::Coalesce(const Command& newer) {
+        const auto* other = dynamic_cast<const SetPropCommand*>(&newer);
+        if (!other || other->m_Node != m_Node || other->m_Prop != m_Prop) return false;
+        // Keep the ORIGINAL old value: undoing a coalesced drag must return to where it started,
+        // not to the previous mouse position.
+        m_New = other->m_New;
+        return true;
+    }
+
+    // ---------------------------------------------------------------- SetOverride
+
+    void SetOverrideCommand::Apply(Document& document) {
+        if (!m_Captured) {
+            const Node* node = document.Find(m_Instance);
+            if (node) {
+                auto it = node->overrides.find(m_Node);
+                if (it != node->overrides.end())
+                    if (const Value* existing = it->second.Find(m_Prop)) {
+                        m_Old = *existing;
+                        m_HadOld = true;
+                    }
+            }
+            m_Captured = true;
+        }
+        document.SetOverride(m_Instance, m_Node, m_Prop, m_New);
+    }
+
+    void SetOverrideCommand::Undo(Document& document) {
+        // "No override" is not the same as "override set to the old value" — clearing it is what
+        // puts the instance back under the component's control.
+        if (m_HadOld) document.SetOverride(m_Instance, m_Node, m_Prop, m_Old);
+        else          document.ClearOverride(m_Instance, m_Node, m_Prop);
+    }
+
+    bool SetOverrideCommand::Coalesce(const Command& newer) {
+        const auto* other = dynamic_cast<const SetOverrideCommand*>(&newer);
+        if (!other || other->m_Instance != m_Instance || other->m_Node != m_Node
+            || other->m_Prop != m_Prop) return false;
+        m_New = other->m_New;
+        return true;
+    }
+
+    void SetKeyedPropCommand::Apply(Document& document) {
+        if (!m_Captured) {
+            if (const Node* node = document.Find(m_Node))
+                if (const Value* existing = node->props.Find(m_Key)) m_Old = *existing;
+            m_Captured = true;
+        }
+        document.SetProp(m_Node, m_Key, m_New);
+    }
+
+    void SetKeyedPropCommand::Undo(Document& document) {
+        document.SetProp(m_Node, m_Key, m_Old);
+    }
+
+    bool SetKeyedPropCommand::Coalesce(const Command& newer) {
+        const auto* other = dynamic_cast<const SetKeyedPropCommand*>(&newer);
+        if (!other || other->m_Node != m_Node || other->m_Key != m_Key) return false;
+        m_New = other->m_New;
+        return true;
+    }
+
+    void SetKeyedOverrideCommand::Apply(Document& document) {
+        if (!m_Captured) {
+            if (const Node* node = document.Find(m_Instance)) {
+                auto it = node->overrides.find(m_Node);
+                if (it != node->overrides.end())
+                    if (const Value* existing = it->second.Find(m_Key)) {
+                        m_Old = *existing;
+                        m_HadOld = true;
+                    }
+            }
+            m_Captured = true;
+        }
+        document.SetOverride(m_Instance, m_Node, m_Key, m_New);
+    }
+
+    void SetKeyedOverrideCommand::Undo(Document& document) {
+        if (m_HadOld) document.SetOverride(m_Instance, m_Node, m_Key, m_Old);
+        else          document.ClearOverride(m_Instance, m_Node, m_Key);
+    }
+
+    bool SetKeyedOverrideCommand::Coalesce(const Command& newer) {
+        const auto* other = dynamic_cast<const SetKeyedOverrideCommand*>(&newer);
+        if (!other || other->m_Instance != m_Instance || other->m_Node != m_Node
+            || other->m_Key != m_Key) return false;
+        m_New = other->m_New;
+        return true;
+    }
+
+    // ---------------------------------------------------------------- SetLayout
+
+    void SetLayoutCommand::Apply(Document& document) {
+        Node* node = document.Find(m_Node);
+        if (!node) return;
+        if (!m_Captured) { m_Old = node->layout; m_Captured = true; }
+        node->layout = m_New;
+        document.Touch(m_Node);
+    }
+
+    void SetLayoutCommand::Undo(Document& document) {
+        if (Node* node = document.Find(m_Node)) {
+            node->layout = m_Old;
+            document.Touch(m_Node);
+        }
+    }
+
+    bool SetLayoutCommand::Coalesce(const Command& newer) {
+        const auto* other = dynamic_cast<const SetLayoutCommand*>(&newer);
+        if (!other || other->m_Node != m_Node) return false;
+        m_New = other->m_New;
+        return true;
+    }
+
+    // ---------------------------------------------------------------- Create / Delete
+
+    void CreateNodeCommand::Apply(Document& document) {
+        if (m_Created.Valid()) {
+            // Redo: recreate with the SAME id, so anything that referenced it still resolves.
+            Node node;
+            node.id = m_Created;
+            node.kind = m_Kind;
+            node.name = m_Name;
+            node.parent = m_Parent;
+            document.InsertNode(std::move(node));
+            return;
+        }
+        m_Created = document.CreateNode(m_Kind, m_Parent, m_Name);
+    }
+
+    void CreateNodeCommand::Undo(Document& document) { document.DeleteNode(m_Created); }
+
+    void CreateInstanceCommand::Apply(Document& document) {
+        if (m_Snapshot) {
+            document.InsertNode(*m_Snapshot);
+            return;
+        }
+        m_Created = document.CreateInstance(m_Component, m_Parent);
+        if (m_Created.Valid() && !m_Name.empty()) {
+            document.Find(m_Created)->name = m_Name;
+            document.Touch(m_Created);
+        }
+    }
+
+    void CreateInstanceCommand::Undo(Document& document) {
+        if (const Node* node = document.Find(m_Created)) m_Snapshot = *node;
+        document.DeleteNode(m_Created);
+    }
+
+    void DeleteNodeCommand::Apply(Document& document) {
+        m_Removed.clear();
+        m_Index = document.IndexInParent(m_Node);
+        for (Uuid id : document.Subtree(m_Node))
+            if (const Node* node = document.Find(id)) m_Removed.push_back(*node);
+
+        document.DeleteNode(m_Node);
+    }
+
+    void DeleteNodeCommand::Undo(Document& document) {
+        if (m_Removed.empty()) return;
+
+        // Parents first (Subtree guarantees that order), each with its children list intact. The
+        // list is restored verbatim rather than rebuilt, so sibling order survives.
+        for (std::size_t i = 0; i < m_Removed.size(); ++i) {
+            Node node = m_Removed[i];
+            const auto children = node.children;
+            node.children.clear();
+            document.InsertNode(std::move(node), i == 0 ? m_Index : UINT32_MAX);
+            if (Node* restored = document.Find(m_Removed[i].id)) restored->children = children;
+        }
+        // InsertNode appended each child to its parent as well; rebuild the exact lists.
+        for (const Node& original : m_Removed)
+            if (Node* restored = document.Find(original.id)) restored->children = original.children;
+    }
+
+    // ---------------------------------------------------------------- Reparent / Rename
+
+    void ReparentCommand::Apply(Document& document) {
+        if (!m_Captured) {
+            if (const Node* node = document.Find(m_Node)) m_OldParent = node->parent;
+            m_OldIndex = document.IndexInParent(m_Node);
+            m_Captured = true;
+        }
+        document.Reparent(m_Node, m_NewParent, m_NewIndex);
+    }
+
+    void ReparentCommand::Undo(Document& document) {
+        document.Reparent(m_Node, m_OldParent, m_OldIndex);
+    }
+
+    void RenameCommand::Apply(Document& document) {
+        Node* node = document.Find(m_Node);
+        if (!node) return;
+        if (!m_Captured) { m_Old = node->name; m_Captured = true; }
+        node->name = m_New;
+        document.Touch(m_Node);
+    }
+
+    void RenameCommand::Undo(Document& document) {
+        if (Node* node = document.Find(m_Node)) {
+            node->name = m_Old;
+            document.Touch(m_Node);
+        }
+    }
+
+    bool RenameCommand::Coalesce(const Command& newer) {
+        const auto* other = dynamic_cast<const RenameCommand*>(&newer);
+        if (!other || other->m_Node != m_Node) return false;
+        m_New = other->m_New;
+        return true;
+    }
+
+    // ---------------------------------------------------------------- Composite
+
+    void CompositeCommand::Apply(Document& document) {
+        for (auto& command : m_Commands) command->Apply(document);
+    }
+
+    void CompositeCommand::Undo(Document& document) {
+        // Reverse order: a delete-then-create pair must be undone create-first.
+        for (auto it = m_Commands.rbegin(); it != m_Commands.rend(); ++it) (*it)->Undo(document);
+    }
+
+    // ---------------------------------------------------------------- Stack
+
+    void CommandStack::Execute(Document& document, Scope<Command> command) {
+        command->Apply(document);
+
+        if (m_Transaction) { m_Transaction->Add(std::move(command)); return; }
+
+        if (m_CoalesceInto && m_CoalesceInto->Coalesce(*command)) {
+            // Absorbed into the previous entry: the redo stack is still invalidated, because the
+            // document has moved on from wherever redo would have taken it.
+            m_Redo.clear();
+            return;
+        }
+
+        m_CoalesceInto = command.get();
+        m_Undo.push_back(std::move(command));
+        m_Redo.clear();
+        Trim();
+    }
+
+    bool CommandStack::Undo(Document& document) {
+        if (m_Undo.empty()) return false;
+        Scope<Command> command = std::move(m_Undo.back());
+        m_Undo.pop_back();
+        command->Undo(document);
+        m_Redo.push_back(std::move(command));
+        m_CoalesceInto = nullptr;
+        return true;
+    }
+
+    bool CommandStack::Redo(Document& document) {
+        if (m_Redo.empty()) return false;
+        Scope<Command> command = std::move(m_Redo.back());
+        m_Redo.pop_back();
+        command->Apply(document);
+        m_Undo.push_back(std::move(command));
+        m_CoalesceInto = nullptr;
+        return true;
+    }
+
+    std::string_view CommandStack::UndoName() const {
+        return m_Undo.empty() ? std::string_view{} : m_Undo.back()->Name();
+    }
+
+    std::string_view CommandStack::RedoName() const {
+        return m_Redo.empty() ? std::string_view{} : m_Redo.back()->Name();
+    }
+
+    void CommandStack::BeginTransaction(std::string name) {
+        if (m_Transaction) {
+            VAE_CORE_WARN("nested transaction '{}' ignored", name);
+            return;
+        }
+        m_Transaction = CreateScope<CompositeCommand>(std::move(name));
+        m_CoalesceInto = nullptr;
+    }
+
+    void CommandStack::EndTransaction(Document&) {
+        if (!m_Transaction) return;
+        if (m_Transaction->Empty()) { m_Transaction.reset(); return; }
+
+        m_Undo.push_back(std::move(m_Transaction));
+        m_Transaction.reset();
+        m_Redo.clear();
+        m_CoalesceInto = nullptr;
+        Trim();
+    }
+
+    void CommandStack::Clear() {
+        m_Undo.clear();
+        m_Redo.clear();
+        m_Transaction.reset();
+        m_CoalesceInto = nullptr;
+    }
+
+    void CommandStack::Trim() {
+        if (m_Undo.size() <= m_Limit) return;
+        const std::size_t excess = m_Undo.size() - m_Limit;
+        m_Undo.erase(m_Undo.begin(), m_Undo.begin() + static_cast<std::ptrdiff_t>(excess));
+    }
+
+}

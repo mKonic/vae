@@ -1,0 +1,43 @@
+[submodule "VAE/vendor/GLFW"]
+	path = VAE/vendor/GLFW
+	url = https://github.com/glfw/glfw.git
+[submodule "VAE/vendor/glm"]
+	path = VAE/vendor/glm
+	url = https://github.com/g-truc/glm.git
+[submodule "VAE/vendor/spdlog"]
+	path = VAE/vendor/spdlog
+	url = https://github.com/gabime/spdlog.git
+[submodule "VAE/vendor/stb"]
+	path = VAE/vendor/stb
+	url = https://github.com/nothings/stb.git
+[submodule "VAE/vendor/Vulkan-Headers"]
+	path = VAE/vendor/Vulkan-Headers
+	url = https://github.com/KhronosGroup/Vulkan-Headers.git
+[submodule "VAE/vendor/VulkanMemoryAllocator"]
+	path = VAE/vendor/VulkanMemoryAllocator
+	url = https://github.com/GPUOpen-LibrariesAndSDKs/VulkanMemoryAllocator.git
+[submodule "VAE/vendor/vk-bootstrap"]
+	path = VAE/vendor/vk-bootstrap
+	url = https://github.com/charles-lunarg/vk-bootstrap.git
+[submodule "VAE/vendor/json"]
+	path = VAE/vendor/json
+	url = https://github.com/nlohmann/json.git
+[submodule "VAE/vendor/imgui"]
+	path = VAE/vendor/imgui
+	url = https://github.com/ocornut/imgui.git
+	branch = docking
+[submodule "VAE/vendor/lua"]
+	path = VAE/vendor/lua
+	url = https://github.com/lua/lua
+[submodule "VAE/vendor/sol2"]
+	path = VAE/vendor/sol2
+	url = https://github.com/ThePhD/sol2
+[submodule "VAE/vendor/httplib"]
+	path = VAE/vendor/httplib
+	url = https://github.com/yhirose/cpp-httplib.git
+[submodule "VAE/vendor/ImGuiColorTextEdit"]
+	path = VAE/vendor/ImGuiColorTextEdit
+	url = https://github.com/goossens/ImGuiColorTextEdit.git
+[submodule "VAE/vendor/miniaudio"]
+	path = VAE/vendor/miniaudio
+	url = https://github.com/mackron/miniaudio

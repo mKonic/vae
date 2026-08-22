@@ -1,0 +1,261 @@
+#pragma once
+
+#include "vae/doc/Document.h"
+
+#include <chrono>
+#include <optional>
+#include <string>
+
+namespace vae::doc {
+
+    // Every mutation goes through a Command. This is load-bearing from the first commit rather than
+    // bolted on later: Studio, hot reload and the codegen all observe the same change stream, and
+    // retrofitting undo onto direct mutation means auditing every call site.
+    class Command {
+    public:
+        virtual ~Command() = default;
+
+        virtual void Apply(Document& document) = 0;
+        virtual void Undo(Document& document) = 0;
+        virtual std::string_view Name() const = 0;
+
+        // Absorb a newer command of the same kind targeting the same thing, so a drag is one undo
+        // entry rather than one per mouse-move. Returns false when they must stay separate.
+        virtual bool Coalesce(const Command& newer) { (void)newer; return false; }
+    };
+
+    class SetPropCommand final : public Command {
+    public:
+        SetPropCommand(Uuid node, Prop prop, Value value)
+            : m_Node(node), m_Prop(prop), m_New(std::move(value)) {}
+
+        void Apply(Document& document) override;
+        void Undo(Document& document) override;
+        std::string_view Name() const override { return "Set property"; }
+        bool Coalesce(const Command& newer) override;
+
+    private:
+        Uuid  m_Node;
+        Prop  m_Prop;
+        Value m_New;
+        Value m_Old;
+        bool  m_Captured = false;
+    };
+
+    class SetLayoutCommand final : public Command {
+    public:
+        SetLayoutCommand(Uuid node, layout::LayoutStyle style)
+            : m_Node(node), m_New(style) {}
+
+        void Apply(Document& document) override;
+        void Undo(Document& document) override;
+        std::string_view Name() const override { return "Set layout"; }
+        bool Coalesce(const Command& newer) override;
+
+    private:
+        Uuid m_Node;
+        layout::LayoutStyle m_New{};
+        layout::LayoutStyle m_Old{};
+        bool m_Captured = false;
+    };
+
+    // Editing an instance is not editing its component. The write lands in the instance's override
+    // table keyed by the node inside the master, which is what lets one card say something
+    // different without every other card changing with it.
+    class SetOverrideCommand final : public Command {
+    public:
+        SetOverrideCommand(Uuid instance, Uuid nodeInComponent, Prop prop, Value value)
+            : m_Instance(instance), m_Node(nodeInComponent), m_Prop(prop), m_New(std::move(value)) {}
+
+        void Apply(Document& document) override;
+        void Undo(Document& document) override;
+        std::string_view Name() const override { return "Set override"; }
+        bool Coalesce(const Command& newer) override;
+
+    private:
+        Uuid  m_Instance, m_Node;
+        Prop  m_Prop;
+        Value m_New, m_Old;
+        bool  m_Captured = false;
+        bool  m_HadOld = false;
+    };
+
+    // The same two edits, filed under a string key: the state overlays ("hovered:fill") that are
+    // how a widget says what it looks like while the pointer is on it.
+    class SetKeyedPropCommand final : public Command {
+    public:
+        SetKeyedPropCommand(Uuid node, std::string key, Value value)
+            : m_Node(node), m_Key(std::move(key)), m_New(std::move(value)) {}
+
+        void Apply(Document& document) override;
+        void Undo(Document& document) override;
+        std::string_view Name() const override { return "Set property"; }
+        bool Coalesce(const Command& newer) override;
+
+    private:
+        Uuid m_Node;
+        std::string m_Key;
+        Value m_New, m_Old;
+        bool m_Captured = false;
+    };
+
+    class SetKeyedOverrideCommand final : public Command {
+    public:
+        SetKeyedOverrideCommand(Uuid instance, Uuid nodeInComponent, std::string key, Value value)
+            : m_Instance(instance), m_Node(nodeInComponent), m_Key(std::move(key)),
+              m_New(std::move(value)) {}
+
+        void Apply(Document& document) override;
+        void Undo(Document& document) override;
+        std::string_view Name() const override { return "Set override"; }
+        bool Coalesce(const Command& newer) override;
+
+    private:
+        Uuid m_Instance, m_Node;
+        std::string m_Key;
+        Value m_New, m_Old;
+        bool m_Captured = false;
+        bool m_HadOld = false;
+    };
+
+    class CreateNodeCommand final : public Command {
+    public:
+        CreateNodeCommand(NodeKind kind, Uuid parent, std::string name)
+            : m_Kind(kind), m_Parent(parent), m_Name(std::move(name)) {}
+
+        void Apply(Document& document) override;
+        void Undo(Document& document) override;
+        std::string_view Name() const override { return "Create node"; }
+        Uuid Created() const { return m_Created; }
+
+    private:
+        NodeKind m_Kind;
+        Uuid m_Parent;
+        std::string m_Name;
+        Uuid m_Created = Uuid::Invalid();
+    };
+
+    // Placing a widget from the library is the most-used gesture in the editor, and it was the one
+    // edit undo did not cover: CreateInstance was called straight on the document, so Ctrl+Z rolled
+    // back the position the instance was given and left the instance behind.
+    class CreateInstanceCommand final : public Command {
+    public:
+        CreateInstanceCommand(Uuid component, Uuid parent, std::string name = {})
+            : m_Component(component), m_Parent(parent), m_Name(std::move(name)) {}
+
+        void Apply(Document& document) override;
+        void Undo(Document& document) override;
+        std::string_view Name() const override { return "Place"; }
+        Uuid Created() const { return m_Created; }
+
+    private:
+        Uuid m_Component;
+        Uuid m_Parent;
+        std::string m_Name;
+        Uuid m_Created = Uuid::Invalid();
+        // Redo has to bring back the same node, overrides and all: anything that referenced it —
+        // a script path, a selection, another command on the stack — resolves by id.
+        std::optional<Node> m_Snapshot;
+    };
+
+    class DeleteNodeCommand final : public Command {
+    public:
+        explicit DeleteNodeCommand(Uuid node) : m_Node(node) {}
+
+        void Apply(Document& document) override;
+        void Undo(Document& document) override;
+        std::string_view Name() const override { return "Delete node"; }
+
+    private:
+        Uuid m_Node;
+        // The whole subtree, parents first, plus where the root sat. Undo has to restore identity
+        // and position exactly, or every reference to a deleted node breaks on undo.
+        std::vector<Node> m_Removed;
+        u32 m_Index = 0;
+    };
+
+    class ReparentCommand final : public Command {
+    public:
+        ReparentCommand(Uuid node, Uuid parent, u32 index)
+            : m_Node(node), m_NewParent(parent), m_NewIndex(index) {}
+
+        void Apply(Document& document) override;
+        void Undo(Document& document) override;
+        std::string_view Name() const override { return "Move node"; }
+
+    private:
+        Uuid m_Node, m_NewParent, m_OldParent;
+        u32  m_NewIndex = 0, m_OldIndex = 0;
+        bool m_Captured = false;
+    };
+
+    class RenameCommand final : public Command {
+    public:
+        RenameCommand(Uuid node, std::string name) : m_Node(node), m_New(std::move(name)) {}
+
+        void Apply(Document& document) override;
+        void Undo(Document& document) override;
+        std::string_view Name() const override { return "Rename"; }
+        bool Coalesce(const Command& newer) override;
+
+    private:
+        Uuid m_Node;
+        std::string m_New, m_Old;
+        bool m_Captured = false;
+    };
+
+    // Several commands that undo and redo as one. Built by BeginTransaction/EndTransaction.
+    class CompositeCommand final : public Command {
+    public:
+        explicit CompositeCommand(std::string name) : m_Name(std::move(name)) {}
+
+        void Add(Scope<Command> command) { m_Commands.push_back(std::move(command)); }
+        bool Empty() const { return m_Commands.empty(); }
+        std::size_t Size() const { return m_Commands.size(); }
+
+        void Apply(Document& document) override;
+        void Undo(Document& document) override;
+        std::string_view Name() const override { return m_Name; }
+
+    private:
+        std::string m_Name;
+        std::vector<Scope<Command>> m_Commands;
+    };
+
+    class CommandStack {
+    public:
+        // Applies the command and pushes it, unless the previous one absorbed it.
+        void Execute(Document& document, Scope<Command> command);
+
+        bool Undo(Document& document);
+        bool Redo(Document& document);
+        bool CanUndo() const { return !m_Undo.empty(); }
+        bool CanRedo() const { return !m_Redo.empty(); }
+        std::string_view UndoName() const;
+        std::string_view RedoName() const;
+
+        // Ends the current coalescing run — call it on mouse-up so the next drag is its own entry.
+        void Break() { m_CoalesceInto = nullptr; }
+
+        void BeginTransaction(std::string name);
+        void EndTransaction(Document& document);
+        bool InTransaction() const { return m_Transaction != nullptr; }
+
+        void Clear();
+        std::size_t UndoDepth() const { return m_Undo.size(); }
+        std::size_t RedoDepth() const { return m_Redo.size(); }
+
+        // A finite history: a design session can run for hours and every mouse-drag is an entry.
+        void SetLimit(std::size_t limit) { m_Limit = limit; Trim(); }
+
+    private:
+        void Trim();
+
+        std::vector<Scope<Command>> m_Undo;
+        std::vector<Scope<Command>> m_Redo;
+        Command* m_CoalesceInto = nullptr;
+        Scope<CompositeCommand> m_Transaction;
+        std::size_t m_Limit = 500;
+    };
+
+}

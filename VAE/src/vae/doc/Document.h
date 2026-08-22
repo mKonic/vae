@@ -1,0 +1,190 @@
+#pragma once
+
+#include "vae/doc/Node.h"
+
+#include <functional>
+#include <unordered_map>
+
+namespace vae::doc {
+
+    // A named design token with light and dark values. Two variants rather than N themes because
+    // that is the shape every design system actually ships, and a general theme map would make
+    // every lookup a two-level miss for no benefit yet.
+    struct Token {
+        Value light;
+        Value dark;
+        std::string description;
+        bool operator==(const Token&) const = default;
+    };
+
+    enum class Theme : u8 { Light, Dark };
+
+    // The design document: a flat map of nodes addressed by Uuid, plus tokens.
+    //
+    // Flat and id-addressed rather than a pointer tree, because every other system needs stable
+    // references into it — the command stack records ids, overrides key on ids, the renderer caches
+    // by id, and a selection survives its node being reparented.
+    class Document {
+    public:
+        Document();
+
+        // --- structure -------------------------------------------------------------------------
+        Uuid CreateNode(NodeKind kind, Uuid parent = Uuid::Invalid(), std::string name = {});
+        // Inserts an already-built node, preserving its id. Used by undo, paste and load.
+        void InsertNode(Node node, u32 index = UINT32_MAX);
+        void DeleteNode(Uuid id);                       // recursive
+        void Reparent(Uuid id, Uuid newParent, u32 index = UINT32_MAX);
+        void Reorder(Uuid id, u32 index);
+
+        Node* Find(Uuid id);
+        const Node* Find(Uuid id) const;
+        bool Contains(Uuid id) const { return m_Nodes.contains(id); }
+
+        const std::vector<Uuid>& Roots() const { return m_Roots; }
+        std::size_t NodeCount() const { return m_Nodes.size(); }
+        u32 IndexInParent(Uuid id) const;
+        // Every node in the subtree, parents before children.
+        std::vector<Uuid> Subtree(Uuid root) const;
+        bool IsAncestor(Uuid ancestor, Uuid descendant) const;
+
+        // --- properties ------------------------------------------------------------------------
+        void SetProp(Uuid id, Prop prop, Value value);
+        // A property the enum does not name: the state overlays ("hovered:fill") the widget library
+        // writes, and anything a project invents for itself.
+        void SetProp(Uuid id, std::string key, Value value);
+        // Announce that a node changed in a way SetProp did not cover (layout, name, flags).
+        void Touch(Uuid id);
+        Value GetProp(Uuid id, Prop prop) const;
+        // Resolves tokens against the active theme; returns the literal a renderer should use.
+        Value ResolveValue(const Value& value) const;
+
+        // --- tokens ----------------------------------------------------------------------------
+        void SetToken(const std::string& name, Token token);
+        void RemoveToken(const std::string& name);
+        const Token* FindToken(std::string_view name) const;
+        const std::map<std::string, Token>& Tokens() const { return m_Tokens; }
+        void SetTheme(Theme theme) { m_Theme = theme; }
+
+        // Which screen an app opens on. A document fact, so the player, an exported build and the
+        // Studio's preview all agree without anyone passing it around — and so a designer can say
+        // "start here" instead of reordering the file.
+        void SetStartScreen(Uuid screen) { m_StartScreen = screen; }
+        // Falls back to the first screen in the document, which is the answer before anyone has
+        // chosen and after the chosen one has been deleted.
+        Uuid StartScreen() const;
+        // Every screen, in document order.
+        std::vector<Uuid> Screens() const;
+        ScreenKind KindOf(Uuid screen) const;
+        Theme ActiveTheme() const { return m_Theme; }
+
+        // --- assets ------------------------------------------------------------------------------
+        // What the project has pictures of. Kept by id with a path relative to the project folder,
+        // so a node refers to "this image" and not to a place on one person's disk — moving or
+        // renaming a project cannot break every image in it.
+        struct Asset {
+            Uuid id;
+            std::string name;
+            std::string path;          // relative to the project folder
+            bool operator==(const Asset&) const = default;
+        };
+        // Returns the id, which is generated when `id` is invalid and preserved when it is not
+        // (load, undo and paste all have to keep the one they already have).
+        Uuid AddAsset(std::string name, std::string path, Uuid id = Uuid::Invalid());
+        void RemoveAsset(Uuid id);
+        const Asset* FindAsset(Uuid id) const;
+        const std::vector<Asset>& Assets() const { return m_Assets; }
+
+        // --- components ------------------------------------------------------------------------
+        // Turns a subtree into a reusable component in place, returning the component's id.
+        Uuid MakeComponent(Uuid subtreeRoot, std::string name);
+        Uuid CreateInstance(Uuid componentId, Uuid parent);
+        void SetOverride(Uuid instance, Uuid nodeInComponent, Prop prop, Value value);
+        void ClearOverride(Uuid instance, Uuid nodeInComponent, Prop prop);
+        // The same pair for a string-keyed property — the state overlays ("hovered:fill") a widget
+        // is styled with. An instance that cannot override those cannot be restyled at all.
+        void SetOverride(Uuid instance, Uuid nodeInComponent, std::string key, Value value);
+        void ClearOverride(Uuid instance, Uuid nodeInComponent, std::string_view key);
+
+        // The properties a node inside an instance should actually render with:
+        // instance override > component node's own props.
+        PropBag ResolvedProps(Uuid instance, Uuid nodeInComponent) const;
+        // The same question for a node nested several components deep. `chain` is every instance it
+        // sits inside, outermost first. They resolve outward-in — an override written on the
+        // instance that is actually on the screen beats one the component's author baked in — which
+        // is what makes two copies of a component two things rather than one.
+        PropBag ResolvedProps(const std::vector<Uuid>& chain, Uuid node) const;
+
+        // Expands instances into a concrete tree for rendering/layout. The expansion is
+        // throwaway — the document stays the single source of truth.
+        struct FlatNode {
+            Uuid sourceId;          // the node in the document (inside a component, for instances)
+            // Which copy of an instance produced it, or Invalid. Unique per copy on screen, so it
+            // is what widget and script state key on — but only the outermost one is a real node.
+            Uuid instanceId;
+            // The instance whose override table a write should land in, or Invalid. Always the
+            // outermost one — the instance a designer can actually select on the screen — so
+            // retitling one card's button does not retitle every card's.
+            Uuid overrideId;
+            // The key that write is filed under: the node this flat node is about, from the point
+            // of view of `overrideId`. An instance's own root is keyed by its component, which is
+            // the convention every SetOverride call already uses.
+            Uuid overrideKey;
+            // The authored node this came from — the instance node itself for an instance root,
+            // where `sourceId` is the component it points at. What "which component is this?" reads.
+            Uuid authoredId;
+            u32  parent = UINT32_MAX;
+            // One of a repeated container's copies, or inside one. Such a node has no document
+            // node of its own to write to — every copy shares the one the designer drew — so what
+            // a widget changes about it is runtime state keyed on the copy, not a document edit.
+            bool repeated = false;
+            NodeKind kind = NodeKind::Frame;
+            layout::LayoutStyle layout{};
+            PropBag props;
+            std::string name;
+        };
+        std::vector<FlatNode> Flatten(Uuid root) const;
+
+        // --- change notification ---------------------------------------------------------------
+        // Studio, the renderer and hot reload all watch the same stream, so there is exactly one
+        // definition of "the document changed".
+        using Observer = std::function<void(Uuid changed)>;
+        u32  AddObserver(Observer observer);
+        void RemoveObserver(u32 handle);
+        u64  Revision() const { return m_Revision; }
+
+        void Clear();
+
+        // The frame inside `component` that an instance's children land in, or Invalid. First one
+        // wins: a component has one slot, which is enough for a card, a field or a list row and
+        // keeps "where does this go?" from needing an answer.
+        Uuid SlotOf(Uuid component) const;
+
+    private:
+        void Notify(Uuid changed);
+        void DetachFromParent(Uuid id);
+
+        // Content an instance is handing to the component's slot, plus the scope those nodes were
+        // authored in — they belong to the page, not to the component, so their overrides and their
+        // instance path have to keep resolving against where they were written.
+        struct SlotContent {
+            const std::vector<Uuid>* children = nullptr;
+            std::vector<Uuid> chain;
+            Uuid pathContext = Uuid::Invalid();
+        };
+        void FlattenInto(std::vector<FlatNode>& out, Uuid id, u32 parent,
+                         std::vector<Uuid>& chain, Uuid pathContext, u32 depth,
+                         const SlotContent* slot = nullptr) const;
+
+        std::unordered_map<Uuid, Node> m_Nodes;
+        std::vector<Uuid> m_Roots;
+        std::map<std::string, Token> m_Tokens;
+        std::vector<Asset> m_Assets;
+        Theme m_Theme = Theme::Dark;
+        Uuid m_StartScreen = Uuid::Invalid();
+
+        std::vector<std::pair<u32, Observer>> m_Observers;
+        u32 m_NextObserver = 1;
+        u64 m_Revision = 0;
+    };
+
+}
