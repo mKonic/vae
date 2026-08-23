@@ -10,6 +10,7 @@
 #include "vae/app/RunLayer.h"
 #include "vae/base/Log.h"
 #include "vae/core/Application.h"
+#include "vae/core/Input.h"
 #include "vae/text/FontDB.h"
 
 #include <imgui.h>
@@ -1484,6 +1485,85 @@ namespace vae {
             std::filesystem::remove(scripts.SourcePath(), ec);
         }
 
+        // Copy, paste and a deep duplicate. The clipboard is markup, so this also checks that a
+        // subtree survives being written out and read back — the same trip a saved file makes.
+        void TestClipboard() {
+            Section("clipboard");
+            Shortcuts driver;
+            StudioLayer& layer = driver.Layer_();
+            layer.OpenExample();
+            driver.Frame();
+
+            EditorState& state = layer.State();
+            doc::Document& d = state.Doc();
+
+            // A card with two labels in it: the case a shallow copy gets wrong.
+            const Uuid card = d.CreateNode(doc::NodeKind::Frame, state.ActiveScreen(), "Card");
+            {
+                doc::Node* node = d.Find(card);
+                node->layout.mode = layout::LayoutMode::Stack;
+                node->layout.axis = layout::Axis::Column;
+                node->layout.width = layout::Size::Px(200.0f);
+                node->layout.height = layout::Size::Hug();
+                d.Touch(card);
+            }
+            const Uuid title = d.CreateNode(doc::NodeKind::Text, card, "Title");
+            d.SetProp(title, doc::Prop::Text, std::string("Hello"));
+            d.CreateNode(doc::NodeKind::Text, card, "Body");
+            driver.Frame();
+
+            const std::size_t before = d.NodeCount();
+
+            // Duplicate is deep: a card duplicated without its labels is an empty card, which is
+            // exactly what it used to produce.
+            state.Select(card);
+            state.DuplicateSelection();
+            driver.Frame();
+            const Uuid copy = state.Primary();
+            Check(copy.Valid() && copy != card, "duplicate made a copy");
+            Check(d.Find(copy) && d.Find(copy)->children.size() == 2,
+                  "and it brought both children with it");
+            Check(d.NodeCount() == before + 3, "three nodes, not one");
+            state.Undo();
+            driver.Frame();
+            Check(d.NodeCount() == before, "undo takes the whole subtree back out");
+
+            // Copy to the clipboard and paste it back.
+            state.Select(card);
+            state.CopySelection();
+            const std::string clipboard = Input::ClipboardText();
+            Check(clipboard.find("<vae") != std::string::npos, "the clipboard holds markup");
+            Check(clipboard.find("Title") != std::string::npos, "with the children in it");
+            Check(state.CanPaste(), "and Studio can tell it is pasteable");
+
+            state.Select(state.ActiveScreen());
+            const u32 pasted = state.Paste();
+            driver.Frame();
+            Check(pasted == 1, "pasting brought one root back");
+            const Uuid landed = state.Primary();
+            Check(landed.Valid() && landed != card, "under an id of its own");
+            Check(d.Find(landed) && d.Find(landed)->children.size() == 2, "with its children");
+            const Uuid pastedTitle = d.Find(landed)->children.front();
+            Check(d.GetProp(pastedTitle, doc::Prop::Text) == doc::Value{ std::string("Hello") },
+                  "and the text it had");
+
+            // Pasting twice must not produce two nodes claiming one id.
+            const u32 again = state.Paste();
+            driver.Frame();
+            Check(again == 1 && state.Primary() != landed, "a second paste is a second copy");
+
+            state.Undo();
+            driver.Frame();
+            Check(d.Find(landed) != nullptr, "and undo removes only the last one");
+
+            // Cut takes it away and leaves it on the clipboard.
+            state.Select(landed);
+            state.CutSelection();
+            driver.Frame();
+            Check(d.Find(landed) == nullptr, "cut removed it");
+            Check(state.CanPaste(), "and it is still on the clipboard");
+        }
+
         // Files dragged in from the desktop. Driven through the same handler the window callback
         // calls, because nothing else can simulate a drag from a file manager.
         void TestFileDrop() {
@@ -2083,6 +2163,7 @@ namespace vae {
         TestDebugger();
         TestScreens();
         TestGrouping();
+        TestClipboard();
         TestFileDrop();
         TestSampleRows();
         TestFillFromTheEnd();

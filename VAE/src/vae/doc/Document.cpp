@@ -437,6 +437,60 @@ namespace vae::doc {
         return Uuid::Invalid();
     }
 
+    Uuid CloneSubtree(Document& document, Uuid source, Uuid parent, u32 index) {
+        return CopySubtreeInto(document, source, document, parent, true, index);
+    }
+
+    Uuid CopySubtreeInto(const Document& from, Uuid root, Document& into, Uuid parent,
+                         bool freshIds, u32 index) {
+        if (!from.Contains(root)) return Uuid::Invalid();
+
+        // Parents before children, so a child's new parent already exists when it is inserted.
+        const std::vector<Uuid> subtree = from.Subtree(root);
+        std::unordered_map<Uuid, Uuid> remap;
+        remap.reserve(subtree.size());
+
+        // A component subtree keeps its ids even on a paste: an instance's overrides are keyed by
+        // the ids of the nodes inside the component, so a component that arrived under new ids
+        // would arrive with every override pointing at nothing. Decided once for the whole
+        // subtree, because "inside a component" is a property of the root, not of each node.
+        const Node* rootNode = from.Find(root);
+        const bool keepIds = !freshIds || (rootNode && rootNode->IsComponent());
+
+        for (Uuid id : subtree) {
+            const Node* original = from.Find(id);
+            if (!original) continue;
+
+            Node copy = *original;
+            if (!keepIds) copy.id = Uuid();
+            copy.children.clear();
+            // The root lands where the caller asked; everything else lands under its own copy.
+            copy.parent = id == root ? parent : remap[original->parent];
+            remap[id] = copy.id;
+            into.InsertNode(std::move(copy), id == root ? index : UINT32_MAX);
+        }
+
+        // A property that pointed at a node inside what was copied now points at the copy of it.
+        // One that pointed outside is left alone: it still means the node it named.
+        for (const auto& [before, after] : remap) {
+            Node* node = into.Find(after);
+            if (!node) continue;
+            for (const auto& [prop, value] : node->props.Known()) {
+                if (const Uuid* target = std::get_if<Uuid>(&value)) {
+                    const auto it = remap.find(*target);
+                    if (it != remap.end()) node->props.Set(prop, it->second);
+                }
+            }
+            for (const auto& [key, value] : node->props.Custom()) {
+                if (const Uuid* target = std::get_if<Uuid>(&value)) {
+                    const auto it = remap.find(*target);
+                    if (it != remap.end()) node->props.Set(key, it->second);
+                }
+            }
+        }
+        return remap[root];
+    }
+
     // ---------------------------------------------------------------------------- rows
 
     u32 RowTable::Count() const {

@@ -219,6 +219,29 @@ namespace vae::doc {
         }
     }
 
+    void CloneCommand::Apply(Document& document) {
+        if (m_Saved.empty()) {
+            m_Created = CloneSubtree(document, m_Source, m_Parent, m_Index);
+            if (!m_Created.Valid()) return;
+            for (Uuid id : document.Subtree(m_Created))
+                if (const Node* node = document.Find(id)) m_Saved.push_back(*node);
+            return;
+        }
+        // Redo: the same nodes, the same ids, in the same order — parents before children, which
+        // is the order Subtree collected them in.
+        for (const Node& node : m_Saved) {
+            Node copy = node;
+            copy.children.clear();
+            document.InsertNode(std::move(copy), node.id == m_Created ? m_Index : UINT32_MAX);
+        }
+        for (const Node& node : m_Saved)
+            if (Node* live = document.Find(node.id)) live->children = node.children;
+    }
+
+    void CloneCommand::Undo(Document& document) {
+        if (m_Created.Valid()) document.DeleteNode(m_Created);
+    }
+
     void AddAssetCommand::Apply(Document& document) {
         // The id is minted once and reused on redo: a node that referred to this asset before the
         // undo has to find the same asset after the redo.

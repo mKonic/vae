@@ -256,4 +256,23 @@ namespace vae::doc {
         u64 m_Revision = 0;
     };
 
+    // A deep copy of a subtree under a new parent, with fresh ids throughout. What Duplicate and
+    // Paste are both made of — copying a frame without its children is copying an empty frame,
+    // which is what Duplicate used to do.
+    //
+    // Overrides are NOT remapped, deliberately: an instance's overrides are keyed by the id of a
+    // node inside the *component*, and the component is not what is being copied. A property that
+    // points at another node in the same subtree (a NodeRef) is remapped, because that reference
+    // means "this one" rather than "that one over there".
+    Uuid CloneSubtree(Document& document, Uuid source, Uuid parent, u32 index = UINT32_MAX);
+
+    // The same copy, across documents — the clipboard, in both directions.
+    //
+    // `freshIds` is the whole difference between the two directions. Writing to the clipboard keeps
+    // the ids, because an instance in there points at a component in there and its overrides are
+    // keyed by the ids of nodes inside it. Reading back mints new ones, because pasting twice must
+    // not produce two nodes claiming the same id.
+    Uuid CopySubtreeInto(const Document& from, Uuid root, Document& into, Uuid parent,
+                         bool freshIds, u32 index = UINT32_MAX);
+
 }

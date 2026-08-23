@@ -2,6 +2,7 @@
 
 #include "vae/base/FileSystem.h"
 #include "vae/base/Log.h"
+#include "vae/core/Input.h"
 
 #include <algorithm>
 
@@ -417,6 +418,95 @@ namespace vae {
         return instance;
     }
 
+    void EditorState::CopySelection() {
+        if (m_Selection.empty()) return;
+
+        // The clipboard holds a document, not a private blob, so there is one format to keep
+        // working rather than two — and a copy can be pasted into a project that has never seen
+        // this one.
+        doc::Document scratch;
+        u32 copied = 0;
+        for (Uuid id : m_Selection) {
+            const doc::Node* node = m_Document.Find(id);
+            if (!node || node->kind == doc::NodeKind::Screen) continue;
+
+            // A component the selection instances travels with it, unless it is one of the
+            // standard catalog's — every VAE rebuilds those from the library reference.
+            if (node->IsInstance() && m_Document.Contains(node->componentId)
+                && !scratch.Contains(node->componentId)) {
+                const bool stock = std::any_of(
+                    m_Library.components.begin(), m_Library.components.end(),
+                    [&](const auto& entry) { return entry.second == node->componentId; });
+                if (!stock)
+                    doc::CopySubtreeInto(m_Document, node->componentId, scratch, Uuid::Invalid(), false);
+            }
+            doc::CopySubtreeInto(m_Document, id, scratch, Uuid::Invalid(), false);
+            ++copied;
+        }
+        if (copied == 0) return;
+
+        // keepIds: an instance in here points at a component in here, and its overrides are keyed
+        // by the ids of nodes inside that component.
+        Input::SetClipboardText(doc::Serializer::ToXml(scratch, true, &ui::StandardLibrary(), true));
+        VAE_INFO("copied {} node(s)", copied);
+    }
+
+    void EditorState::CutSelection() {
+        if (m_Selection.empty()) return;
+        CopySelection();
+        DeleteSelection();
+    }
+
+    bool EditorState::CanPaste() const {
+        return Input::ClipboardText().find("<vae") != std::string::npos;
+    }
+
+    u32 EditorState::Paste() {
+        const std::string text = Input::ClipboardText();
+        if (text.find("<vae") == std::string::npos) return 0;
+
+        doc::Document incoming;
+        std::string error;
+        if (!doc::Serializer::FromText(text, incoming, &error, &ui::StandardLibrary())) {
+            VAE_WARN("paste: {}", error);
+            return 0;
+        }
+
+        // Into the selected container when there is one, otherwise into the screen: pasting into a
+        // label would be pasting into something that cannot hold it.
+        Uuid target = m_ActiveScreen;
+        if (!m_Selection.empty()) {
+            const doc::Node* node = m_Document.Find(Primary());
+            if (node && !node->IsInstance()
+                && (node->kind == doc::NodeKind::Frame || node->kind == doc::NodeKind::Screen))
+                target = Primary();
+        }
+        if (!m_Document.Contains(target)) return 0;
+
+        std::vector<Uuid> arrived;
+        m_Commands.BeginTransaction("Paste");
+        for (Uuid root : incoming.Roots()) {
+            const doc::Node* node = incoming.Find(root);
+            if (!node) continue;
+
+            if (node->IsComponent()) {
+                // A component the clipboard brought with it, under the id it had — an instance
+                // that arrives beside it has to still find it. Already here means already here.
+                if (!m_Document.Contains(root))
+                    doc::CopySubtreeInto(incoming, root, m_Document, Uuid::Invalid(), false);
+                continue;
+            }
+            const Uuid landed = doc::CopySubtreeInto(incoming, root, m_Document, target, true);
+            if (landed.Valid()) arrived.push_back(landed);
+        }
+        m_Commands.EndTransaction(m_Document);
+        m_Commands.Break();
+
+        if (!arrived.empty()) SelectMany(arrived);
+        VAE_INFO("pasted {} node(s)", arrived.size());
+        return static_cast<u32>(arrived.size());
+    }
+
     void EditorState::DeleteSelection() {
         if (m_Selection.empty()) return;
         m_Commands.BeginTransaction(m_Selection.size() == 1 ? "Delete" : "Delete selection");
@@ -440,22 +530,18 @@ namespace vae {
             const doc::Node* node = m_Document.Find(id);
             if (!node || node->kind == doc::NodeKind::Screen) continue;
 
-            const Uuid parent = node->parent;
-            Uuid copy = Uuid::Invalid();
-            if (node->IsInstance()) {
-                copy = m_Document.CreateInstance(node->componentId, parent);
-            } else {
-                auto command = CreateScope<doc::CreateNodeCommand>(node->kind, parent, node->name);
-                doc::CreateNodeCommand* raw = command.get();
-                Execute(std::move(command));
-                copy = raw->Created();
-            }
+            // Deep, and beside the original. A frame duplicated without its children is an empty
+            // frame, which is what this produced for anything that was not a leaf.
+            auto command = CreateScope<doc::CloneCommand>(id, node->parent,
+                                                          m_Document.IndexInParent(id) + 1);
+            doc::CloneCommand* raw = command.get();
+            Execute(std::move(command));
+            const Uuid copy = raw->Created();
             if (!copy.Valid()) continue;
 
-            layout::LayoutStyle style = node->layout;
+            layout::LayoutStyle style = m_Document.Find(copy)->layout;
             style.offsetStart += Vec2{ 16.0f, 16.0f };
             SetLayout(copy, style);
-            for (const auto& [prop, value] : node->props.Known()) SetProp(copy, prop, value);
             copies.push_back(copy);
         }
         m_Commands.EndTransaction(m_Document);

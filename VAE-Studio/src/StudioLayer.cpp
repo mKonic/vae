@@ -665,6 +665,11 @@ namespace vae {
                                         : "Redo", "Ctrl+Shift+Z", false, canRedo))
                 m_State.Redo();
             ImGui::Separator();
+            const bool hasSelection = !m_State.Selection().empty();
+            if (ImGui::MenuItem("Cut", "Ctrl+X", false, hasSelection)) m_State.CutSelection();
+            if (ImGui::MenuItem("Copy", "Ctrl+C", false, hasSelection)) m_State.CopySelection();
+            if (ImGui::MenuItem("Paste", "Ctrl+V", false, m_State.CanPaste())) m_State.Paste();
+            ImGui::Separator();
             if (ImGui::MenuItem("Duplicate", "Ctrl+D", false, !m_State.Selection().empty()))
                 m_State.DuplicateSelection();
             if (ImGui::MenuItem("Delete", "Del", false, !m_State.Selection().empty()))
@@ -795,6 +800,12 @@ namespace vae {
         }
         if (ctrl && ImGui::IsKeyPressed(ImGuiKey_Y, false)) { m_State.Redo(); acted = true; }
         if (ctrl && ImGui::IsKeyPressed(ImGuiKey_D, false)) { m_State.DuplicateSelection(); acted = true; }
+        // Not while a text field has the keyboard: Ctrl+C in a field is copying text, not nodes.
+        if (ctrl && !ImGui::GetIO().WantTextInput) {
+            if (ImGui::IsKeyPressed(ImGuiKey_C, false)) { m_State.CopySelection(); acted = true; }
+            if (ImGui::IsKeyPressed(ImGuiKey_X, false)) { m_State.CutSelection(); acted = true; }
+            if (ImGui::IsKeyPressed(ImGuiKey_V, false)) { m_State.Paste(); acted = true; }
+        }
         // Shift first: Ctrl+Shift+G is not a Ctrl+G that happens to have shift held.
         if (ctrl && io.KeyShift && ImGui::IsKeyPressed(ImGuiKey_G, false)) {
             m_Canvas.UngroupSelection(m_State);

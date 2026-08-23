@@ -103,6 +103,15 @@ namespace vae {
 
         // The component `node` is authored inside, or Invalid if it is on a screen.
         Uuid ComponentOwning(Uuid node) const;
+        // Cut, copy and paste. The clipboard carries format-3 markup — the same text a .vaescreen
+        // holds — so a copy survives being pasted into another project, into a second Studio, or
+        // through a text editor.
+        void CopySelection();
+        void CutSelection();
+        // Into the selected container, or into the screen. Returns how many roots arrived.
+        u32  Paste();
+        bool CanPaste() const;
+
         void DeleteSelection();
         void DuplicateSelection();
         void Undo();

@@ -266,6 +266,27 @@ namespace vae::doc {
         bool m_Captured = false;
     };
 
+    // A deep copy of a subtree, as one undoable step. Duplicate and Paste are both this: the
+    // clone is made once and, from then on, undo deletes it and redo puts the same ids back — so
+    // anything that referred to the copy still refers to it after a round trip through history.
+    class CloneCommand final : public Command {
+    public:
+        CloneCommand(Uuid source, Uuid parent, u32 index = UINT32_MAX)
+            : m_Source(source), m_Parent(parent), m_Index(index) {}
+
+        void Apply(Document& document) override;
+        void Undo(Document& document) override;
+        std::string_view Name() const override { return "Duplicate"; }
+        Uuid Created() const { return m_Created; }
+
+    private:
+        Uuid m_Source, m_Parent, m_Created = Uuid::Invalid();
+        u32  m_Index = UINT32_MAX;
+        // The whole copied subtree, so redo restores it node for node with the ids it had rather
+        // than cloning again and minting new ones.
+        std::vector<Node> m_Saved;
+    };
+
     // Several commands that undo and redo as one. Built by BeginTransaction/EndTransaction.
     class CompositeCommand final : public Command {
     public:
