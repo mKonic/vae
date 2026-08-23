@@ -563,8 +563,41 @@ namespace vae {
         if (!doc::Serializer::Save(m_Document, path, &ui::StandardLibrary())) return false;
         m_Path = path;
         m_SavedRevision = m_Document.Revision();
+        // There is nothing to recover any more, and a stale recovery file is worse than none: it
+        // offers to put back work that has already been saved over.
+        DiscardRecovery();
         VAE_INFO("saved {}", path.string());
         return true;
+    }
+
+    std::filesystem::path EditorState::RecoveryPathFor(const std::filesystem::path& project) {
+        if (project.empty()) return {};
+        return std::filesystem::path(project) += ".recovery";
+    }
+
+    bool EditorState::HasRecovery(const std::filesystem::path& project) {
+        const std::filesystem::path recovery = RecoveryPathFor(project);
+        std::error_code ec;
+        if (recovery.empty() || !std::filesystem::exists(recovery, ec)) return false;
+        if (!std::filesystem::exists(project, ec)) return true;
+        // Older than the file it shadows means the project was saved after it was written, by a
+        // build that never got to clean it up.
+        return std::filesystem::last_write_time(recovery, ec)
+             > std::filesystem::last_write_time(project, ec);
+    }
+
+    void EditorState::DiscardRecovery() {
+        std::error_code ec;
+        const std::filesystem::path recovery = RecoveryPathFor(m_Path);
+        if (!recovery.empty()) std::filesystem::remove(recovery, ec);
+    }
+
+    void EditorState::Autosave() {
+        if (m_Path.empty() || !Dirty()) return;
+        const std::filesystem::path recovery = RecoveryPathFor(m_Path);
+        if (recovery.empty()) return;
+        if (doc::Serializer::Save(m_Document, recovery, &ui::StandardLibrary()))
+            VAE_CORE_INFO("autosaved to {}", recovery.string());
     }
 
     bool EditorState::Load(const std::filesystem::path& path) {

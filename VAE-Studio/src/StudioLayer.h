@@ -83,6 +83,15 @@ namespace vae {
         void ExportProject();
         void DrawUnsavedChangesDialog();
         void LoadRecents();
+        void TickAutosave();
+        void DrawRecoveryDialog();
+        bool m_RecoveryAsked = false;
+        // The project a recovery file was found for, or empty. Drives the prompt.
+        std::filesystem::path m_Recovery;
+        f32  m_LastEdit = 0.0f;
+        f32  m_LastAutosave = 0.0f;
+        u64  m_LastRevision = 0;
+
         void LoadSettings();
         void SaveSettings();
         void RememberProject(const std::filesystem::path& path);

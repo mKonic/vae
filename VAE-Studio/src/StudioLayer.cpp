@@ -212,6 +212,10 @@ namespace vae {
     // script with it, and none of that may happen underneath a running app.
     void StudioLayer::OpenProject(const std::filesystem::path& path) {
         m_Scripts.Stop();
+        // A recovery file newer than the project means the last session ended with unsaved work.
+        // Asked, never assumed: silently opening the recovery would hide what the file on disk
+        // says, and silently deleting it would lose the work.
+        m_Recovery = EditorState::HasRecovery(path) ? path : std::filesystem::path{};
         if (!m_State.Load(path)) return;
         RememberProject(path);
         // Before SetProjectPath, which names the script file after the language.
@@ -241,6 +245,50 @@ namespace vae {
         m_ClosePending = true;
         m_CloseAsked = false;   // the dialog opens itself on the next frame
         return true;
+    }
+
+    // Offered, never assumed: the recovery copy is what the editor had when it stopped, and the
+    // file on disk is what the designer last chose to keep. Only they know which one they want.
+    void StudioLayer::DrawRecoveryDialog() {
+        if (m_Recovery.empty()) return;
+        if (!m_RecoveryAsked) {
+            ImGui::OpenPopup("Recover unsaved work###Recovery");
+            m_RecoveryAsked = true;
+        }
+
+        ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Appearing,
+                                ImVec2(0.5f, 0.5f));
+        if (!ImGui::BeginPopupModal("Recover unsaved work###Recovery", nullptr,
+                                    ImGuiWindowFlags_AlwaysAutoResize))
+            return;
+
+        ImGui::TextUnformatted("This project has newer changes that were never saved.");
+        ImGui::TextDisabled("%s", EditorState::RecoveryPathFor(m_Recovery).c_str());
+        ImGui::Separator();
+
+        if (ImGui::Button("Recover", ImVec2(140.0f, 0.0f))) {
+            const std::filesystem::path recovery = EditorState::RecoveryPathFor(m_Recovery);
+            const std::filesystem::path project = m_Recovery;
+            m_Recovery.clear();
+            m_RecoveryAsked = false;
+            if (m_State.Load(recovery)) {
+                // Loaded from the recovery file but belonging to the project: saving writes the
+                // project, not the recovery copy.
+                m_State.SetPath(project);
+                m_State.MarkDirty();
+                VAE_INFO("recovered unsaved work — save to keep it");
+            }
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Discard", ImVec2(140.0f, 0.0f))) {
+            std::error_code ec;
+            std::filesystem::remove(EditorState::RecoveryPathFor(m_Recovery), ec);
+            m_Recovery.clear();
+            m_RecoveryAsked = false;
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndPopup();
     }
 
     void StudioLayer::DrawUnsavedChangesDialog() {
@@ -848,7 +896,27 @@ namespace vae {
         return acted;
     }
 
+    // Debounced: a recovery copy is written a few seconds after the last edit, not on every
+    // keystroke, and only while there is unsaved work. Writing on every change would put a file
+    // write in the middle of a drag.
+    void StudioLayer::TickAutosave() {
+        constexpr f32 kQuietSeconds = 4.0f;
+        constexpr f32 kMinInterval  = 20.0f;
+
+        const f32 now = static_cast<f32>(ImGui::GetTime());
+        const u64 revision = m_State.Doc().Revision();
+        if (revision != m_LastRevision) { m_LastRevision = revision; m_LastEdit = now; }
+
+        if (!m_State.Dirty() || m_State.Path().empty()) return;
+        if (now - m_LastEdit < kQuietSeconds) return;
+        if (m_LastAutosave > 0.0f && now - m_LastAutosave < kMinInterval) return;
+
+        m_State.Autosave();
+        m_LastAutosave = now;
+    }
+
     void StudioLayer::OnImGuiRender() {
+        TickAutosave();
         // Shortcuts first: they change what the panels are about to draw, and the canvas has
         // already rendered this frame's image, so the result needs one more frame either way.
         if (HandleShortcuts()) Application::Get().RequestFrame();
@@ -888,6 +956,7 @@ namespace vae {
 
         DrawLauncher();
         DrawUnsavedChangesDialog();
+        DrawRecoveryDialog();
         DrawNewProjectDialog();
         if (m_ShowDemo) ImGui::ShowDemoWindow(&m_ShowDemo);
     }

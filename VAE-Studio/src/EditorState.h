@@ -122,9 +122,23 @@ namespace vae {
         // --- files ------------------------------------------------------------------------------
         void NewProject();
         bool Save(const std::filesystem::path& path);
+
+        // A recovery copy beside the project, written while there is unsaved work and deleted the
+        // moment there is not. Not a save: it never becomes the file the designer opens, it is
+        // what is offered back after a crash or a power cut.
+        void Autosave();
+        // The recovery file for a project, and whether one is worth offering — it exists and is
+        // newer than the project itself.
+        static std::filesystem::path RecoveryPathFor(const std::filesystem::path& project);
+        static bool HasRecovery(const std::filesystem::path& project);
+        void DiscardRecovery();
         bool Load(const std::filesystem::path& path);
         const std::filesystem::path& Path() const { return m_Path; }
         bool Dirty() const { return m_SavedRevision != m_Document.Revision(); }
+        // Recovery loads the copy and then says which project it belongs to, so a save writes the
+        // project rather than the recovery file, and says it is unsaved until it does.
+        void SetPath(std::filesystem::path path) { m_Path = std::move(path); }
+        void MarkDirty() { m_SavedRevision = m_Document.Revision() - 1; }
 
     private:
         void PruneSelection();

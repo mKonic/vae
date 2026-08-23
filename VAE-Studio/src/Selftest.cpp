@@ -1485,6 +1485,59 @@ namespace vae {
             std::filesystem::remove(scripts.SourcePath(), ec);
         }
 
+        // The recovery copy: written while there is unsaved work, offered back afterwards, and
+        // gone the moment the project is saved.
+        void TestAutosave() {
+            Section("autosave and recovery");
+            Shortcuts driver;
+            StudioLayer& layer = driver.Layer_();
+            layer.OpenExample();
+            driver.Frame();
+
+            EditorState& state = layer.State();
+            const std::filesystem::path project =
+                FileSystem::ProjectsRoot() / "Selftest recovery" / "Selftest recovery.vaescreen";
+            std::error_code ec;
+            std::filesystem::create_directories(project.parent_path(), ec);
+            std::filesystem::remove(EditorState::RecoveryPathFor(project), ec);
+
+            if (!Check(state.Save(project), "the project saves")) return;
+            Check(!EditorState::HasRecovery(project), "a saved project has nothing to recover");
+
+            // An edit, then an autosave: what a crash would leave behind.
+            const Uuid box = state.Doc().CreateNode(doc::NodeKind::Frame, state.ActiveScreen(),
+                                                    "Unsaved box");
+            driver.Frame();
+            Check(state.Dirty(), "the document is dirty after an edit");
+            state.Autosave();
+            Check(std::filesystem::exists(EditorState::RecoveryPathFor(project)),
+                  "which writes a recovery copy");
+            Check(EditorState::HasRecovery(project), "and it is newer than the project");
+
+            // What the recovery holds is the work, not the file on disk.
+            doc::Document recovered;
+            std::string error;
+            Check(doc::Serializer::Load(EditorState::RecoveryPathFor(project), recovered, &error,
+                                        &ui::StandardLibrary()),
+                  "the recovery copy loads: " + error);
+            // By name, not by id: the format drops ids nothing refers to, so a node that came back
+            // from a file is not the id it went in as.
+            (void)box;
+            const bool found = std::any_of(recovered.AllNodes().begin(), recovered.AllNodes().end(),
+                                           [&](Uuid id) {
+                                               const doc::Node* n = recovered.Find(id);
+                                               return n && n->name == "Unsaved box";
+                                           });
+            Check(found, "with the unsaved edit in it");
+
+            // Saving the project makes the recovery meaningless, so it goes.
+            Check(state.Save(project), "saving again");
+            Check(!std::filesystem::exists(EditorState::RecoveryPathFor(project)),
+                  "clears the recovery copy");
+
+            std::filesystem::remove_all(project.parent_path(), ec);
+        }
+
         // Editing a label on the canvas instead of in the Inspector.
         void TestInlineTextEdit() {
             Section("edit text on the canvas");
@@ -2204,6 +2257,7 @@ namespace vae {
         TestDebugger();
         TestScreens();
         TestGrouping();
+        TestAutosave();
         TestInlineTextEdit();
         TestClipboard();
         TestFileDrop();
