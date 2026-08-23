@@ -489,6 +489,12 @@ namespace vae::gen {
 #ifdef VAE_HTTP_TLS
                    "      links { \"ssl\", \"crypto\" }\n"
 #endif
+                   // And the same for the screen-reader bridge: it is compiled into libVAE.a, so
+                   // an app that leaves this out is an undefined reference to sd_bus_open_user at
+                   // the last step of its build.
+#ifdef VAE_A11Y_ATSPI
+                   "      links { \"systemd\" }\n"
+#endif
                    "\n"
                    "   filter \"system:windows\"\n"
                    "      systemversion \"latest\"\n"

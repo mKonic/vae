@@ -191,6 +191,38 @@ namespace vae::app {
         return !node || node->props.Flag(doc::Prop::Resizable, true);
     }
 
+    std::string RunLayer::ScreenName() const {
+        const std::string name = m_Host.CurrentScreenName();
+        return name.empty() ? std::string("VAE app") : name;
+    }
+
+    void RunLayer::PublishAccessibility() {
+        // Connected on the first frame rather than at load: a bus call is slow enough to be worth
+        // keeping out of startup, and an app that is never looked at by a screen reader should not
+        // pay for one at all. The bridge itself is null when the desktop has no accessibility bus.
+        if (m_BridgeAsked && !m_Bridge) return;
+        if (!m_BridgeAsked) {
+            m_BridgeAsked = true;
+            m_Bridge = a11y::Bridge::Create();
+            if (m_Bridge) {
+                const bool ok = m_Bridge->Connect(ScreenName());
+                VAE_CORE_INFO("accessibility: {}", m_Bridge->Status());
+                if (!ok) m_Bridge.reset();
+            }
+            if (!m_Bridge) return;
+        }
+
+        // Built every frame and sent only when it differs. Building is a walk of the view tree;
+        // telling a screen reader that the whole screen is new makes it read the screen out again,
+        // so the second is the one worth being careful about.
+        m_Accessibility.Build(m_Host.Tree(), ScreenName());
+        if (m_Accessibility.Signature() != m_PublishedRevision) {
+            m_Bridge->Publish(m_Accessibility);
+            m_PublishedRevision = m_Accessibility.Signature();
+        }
+        m_Bridge->Pump();
+    }
+
     void RunLayer::Resize(Vec2 window) {
         if (window.x < 1.0f || window.y < 1.0f) return;
         m_WindowSize = window;
@@ -241,6 +273,7 @@ namespace vae::app {
         if (m_Host.ApplyNavigation()) Resize(m_WindowSize);
         m_Host.Update(m_WindowSize, ts);
         m_Runtime.Sync();
+        PublishAccessibility();
         m_Runtime.Update(ts);
         // A script can navigate too, and its new screen needs the window just as much.
         if (m_Host.CurrentScreen() != m_SizedScreen) {

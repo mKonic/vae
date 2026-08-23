@@ -34,6 +34,7 @@ project "VAE-Studio"
 
    -- https when the host has OpenSSL; plain http and a clear error when not.
    VaeHttpTls()
+   VaeAccessibility()
 
    -- StaticLib links are NOT transitive under gmake, so every dependency is relisted here.
    links { "VAE", "VAE-Core", "spdlog", "GLFW", "VulkanDeps", "ImGui", "TextEditor", "Lua", "miniaudio", "pugixml", "harfbuzz" }

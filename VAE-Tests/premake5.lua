@@ -27,6 +27,7 @@ project "VAE-Tests"
 
    -- https when the host has OpenSSL; plain http and a clear error when not.
    VaeHttpTls()
+   VaeAccessibility()
 
    links { "VAE-Core", "spdlog", "Lua", "miniaudio", "pugixml", "harfbuzz" }
 

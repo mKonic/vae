@@ -43,6 +43,10 @@ project "VAE-Core"
       -- them here is what makes every interaction contract testable without a window: VAE-Tests
       -- drives a real button through a real hit-test and never opens a device.
       "src/vae/ui/**.h",     "src/vae/ui/**.cpp",
+      -- What the app looks like to a screen reader. In Core because building the tree is pure
+      -- inspection of the view tree, which is what makes it testable without one attached; the
+      -- bridge that carries it to the desktop is in the full library.
+      "src/vae/a11y/**.h",   "src/vae/a11y/**.cpp",
       -- Events are POD and KeyCodes are constants; neither pulls in a window system, and the
       -- widget layer needs both.
       "src/vae/core/Event.h", "src/vae/core/KeyCodes.h",
@@ -87,6 +91,7 @@ project "VAE-Core"
 
    -- https when the host has OpenSSL; plain http and a clear error when not.
    VaeHttpTls()
+   VaeAccessibility()
 
    links { "spdlog", "Lua", "miniaudio", "pugixml", "harfbuzz" }
 
@@ -165,6 +170,7 @@ project "VAE"
 
    -- https when the host has OpenSSL; plain http and a clear error when not.
    VaeHttpTls()
+   VaeAccessibility()
 
    links { "VAE-Core", "spdlog", "GLFW", "VulkanDeps", "ImGui", "miniaudio", "pugixml", "harfbuzz" }
 

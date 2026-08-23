@@ -75,6 +75,11 @@ namespace vae::doc {
         // to, so a screen never goes blank because a translation is missing — the key is an
         // addition to the design, not a replacement for it.
         TextKey,
+        // What a screen reader calls this, when what it draws is not enough to say. An icon-only
+        // button is the case: it has no text inside it to be announced by, so without this it is
+        // announced as "button" and nothing else. A node that already reads correctly does not
+        // need one — a named button announcing its own label twice is worse than not setting it.
+        A11yLabel,
         Count
     };
 

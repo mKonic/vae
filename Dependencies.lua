@@ -47,6 +47,24 @@ function VaeHasOpenSSL()
        or os.isfile("/usr/local/include/openssl/ssl.h")
 end
 
+-- The screen-reader bridge speaks D-Bus, and sd-bus is the D-Bus client every systemd desktop
+-- already has. Not vendored, for the same reason OpenSSL is not: a second copy of a bus client is
+-- a second thing to keep in step with the bus. Without it the engine still builds and an app
+-- simply has no bridge — which is what happens on a machine with no accessibility bus anyway.
+function VaeHasSdBus()
+   if os.target() ~= "linux" then return false end
+   return os.isfile("/usr/include/systemd/sd-bus.h")
+       or os.isfile("/usr/local/include/systemd/sd-bus.h")
+end
+
+function VaeAccessibility()
+   if not VaeHasSdBus() then return end
+   defines { "VAE_A11Y_ATSPI" }
+   filter "system:linux"
+      links { "systemd" }
+   filter {}
+end
+
 -- Applied by every project that compiles or links the services layer.
 function VaeHttpTls()
    if not VaeHasOpenSSL() then return end

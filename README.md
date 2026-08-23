@@ -105,6 +105,18 @@ binaries and the engine's assets under the prefix instead. Either way `<prefix>/
 `vae-studio` and `vae-player`, and `<prefix>/share` gets a desktop entry, an icon, and the
 `.vaescreen` file type so a project opens from a file manager.
 
+## Accessibility
+
+An app VAE builds exposes itself to a screen reader over AT-SPI. Roles come from the widget roles a
+designer already sets, and a control's name is the text drawn on it — a button with Save written on
+it is announced as "Save" without anybody saying so. An icon-only button, which has no text to be
+named by, sets `a11yLabel`.
+
+The bridge needs sd-bus at build time (`systemd/sd-bus.h`, present on every systemd desktop) and an
+accessibility bus at run time; without either, an app builds and runs with no bridge. A screen
+reader can walk an app, read its controls and follow focus. It cannot yet operate them:
+`org.a11y.atspi.Action` is not implemented.
+
 ## Documents
 
 `.vaescreen` and `.vaecomp` are XML (format 3). The element name is the node kind, the tree is the

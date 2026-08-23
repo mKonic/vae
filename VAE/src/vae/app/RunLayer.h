@@ -8,6 +8,7 @@
 #include "vae/svc/Services.h"
 #include "vae/text/GlyphAtlas.h"
 #include "vae/ui/AssetStore.h"
+#include "vae/a11y/Bridge.h"
 #include "vae/ui/UiHost.h"
 
 #include <filesystem>
@@ -63,6 +64,9 @@ namespace vae::app {
         void OnAttach() override;
         void OnDetach() override;
         void OnUpdate(Timestep ts) override;
+        // Rebuilds what a screen reader sees and sends it, when the screen has actually changed.
+        void PublishAccessibility();
+        std::string ScreenName() const;
         void OnUiRender(gpu::CommandList& cmd) override;
         void OnEvent(Event& e) override;
 
@@ -85,6 +89,12 @@ namespace vae::app {
 
         doc::Document m_Document;
         ui::UiHost m_Host;
+        // What a screen reader sees, and what carries it there. Both null on a desktop with no
+        // accessibility bus, which costs a running app nothing.
+        a11y::Tree       m_Accessibility;
+        Scope<a11y::Bridge> m_Bridge;
+        u64              m_PublishedRevision = 0;
+        bool             m_BridgeAsked = false;
         script::Runtime m_Runtime;
         svc::Services m_Services;
         draw::DrawList m_List;
