@@ -2,6 +2,7 @@
 #include "vae/ui/ViewTree.h"
 
 #include "vae/text/FontDB.h"
+#include "vae/text/TextCache.h"
 #include "vae/text/TextDraw.h"
 #include "vae/ui/Behavior.h"
 
@@ -212,7 +213,7 @@ namespace vae::ui {
         if (!style.font) return { 0.0f, 0.0f };
         const f32 maxWidth = std::isfinite(available.x) ? std::max(available.x, 0.0f) : 0.0f;
         const auto wrap = WrapFromName(Str(view, doc::Prop::TextWrap, "word"));
-        return text::TextLayout::Measure(content, style, maxWidth, wrap);
+        return text::TextCache::Measure(content, style, maxWidth, wrap);
     }
 
     void ViewTree::Layout(Vec2 available) {
@@ -753,7 +754,11 @@ namespace vae::ui {
 
         const auto wrap = WrapFromName(props.Text(doc::Prop::TextWrap, "word"));
         const auto align = AlignFromName(props.Text(doc::Prop::TextAlign, "left"));
-        const auto result = text::TextLayout::Layout(content, style, rect.size.x, wrap, align);
+        // Cached: the same label, in the same style, at the same width, shapes once and is drawn
+        // from then on. A repeated container makes this the difference between shaping one row and
+        // shaping every copy of it.
+        const text::TextLayoutResult& result =
+            text::TextCache::Layout(content, style, rect.size.x, wrap, align);
         const Color colour = WithAlpha(props.Colour(doc::Prop::TextColor, { 1, 1, 1, 1 }),
                                        m_Frames[index].opacity);
         text::DrawGlyphs(*context.list, *context.atlas, result, rect.pos, colour, style.size,

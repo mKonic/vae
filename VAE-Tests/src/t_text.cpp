@@ -3,6 +3,7 @@
 #include "vae/base/FileSystem.h"
 #include "vae/base/Utf8.h"
 #include "vae/text/FontDB.h"
+#include "vae/text/TextCache.h"
 #include "vae/text/TextLayout.h"
 
 #include <string>
@@ -29,6 +30,73 @@ namespace {
 }
 
 // ------------------------------------------------------------------ UTF-8
+
+TEST(text, a_memoized_style_is_still_the_right_style) {
+    // FontDB::Style is asked for the same handful of styles thousands of times a frame, so it
+    // memoizes. A memo that returned the same chain for every request would silently draw every
+    // weight at 400 and every family in the default face.
+    FontDB db;
+    db.RegisterDirectory(FileSystem::Asset("VAE/assets/fonts"), false, true);
+    db.SetDefaultFamily("JetBrains Mono Nerd Font");
+
+    const TextStyle regular = db.Style({ "", FontWeight::Regular, FontSlant::Normal, 14.0f });
+    CHECK(regular.font != nullptr);
+    const Font* face = regular.font.get();
+
+    // Size rides on the cached entry rather than splitting it, so asking at another size is the
+    // same face at the new size — not the old size handed back.
+    const TextStyle bigger = db.Style({ "", FontWeight::Regular, FontSlant::Normal, 32.0f });
+    CHECK_EQ(bigger.size, 32.0f);
+    CHECK(bigger.font.get() == face);
+    CHECK_EQ(db.Style({ "", FontWeight::Regular, FontSlant::Normal, 14.0f }).size, 14.0f);
+
+    // Weight is part of the key: Medium is bundled beside Regular, so the two must not collapse
+    // into one entry.
+    const TextStyle medium = db.Style({ "", FontWeight::Medium, FontSlant::Normal, 14.0f });
+    CHECK(medium.font != nullptr);
+
+    // A family nobody has falls back to the default rather than returning a null face or the
+    // previous answer.
+    const TextStyle missing = db.Style({ "No Such Family At All", FontWeight::Regular,
+                                         FontSlant::Normal, 14.0f });
+    CHECK(missing.font != nullptr);
+}
+
+TEST(text, a_shaped_run_comes_back_identical_from_the_cache) {
+    FontDB db;
+    db.RegisterDirectory(FileSystem::Asset("VAE/assets/fonts"), false, true);
+    db.SetDefaultFamily("JetBrains Mono Nerd Font");
+    const TextStyle style = db.Style({ "", FontWeight::Regular, FontSlant::Normal, 14.0f });
+    CHECK(style.font != nullptr);
+
+    const std::string content = "Cached runs must be the runs they cache";
+    const TextLayoutResult direct = TextLayout::Layout(content, style, 0.0f, WrapMode::None);
+    const TextLayoutResult& cached = TextCache::Layout(content, style, 0.0f, WrapMode::None);
+
+    CHECK_EQ(cached.glyphs.size(), direct.glyphs.size());
+    CHECK(std::abs(cached.size.x - direct.size.x) < 0.001f);
+    for (std::size_t i = 0; i < direct.glyphs.size(); ++i) {
+        CHECK_EQ(cached.glyphs[i].codepoint, direct.glyphs[i].codepoint);
+        CHECK(std::abs(cached.glyphs[i].pen.x - direct.glyphs[i].pen.x) < 0.001f);
+    }
+
+    // Second time is a hit, and a hit is the same answer.
+    const auto before = TextCache::Report().hits;
+    const TextLayoutResult& again = TextCache::Layout(content, style, 0.0f, WrapMode::None);
+    CHECK(TextCache::Report().hits > before);
+    CHECK_EQ(again.glyphs.size(), direct.glyphs.size());
+
+    // The width a run was wrapped into is part of what it is: the same string at 60px wraps to
+    // more lines than at 4000, and a cache that ignored the width would hand back the wrong one.
+    const std::size_t narrow = TextCache::Layout(content, style, 60.0f, WrapMode::Word).lines.size();
+    const std::size_t wide = TextCache::Layout(content, style, 4000.0f, WrapMode::Word).lines.size();
+    CHECK(narrow > wide);
+
+    // And a different string of the same length is a different run, not a hash collision.
+    const std::string other = "Sached suns bust ce tre suns tley cacle";
+    CHECK(TextCache::Layout(other, style, 0.0f, WrapMode::None).glyphs[0].codepoint == 'S');
+    CHECK(TextCache::Layout(content, style, 0.0f, WrapMode::None).glyphs[0].codepoint == 'C');
+}
 
 TEST(utf8, decodes_every_sequence_length) {
     std::size_t i = 0;

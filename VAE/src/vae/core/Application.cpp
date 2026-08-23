@@ -1,15 +1,18 @@
 #include "vaepch.h"
 #include "vae/core/Application.h"
 
-#include "vae/app/ImGuiLayer.h"
 #include "vae/base/FileSystem.h"
 #include "vae/base/Version.h"
+#include "vae/text/TextCache.h"
 
 #include <chrono>
 
 namespace vae {
 
     Application* Application::s_Instance = nullptr;
+    namespace { ChromeFactory s_ChromeFactory = nullptr; }
+
+    void Application::SetChromeFactory(ChromeFactory factory) { s_ChromeFactory = factory; }
 
     bool CommandLineArgs::Has(std::string_view flag) const {
         for (int i = 1; i < count; ++i) {
@@ -71,10 +74,11 @@ namespace vae {
         }
 
         // Pushed first so it is the bottom of the stack: OnImGuiRender runs in stack order, and the
-        // dock space has to exist before any panel tries to dock into it.
-        if (m_Spec.enableImGui && m_Device) {
-            auto layer = CreateScope<app::ImGuiLayer>();
-            m_ImGui = layer.get();
+        // dock space has to exist before any panel tries to dock into it. Built through the factory
+        // the editor installed, so an app that installs none does not link one either.
+        if (m_Spec.enableImGui && m_Device && s_ChromeFactory) {
+            auto layer = s_ChromeFactory();
+            m_Chrome = layer.get();
             m_LayerStack.Push(std::move(layer));
         }
     }
@@ -153,17 +157,17 @@ namespace vae {
 
                         // The editor chrome is built before anything is recorded, so a layer that
                         // draws into a dock space already knows the rectangle it was given.
-                        if (m_ImGui) {
-                            m_ImGui->Begin();
+                        if (m_Chrome) {
+                            m_Chrome->Begin();
                             for (auto& layer : m_LayerStack) layer->OnImGuiRender();
-                            m_ImGui->Finish();
+                            m_Chrome->Finish();
                         }
 
                         gpu::RenderPassDesc pass;
                         pass.clearColor = m_Spec.clearColor;
                         cmd->BeginRenderPass(pass);
                         for (auto& layer : m_LayerStack) layer->OnUiRender(*cmd);
-                        if (m_ImGui) m_ImGui->Draw(*cmd);
+                        if (m_Chrome) m_Chrome->Draw(*cmd);
                         cmd->EndRenderPass();
 
                         m_Device->EndFrame();
@@ -173,6 +177,10 @@ namespace vae {
                     ++m_FrameCount;
                 }
             }
+
+            // End of frame: shaped runs nothing asked for in a while go. Here rather than in the
+            // UI layer because every app has a loop and not every app has a ViewTree.
+            text::TextCache::Sweep();
 
             if (!m_Window) m_Running = false;   // headless: one pass, then out
         }

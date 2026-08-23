@@ -1,5 +1,6 @@
 #include "vaepch.h"
 #include "vae/text/FontDB.h"
+#include "vae/text/TextCache.h"
 
 #include "vae/base/FileSystem.h"
 #include "vae/base/Platform.h"
@@ -110,6 +111,8 @@ namespace vae::text {
 
     void FontDB::RegisterFile(const fs::path& path, std::string family,
                               FontWeight weight, FontSlant slant) {
+        // A newly registered face can be a better answer than whatever a family resolved to before.
+        m_Styles.clear();
         Ref<Font> preloaded;
         if (family.empty()) {
             preloaded = Font::LoadFromFile(path);
@@ -252,22 +255,40 @@ namespace vae::text {
         return nullptr;
     }
 
-    TextStyle FontDB::Style(const FontRequest& request) {
+    // Memoized, because this is called for every text node on every frame — twice, once to measure
+    // and once to paint — and the answer only changes when the font database does. Unmemoized it
+    // was a family lookup, a face search and a fresh `vector<Ref<Font>>` per call, which measured
+    // as most of the per-label cost of a frame and had nothing to do with the text.
+    const TextStyle& FontDB::Style(const FontRequest& request) {
+        const std::string& family = request.family.empty() ? m_DefaultFamily : request.family;
+        const StyleKey key{ family, request.weight, request.slant };
+
+        if (const auto it = m_Styles.find(key); it != m_Styles.end()) {
+            // Size is the one field that does not change what was resolved, so it rides on top of
+            // the cached chain rather than splitting the cache by every size in the document.
+            it->second.size = request.size;
+            return it->second;
+        }
+
         TextStyle style;
         style.font = Resolve(request);
         style.size = request.size;
-        for (const auto& family : m_FallbackFamilies) {
-            if (Face* face = FindBest(family, request.weight, request.slant))
+        for (const auto& fallback : m_FallbackFamilies) {
+            if (Face* face = FindBest(fallback, request.weight, request.slant))
                 if (auto font = Load(*face); font && font != style.font)
                     style.fallbacks.push_back(font);
         }
-        return style;
+        return m_Styles.emplace(key, std::move(style)).first->second;
     }
 
-    void FontDB::SetDefaultFamily(std::string family) { m_DefaultFamily = std::move(family); }
+    void FontDB::SetDefaultFamily(std::string family) {
+        m_DefaultFamily = std::move(family);
+        m_Styles.clear();      // every resolved chain was against the old default
+    }
 
     void FontDB::SetFallbackFamilies(std::vector<std::string> families) {
         m_FallbackFamilies = std::move(families);
+        m_Styles.clear();
     }
 
     std::vector<std::string> FontDB::Families() const {
@@ -290,6 +311,9 @@ namespace vae::text {
     }
 
     void FontDB::Clear() {
+        // Every shaped run in the cache points at a face that is about to stop existing.
+        TextCache::Clear();
+        m_Styles.clear();
         m_Families.clear();
         m_Warned.clear();
         m_FallbackFamilies.clear();

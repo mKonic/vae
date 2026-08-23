@@ -1,6 +1,8 @@
 #include "vaepch.h"
 #include "vae/text/TextDraw.h"
 
+#include "vae/text/TextCache.h"
+
 #include <cmath>
 
 namespace vae::text {
@@ -32,7 +34,7 @@ namespace vae::text {
     Vec2 DrawText(draw::DrawList& list, GlyphAtlas& atlas, std::string_view utf8,
                   const TextStyle& style, Vec2 origin, Color color,
                   f32 maxWidth, WrapMode wrap, TextAlign align, f32 ratio) {
-        const TextLayoutResult layout = TextLayout::Layout(utf8, style, maxWidth, wrap, align);
+        const TextLayoutResult& layout = TextCache::Layout(utf8, style, maxWidth, wrap, align);
         DrawGlyphs(list, atlas, layout, origin, color, style.size, ratio);
         return layout.size;
     }

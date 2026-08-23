@@ -6,6 +6,7 @@
 #include <map>
 #include <optional>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace vae::text {
@@ -68,8 +69,12 @@ namespace vae::text {
         Ref<Font> Resolve(std::string_view family, FontWeight weight = FontWeight::Regular,
                           FontSlant slant = FontSlant::Normal);
 
-        // A ready-to-use style with the fallback chain already attached.
-        TextStyle Style(const FontRequest& request);
+        // A ready-to-use style with the fallback chain already attached. Memoized per (family,
+        // weight, slant) — a UI asks for the same handful of styles thousands of times a frame,
+        // and building the chain fresh each time was most of what a text node cost. The reference
+        // is invalidated by any change to the database (registering a face, changing the default
+        // or the fallbacks, clearing), so it is read and used, not held.
+        const TextStyle& Style(const FontRequest& request);
 
         void SetDefaultFamily(std::string family);
         const std::string& DefaultFamily() const { return m_DefaultFamily; }
@@ -92,6 +97,20 @@ namespace vae::text {
         static std::string NormalizeFamilyForTest(std::string_view family) { return NormalizeFamily(family); }
 
     private:
+        struct StyleKey {
+            std::string family;
+            FontWeight  weight = FontWeight::Regular;
+            FontSlant   slant  = FontSlant::Normal;
+            bool operator==(const StyleKey&) const = default;
+        };
+        struct StyleKeyHash {
+            std::size_t operator()(const StyleKey& key) const {
+                return std::hash<std::string>{}(key.family)
+                     ^ (static_cast<std::size_t>(key.weight) << 1)
+                     ^ (static_cast<std::size_t>(key.slant) << 17);
+            }
+        };
+
         struct Face {
             FontFaceInfo info;
             Ref<Font> font;                 // null until first resolved
@@ -112,6 +131,8 @@ namespace vae::text {
         static std::string NormalizeFamily(std::string_view family);
 
         std::map<std::string, std::vector<Face>, FamilyKeyLess> m_Families;
+        // Resolved styles, by what was asked for. Cleared whenever the database changes.
+        std::unordered_map<StyleKey, TextStyle, StyleKeyHash> m_Styles;
         std::string m_DefaultFamily = "JetBrains Mono";
         std::vector<std::string> m_FallbackFamilies;
         std::vector<std::string> m_Warned;
