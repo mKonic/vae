@@ -667,6 +667,39 @@ TEST(doc, assets_are_kept_by_id_and_survive_a_round_trip) {
 
 // ------------------------------------------------------------------ rows
 
+TEST(doc, sample_rows_are_a_table_typed_as_text) {
+    const RowTable table = ParseRowText("author | body | tint\n"
+                                        "  Ada  | Hello there | accent\n"
+                                        "Grace  | Hi\n");
+    CHECK_EQ(table.columns.size(), 3u);
+    CHECK_EQ(table.columns[0], std::string("author"));
+    CHECK_EQ(table.Count(), 2u);
+    // Cells are trimmed, so a table lined up into columns reads as the values it shows.
+    CHECK_EQ(std::string(table.Cell(0, "author")), std::string("Ada"));
+    CHECK_EQ(std::string(table.Cell(0, "body")), std::string("Hello there"));
+    // A short row pads rather than shifting every later cell one column left.
+    CHECK_EQ(std::string(table.Cell(1, "author")), std::string("Grace"));
+    CHECK_EQ(std::string(table.Cell(1, "tint")), std::string(""));
+    // A long one drops the extra instead of growing a column nothing named.
+    CHECK_EQ(ParseRowText("a\n1 | 2 | 3").columns.size(), 1u);
+    CHECK_EQ(ParseRowText("a\n1 | 2 | 3").Count(), 1u);
+}
+
+TEST(doc, column_names_with_no_rows_under_them_are_not_a_table) {
+    // Half-typed is the state the field is in for most of the time anyone spends in it, and a
+    // container with no rows should draw the number the designer asked for, not zero copies.
+    CHECK_EQ(ParseRowText("author | body").Count(), 0u);
+    CHECK(ParseRowText("author | body").columns.empty());
+    CHECK(ParseRowText("").columns.empty());
+    CHECK(ParseRowText("\n\n").columns.empty());
+}
+
+TEST(doc, sample_row_text_survives_the_trip_through_a_table) {
+    const std::string text = "author | body\nAda | Hello\nGrace | Hi\n";
+    CHECK_EQ(RowText(ParseRowText(text)), text);
+    CHECK_EQ(RowText(RowTable{}), std::string(""));
+}
+
 TEST(doc, rows_decide_how_many_copies_a_repeated_container_has) {
     // The designer draws one row and says "repeat 2" so the canvas is not empty. The app hands
     // over three rows; three is what there are. Data wins over the placeholder, or every list in
@@ -778,6 +811,45 @@ TEST(doc, a_field_binding_fills_the_property_its_column_names) {
     // blank, not stuck showing whatever the designer typed into it.
     const auto* firstBadge = find("Badge", 0);
     CHECK(firstBadge && firstBadge->props.Text(Prop::Text).empty());
+}
+
+TEST(doc, a_cell_can_name_a_picture) {
+    // The one thing a cell could not say. An AssetRef is a Uuid, so a row that wanted an avatar
+    // had nothing to write; the name the Assets panel shows is what it writes instead — the same
+    // currency a script already spends on play_sound("click").
+    Document doc;
+    const Uuid ada = doc.AddAsset("avatar-ada", "art/ada.png");
+    doc.AddAsset("avatar-grace", "art/grace.png");
+    const Uuid fallback = doc.AddAsset("avatar-unknown", "art/unknown.png");
+
+    const Uuid screen = doc.CreateNode(NodeKind::Screen);
+    const Uuid list = doc.CreateNode(NodeKind::Frame, screen, "People");
+    const Uuid row = doc.CreateNode(NodeKind::Frame, list, "Person");
+    const Uuid picture = doc.CreateNode(NodeKind::Image, row, "Avatar");
+    doc.SetProp(picture, Prop::Image, AssetRef{ fallback });
+    doc.SetProp(picture, Prop::Field, std::string("avatar"));
+
+    RowTable table;
+    table.columns = { "avatar" };
+    table.cells = { "avatar-ada", "", "nobody-has-this" };
+
+    const auto flat = doc.Flatten(screen, [&](Uuid node, Uuid) -> const RowTable* {
+        return node == list ? &table : nullptr;
+    });
+
+    std::vector<Value> images;
+    for (const auto& node : flat)
+        if (node.kind == NodeKind::Image) {
+            const Value* value = node.props.Find(Prop::Image);
+            images.push_back(value ? *value : Value{});
+        }
+    CHECK_EQ(images.size(), 3u);
+    CHECK(images[0] == Value{ AssetRef{ ada } });
+    // No picture in the row means no picture, not the template's placeholder left behind.
+    CHECK(!IsSet(images[1]));
+    // A name nothing answers to keeps what the designer drew, so a typo is a wrong picture rather
+    // than a hole in the layout.
+    CHECK(images[2] == Value{ AssetRef{ fallback } });
 }
 
 TEST(doc, an_empty_table_empties_its_container_and_nothing_else) {
@@ -1273,6 +1345,26 @@ TEST(xml, tokens_and_assets_travel_with_the_document) {
     CHECK_EQ(loaded.Assets().size(), 1u);
     CHECK_EQ(loaded.Assets()[0].id, asset);
     CHECK_EQ(loaded.Assets()[0].path, std::string("art/logo.png"));
+}
+
+TEST(xml, sample_rows_get_an_element_rather_than_an_escaped_attribute) {
+    Document doc;
+    const Uuid screen = doc.CreateNode(NodeKind::Screen, Uuid::Invalid(), "Home");
+    const Uuid list = doc.CreateNode(NodeKind::Frame, screen, "Messages");
+    doc.SetProp(list, Prop::Repeat, 3.0f);
+    doc.SetProp(list, Prop::Sample, std::string("author | body\nAda | Hello\nGrace | Hi\n"));
+    doc.CreateNode(NodeKind::Frame, list, "Message");
+
+    const std::string xml = ToXmlKeepingIds(doc);
+    CHECK(xml.find("<sample>author | body") != std::string::npos);
+    // The whole point of the element: no &#10; anywhere near it.
+    CHECK(xml.find("&#10;") == std::string::npos);
+
+    Document loaded;
+    std::string error;
+    CHECK_MESSAGE(Serializer::FromXml(xml, loaded, &error), error);
+    CHECK_EQ(loaded.Find(list)->props.Text(Prop::Sample), doc.Find(list)->props.Text(Prop::Sample));
+    CHECK_EQ(ParseRowText(loaded.Find(list)->props.Text(Prop::Sample)).Count(), 2u);
 }
 
 TEST(xml, an_override_keeps_the_id_it_keys_on) {

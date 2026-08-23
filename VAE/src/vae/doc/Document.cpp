@@ -295,6 +295,13 @@ namespace vae::doc {
         return it == m_Assets.end() ? nullptr : &*it;
     }
 
+    const Document::Asset* Document::FindAssetNamed(std::string_view name) const {
+        if (name.empty()) return nullptr;
+        for (const Asset& asset : m_Assets)
+            if (asset.name == name) return &asset;
+        return nullptr;
+    }
+
     Uuid Document::MakeComponent(Uuid subtreeRoot, std::string name) {
         Node* node = Find(subtreeRoot);
         if (!node) return Uuid::Invalid();
@@ -455,12 +462,79 @@ namespace vae::doc {
 
     namespace {
 
+        std::string_view Trimmed(std::string_view s) {
+            const auto space = [](char c) { return c == ' ' || c == '\t' || c == '\r'; };
+            while (!s.empty() && space(s.front())) s.remove_prefix(1);
+            while (!s.empty() && space(s.back()))  s.remove_suffix(1);
+            return s;
+        }
+
+        std::vector<std::string> SplitCells(std::string_view line) {
+            std::vector<std::string> out;
+            std::size_t at = 0;
+            while (true) {
+                const std::size_t bar = line.find('|', at);
+                out.emplace_back(Trimmed(line.substr(at, bar == std::string_view::npos
+                                                          ? std::string_view::npos : bar - at)));
+                if (bar == std::string_view::npos) break;
+                at = bar + 1;
+            }
+            return out;
+        }
+
+    }
+
+    RowTable ParseRowText(std::string_view text) {
+        RowTable table;
+        std::size_t at = 0;
+        while (at <= text.size()) {
+            const std::size_t nl = text.find('\n', at);
+            const std::string_view line =
+                Trimmed(text.substr(at, nl == std::string_view::npos ? std::string_view::npos : nl - at));
+            at = nl == std::string_view::npos ? text.size() + 1 : nl + 1;
+
+            if (line.empty()) continue;
+            if (table.columns.empty()) { table.columns = SplitCells(line); continue; }
+
+            // A short row pads and a long one drops: half a table still draws, which is the state
+            // it is in for most of the time anyone spends typing it.
+            std::vector<std::string> cells = SplitCells(line);
+            cells.resize(table.columns.size());
+            for (std::string& cell : cells) table.cells.push_back(std::move(cell));
+        }
+        // Column names with no rows under them describe a table with nothing in it, and a table
+        // with nothing in it is not one.
+        if (table.cells.empty()) table.columns.clear();
+        return table;
+    }
+
+    std::string RowText(const RowTable& rows) {
+        if (rows.columns.empty()) return {};
+        std::string out;
+        const auto line = [&out](const std::string* first, std::size_t count) {
+            for (std::size_t i = 0; i < count; ++i) {
+                if (i) out += " | ";
+                out += first[i];
+            }
+            out += '\n';
+        };
+        line(rows.columns.data(), rows.columns.size());
+        for (u32 row = 0; row < rows.Count(); ++row)
+            line(&rows.cells[static_cast<std::size_t>(row) * rows.columns.size()], rows.columns.size());
+        return out;
+    }
+
+    namespace {
+
         // What a property holds, which is what a cell has to be read as. A cell is text on the
         // wire — the app said "3" or "online" or "" — and the property it lands on decides whether
         // that is a number, a token or a fact about whether the node is there at all.
-        enum class Shape { Text, Number, Bool, Colour };
+        enum class Shape { Text, Number, Bool, Colour, Asset };
 
         Shape ShapeOf(Prop prop) {
+            // A picture is the one cell that cannot be its own value: an AssetRef is a Uuid, and
+            // nothing a person types into a table is a Uuid. The cell carries the asset's name.
+            if (PropValueType(prop) == ValueType::Asset) return Shape::Asset;
             switch (prop) {
                 case Prop::Fill: case Prop::Stroke: case Prop::TextColor: case Prop::ShadowColor:
                     return Shape::Colour;
@@ -516,7 +590,8 @@ namespace vae::doc {
         // The binding on a node inside a row template: which column it draws, and which of its own
         // properties draws it. "author" fills the node's natural property — text on a label, the
         // picture on an image; "fill:tint" names one outright.
-        void ApplyField(PropBag& props, NodeKind kind, const RowTable& table, u32 row) {
+        void ApplyField(const Document& document, PropBag& props, NodeKind kind,
+                        const RowTable& table, u32 row) {
             const Value* binding = props.Find(Prop::Field);
             if (!binding) return;
             const auto* text = std::get_if<std::string>(binding);
@@ -548,6 +623,15 @@ namespace vae::doc {
                 case Shape::Colour: {
                     Value colour = ColourOf(cell);
                     if (IsSet(colour)) props.Set(target, std::move(colour));
+                    break;
+                }
+                case Shape::Asset: {
+                    // An empty cell is a row with no picture, which is a picture of nothing. A
+                    // name nothing answers to leaves the authored one alone, so a typo shows the
+                    // placeholder the designer put there rather than a hole.
+                    if (cell.empty()) { props.Set(target, Value{}); break; }
+                    if (const Document::Asset* asset = document.FindAssetNamed(cell))
+                        props.Set(target, AssetRef{ asset->id });
                     break;
                 }
             }
@@ -594,7 +678,7 @@ namespace vae::doc {
             flat.layout = node->layout;
             flat.name = node->name;
             flat.props = ResolvedProps(chain, id);
-            if (row && row->table) ApplyField(flat.props, flat.kind, *row->table, row->row);
+            if (row && row->table) ApplyField(*this, flat.props, flat.kind, *row->table, row->row);
             out.push_back(std::move(flat));
 
             const u32 index = static_cast<u32>(out.size() - 1);
@@ -641,7 +725,7 @@ namespace vae::doc {
         // the root — that is what makes "change the label on this one card" work.
         flat.props = ResolvedProps(chain, id);
         // Inside a copy, whatever the template said this node draws is filled in from the row.
-        if (row && row->table) ApplyField(flat.props, flat.kind, *row->table, row->row);
+        if (row && row->table) ApplyField(*this, flat.props, flat.kind, *row->table, row->row);
         out.push_back(std::move(flat));
 
         const u32 index = static_cast<u32>(out.size() - 1);

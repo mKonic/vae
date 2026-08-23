@@ -38,6 +38,21 @@ namespace vae::doc {
         bool operator==(const RowTable&) const = default;
     };
 
+    // A row table written as text, which is how a designer types sample rows and how Prop::Sample
+    // stores them. The first non-empty line names the columns, every line after it is a row, and
+    // cells are separated by `|` and trimmed:
+    //
+    //     author | body      | tint
+    //     Ada    | Hello     | accent
+    //     Grace  | Hi there  | success
+    //
+    // A short row pads with empties and a long one drops the extra, so a half-typed table still
+    // draws rather than refusing to.
+    RowTable ParseRowText(std::string_view text);
+    // The same table back as text, so what the designer typed survives a round trip through the
+    // inspector rather than being reformatted under the cursor.
+    std::string RowText(const RowTable& rows);
+
     // Where a repeated container's rows come from. The document holds no data of its own — this is
     // the runtime lending its rows for the length of one flatten.
     using RowLookup = std::function<const RowTable*(Uuid node, Uuid instance)>;
@@ -124,6 +139,9 @@ namespace vae::doc {
         Uuid AddAsset(std::string name, std::string path, Uuid id = Uuid::Invalid());
         void RemoveAsset(Uuid id);
         const Asset* FindAsset(Uuid id) const;
+        // By the name the Assets panel shows, which is what a script says and what a row cell
+        // spells: "avatar-ada" is nameable in data, and the Uuid behind it is not.
+        const Asset* FindAssetNamed(std::string_view name) const;
         const std::vector<Asset>& Assets() const { return m_Assets; }
 
         // --- components ------------------------------------------------------------------------

@@ -119,6 +119,12 @@ namespace vae::ui {
                 return true;
             }
 
+            // The reference document has them because BuildStandardLibrary installs them, so
+            // there is one list rather than two that could drift apart.
+            const std::map<std::string, doc::Token>& Tokens() const override {
+                return Pristine().document.Tokens();
+            }
+
             std::vector<Uuid> Stock(const doc::Document& document) const override {
                 const Reference& reference = Pristine();
                 std::vector<Uuid> stock;

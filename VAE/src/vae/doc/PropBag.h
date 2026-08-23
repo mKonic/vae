@@ -59,6 +59,17 @@ namespace vae::doc {
         // by default the running app fills whatever window it is given and lays out again. Turning
         // this off makes those numbers a hard resolution and the window refuses to change.
         Resizable,
+        // Rows to draw a repeated container with while it is being designed. The app hands over
+        // the real ones at runtime; without these the canvas draws one row N times and a designer
+        // is styling a template they cannot see. Text, because a row is text: the first line names
+        // the columns and every line after it is a row, cells separated by `|`.
+        Sample,
+        // A container that fills from its far edge: content shorter than the box sits against the
+        // bottom of it, and content taller than the box scrolls, staying at the end while it is at
+        // the end. This is what a chat log is, and what `justify: end` only looks like until the
+        // conversation is long enough to overflow — at which point a justification pushes the
+        // newest message out of the top of the box instead of scrolling to it.
+        StickToEnd,
         Count
     };
 

@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cmath>
+#include <map>
 #include <unordered_set>
 
 // Format 3: the document as markup.
@@ -362,11 +363,13 @@ namespace vae::doc {
             if (s.constraintY != d.constraintY) out.push_back({ "constraintY", ConstraintName(s.constraintY) });
         }
 
-        // `skipText` is set when the text property is going into the element body instead.
+        // `skipText` is set when the text property is going into the element body instead, and
+        // `skipSample` when a table of sample rows is going into a <sample> element of its own.
         void PropAttrs(const PropBag& props, std::vector<Attr>& out, std::vector<LongProp>& long_,
-                       bool skipText = false) {
+                       bool skipText = false, bool skipSample = false) {
             for (const auto& [prop, value] : props.Known()) {
                 if (skipText && prop == Prop::Text) continue;
+                if (skipSample && prop == Prop::Sample) continue;
                 const ValueType declared = PropValueType(prop);
                 if (auto attr = ValueToAttr(value, declared)) out.push_back({ PropName(prop), *attr });
                 else if (auto explicit_ = ValueToAttr(value, ValueType::Unset))
@@ -447,10 +450,19 @@ namespace vae::doc {
                     if (s->find('\n') != std::string::npos) multiline = s;
             }
 
-            PropAttrs(node->props, attrs, long_, multiline != nullptr);
+            // Sample rows are a small table, and a table on one line behind `&#10;` escapes is
+            // the unreadable form this format exists to stop writing. It gets an element, which is
+            // also the only place it could go: the container it belongs to has the row template
+            // inside it, so the body is already taken.
+            const std::string* sample = nullptr;
+            if (const Value* value = node->props.Find(Prop::Sample))
+                if (const auto* text = std::get_if<std::string>(value); text && !text->empty())
+                    sample = text;
+
+            PropAttrs(node->props, attrs, long_, multiline != nullptr, sample != nullptr);
             // A property that needed the long form puts elements back inside, so the body is no
             // longer free; the label goes back to being an attribute.
-            if (multiline && !long_.empty()) {
+            if (multiline && (sample || !long_.empty())) {
                 attrs.push_back({ PropName(Prop::Text), EscapeLiteral(*multiline) });
                 multiline = nullptr;
             }
@@ -460,11 +472,12 @@ namespace vae::doc {
             if (node->slot)     attrs.push_back({ "slot", "true" });
 
             const bool hasChildren = !node->children.empty() || !node->overrides.empty()
-                                   || !long_.empty();
+                                   || !long_.empty() || sample != nullptr;
             if (!hasChildren && multiline) { w.Leaf(tag, attrs, *multiline); return; }
             if (!hasChildren)              { w.Open(tag, attrs, true); return; }
 
             w.Open(tag, attrs, false);
+            if (sample) w.Leaf("sample", {}, *sample);
             for (const LongProp& p : long_)
                 w.Open("prop", { { "name", p.name }, { "type", p.type }, { "value", p.value } }, true);
             for (const auto& [target, props] : node->overrides) {
@@ -502,22 +515,39 @@ namespace vae::doc {
         root.push_back({ "theme", document.ActiveTheme() == Theme::Dark ? "dark" : "light" });
         w.Open("vae", root, false);
 
-        if (!document.Tokens().empty()) {
-            w.Open("tokens", {}, false);
-            for (const auto& [name, token] : document.Tokens()) {
-                std::vector<Attr> attrs{ { "name", name } };
-                const auto light = ValueToAttr(token.light, ValueType::Unset);
-                const auto dark  = ValueToAttr(token.dark, ValueType::Unset);
-                // A token whose two themes agree says its value once, which is 10 of Vaecord's 26.
-                if (light && dark && token.light == token.dark) {
-                    attrs.push_back({ "value", *dark });
-                } else {
-                    if (dark)  attrs.push_back({ "dark", *dark });
-                    if (light) attrs.push_back({ "light", *light });
-                }
-                if (!token.description.empty()) attrs.push_back({ "desc", token.description });
-                w.Open("token", attrs, true);
+        // The library's own tokens are not written either. A document that left `accent` alone
+        // gets it back from Install; one that recoloured it writes the new value over the top. The
+        // case that needs saying out loud is a default the designer DELETED — silence would read
+        // as "unchanged" and Install would hand it straight back on the next load, so a deletion
+        // is written as one.
+        const std::map<std::string, Token>* stock = library ? &library->Tokens() : nullptr;
+        std::map<std::string, std::vector<Attr>> tokens;
+        for (const auto& [name, token] : document.Tokens()) {
+            if (stock) {
+                const auto it = stock->find(name);
+                if (it != stock->end() && it->second == token) continue;
             }
+            std::vector<Attr> attrs{ { "name", name } };
+            const auto light = ValueToAttr(token.light, ValueType::Unset);
+            const auto dark  = ValueToAttr(token.dark, ValueType::Unset);
+            // A token whose two themes agree says its value once, which is 10 of Vaecord's 26.
+            if (light && dark && token.light == token.dark) {
+                attrs.push_back({ "value", *dark });
+            } else {
+                if (dark)  attrs.push_back({ "dark", *dark });
+                if (light) attrs.push_back({ "light", *light });
+            }
+            if (!token.description.empty()) attrs.push_back({ "desc", token.description });
+            tokens.emplace(name, std::move(attrs));
+        }
+        if (stock)
+            for (const auto& [name, token] : *stock)
+                if (!document.FindToken(name))
+                    tokens.emplace(name, std::vector<Attr>{ { "name", name }, { "removed", "true" } });
+
+        if (!tokens.empty()) {
+            w.Open("tokens", {}, false);
+            for (const auto& [name, attrs] : tokens) w.Open("token", attrs, true);
             w.Close("tokens");
         }
 
@@ -812,6 +842,10 @@ namespace vae::doc {
             for (pugi::xml_node child : el.children()) {
                 const std::string_view tag = child.name();
                 if (tag.empty()) continue;                  // the text body, already read
+                if (tag == "sample") {
+                    node.props.Set(Prop::Sample, std::string(child.child_value()));
+                    continue;
+                }
                 if (tag == "prop") {
                     const std::string name = child.attribute("name").as_string();
                     const Value value = ValueFromLong(child.attribute("value").as_string(),
@@ -862,6 +896,12 @@ namespace vae::doc {
             if (tag.empty()) continue;
             if (tag == "tokens") {
                 for (pugi::xml_node t : el.children("token")) {
+                    // A token the file says is gone: the library installed it a moment ago, and
+                    // this is the document taking it back out.
+                    if (t.attribute("removed").as_bool(false)) {
+                        out.RemoveToken(t.attribute("name").as_string());
+                        continue;
+                    }
                     Token token;
                     if (const pugi::xml_attribute both = t.attribute("value")) {
                         token.dark = token.light = ValueFromAttr(both.as_string(), ValueType::Unset);

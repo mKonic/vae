@@ -3,6 +3,7 @@
 #include "vae/doc/Document.h"
 
 #include <filesystem>
+#include <map>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -26,6 +27,11 @@ namespace vae::doc {
         // Builds the named library into `into`. False when this source does not have that library,
         // or does not have it at a version it can honour.
         virtual bool Install(std::string_view id, u32 version, Document& into) const = 0;
+
+        // The tokens Install puts in. A document that did not touch them need not write them —
+        // and one that deleted a default has to write the deletion, or Install would hand it
+        // straight back on the next load.
+        virtual const std::map<std::string, Token>& Tokens() const = 0;
 
         // Which of `document`'s components are still exactly what Install would build, and so need
         // not be written to the file. A component the designer edited is not one of these: it is a
