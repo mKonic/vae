@@ -92,6 +92,9 @@ namespace vae::doc {
         u32 IndexInParent(Uuid id) const;
         // Every node in the subtree, parents before children.
         std::vector<Uuid> Subtree(Uuid root) const;
+        // Every node in the document, in no particular order. For the passes that genuinely have
+        // to touch all of them — renaming a token rewrites every property that named it.
+        std::vector<Uuid> AllNodes() const;
         bool IsAncestor(Uuid ancestor, Uuid descendant) const;
 
         // --- properties ------------------------------------------------------------------------

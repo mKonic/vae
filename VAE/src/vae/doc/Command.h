@@ -287,6 +287,54 @@ namespace vae::doc {
         std::vector<Node> m_Saved;
     };
 
+    // A token added, changed, or taken away. The palette is part of the document, so editing it is
+    // an edit like any other.
+    class SetTokenCommand final : public Command {
+    public:
+        SetTokenCommand(std::string name, Token token)
+            : m_Name(std::move(name)), m_New(std::move(token)) {}
+
+        void Apply(Document& document) override;
+        void Undo(Document& document) override;
+        std::string_view Name() const override { return "Set token"; }
+        bool Coalesce(const Command& newer) override;
+
+    private:
+        std::string m_Name;
+        Token m_New, m_Old;
+        bool m_Existed = false, m_Captured = false;
+    };
+
+    class RemoveTokenCommand final : public Command {
+    public:
+        explicit RemoveTokenCommand(std::string name) : m_Name(std::move(name)) {}
+
+        void Apply(Document& document) override;
+        void Undo(Document& document) override;
+        std::string_view Name() const override { return "Remove token"; }
+
+    private:
+        std::string m_Name;
+        Token m_Old;
+        bool m_Existed = false;
+    };
+
+    // Renaming a token rewrites every property that referred to it. A rename that left the
+    // references behind would be a rename that silently unstyles half the document.
+    class RenameTokenCommand final : public Command {
+    public:
+        RenameTokenCommand(std::string from, std::string to)
+            : m_From(std::move(from)), m_To(std::move(to)) {}
+
+        void Apply(Document& document) override;
+        void Undo(Document& document) override;
+        std::string_view Name() const override { return "Rename token"; }
+
+    private:
+        std::string m_From, m_To;
+        bool m_Applied = false;
+    };
+
     // Several commands that undo and redo as one. Built by BeginTransaction/EndTransaction.
     class CompositeCommand final : public Command {
     public:

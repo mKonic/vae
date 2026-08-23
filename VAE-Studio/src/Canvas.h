@@ -71,6 +71,18 @@ namespace vae {
         void ZoomTo(f32 zoom);
         f32  Zoom() const { return m_Zoom; }
         bool Preview() const { return m_Preview; }
+
+        // Editing a label in place, the way a design tool does: double-click it and type. The
+        // field is ImGui's — the canvas is the runtime's renderer and has no caret of its own —
+        // positioned over the node it belongs to.
+        void BeginTextEdit(EditorState& state, Uuid node);
+        void EndTextEdit(bool keep = true);
+        Uuid EditingText() const { return m_EditingText; }
+
+    private:
+        void DrawTextEditor(EditorState& state);
+
+    public:
         void SetPreview(bool on);
 
         // Play mode: the document stops being a drawing and starts being the app. Input reaches
@@ -137,6 +149,10 @@ namespace vae {
         text::GlyphAtlas m_Atlas;
         ui::UiHost       m_Host;
         bool             m_SampleRows = true;
+        Uuid             m_EditingText = Uuid::Invalid();
+        std::string      m_EditBefore;              // to restore on Escape
+        char             m_EditBuffer[1024]{};
+        bool             m_EditFocus = false;       // claim the keyboard on the first frame
         ui::AssetStore   m_Assets;
         Pump m_Pump;
         gpu::Device*     m_Device = nullptr;

@@ -110,6 +110,7 @@ namespace vae {
         ImGui::DockBuilderDockWindow("Script###Script", centre);
         ImGui::DockBuilderDockWindow("Inspector###Inspector", right);
         ImGui::DockBuilderDockWindow("Assets###Assets", right);
+        ImGui::DockBuilderDockWindow("Tokens###Tokens", right);
         ImGui::DockBuilderDockWindow("Console###Console", bottom);
         ImGui::DockBuilderDockWindow("Files###Files", bottom);
         ImGui::DockBuilderDockWindow("Runtime###Runtime", bottom);
@@ -859,6 +860,7 @@ namespace vae {
         DrawComponentsPanel(m_State, m_Canvas);
         DrawInspectorPanel(m_State);
         DrawAssetsPanel(m_State, m_Canvas);
+        DrawTokensPanel(m_State);
         DrawConsolePanel();
         if (const std::filesystem::path open = DrawFilesPanel(m_Scripts, m_State); !open.empty())
             OpenProject(open);

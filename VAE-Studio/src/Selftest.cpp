@@ -1485,6 +1485,47 @@ namespace vae {
             std::filesystem::remove(scripts.SourcePath(), ec);
         }
 
+        // Editing a label on the canvas instead of in the Inspector.
+        void TestInlineTextEdit() {
+            Section("edit text on the canvas");
+            Shortcuts driver;
+            StudioLayer& layer = driver.Layer_();
+            layer.OpenExample();
+            driver.Frame();
+
+            EditorState& state = layer.State();
+            doc::Document& d = state.Doc();
+            Canvas& canvas = layer.Surface();
+
+            const Uuid label = d.CreateNode(doc::NodeKind::Text, state.ActiveScreen(), "Label");
+            d.SetProp(label, doc::Prop::Text, std::string("Before"));
+            driver.Frame();
+
+            canvas.BeginTextEdit(state, label);
+            driver.Frame();
+            Check(canvas.EditingText() == label, "double-clicking a label starts editing it");
+            Check(state.Selection().size() == 1 && state.Primary() == label,
+                  "and selects what is being edited");
+
+            // Typing goes through the same SetProp the Inspector uses, so it is undoable.
+            state.SetProp(label, doc::Prop::Text, std::string("After"));
+            state.EndGesture();
+            canvas.EndTextEdit();
+            driver.Frame();
+            Check(canvas.EditingText() == Uuid::Invalid(), "and it ends when the field goes away");
+            Check(d.GetProp(label, doc::Prop::Text) == doc::Value{ std::string("After") },
+                  "the label kept what was typed");
+            state.Undo();
+            Check(d.GetProp(label, doc::Prop::Text) == doc::Value{ std::string("Before") },
+                  "and undo puts back what it said");
+
+            // A frame is not a label: double-clicking one must not open a text field over it.
+            const Uuid frame = d.CreateNode(doc::NodeKind::Frame, state.ActiveScreen(), "Box");
+            driver.Frame();
+            canvas.BeginTextEdit(state, frame);
+            Check(canvas.EditingText() == Uuid::Invalid(), "a frame has no text to edit");
+        }
+
         // Copy, paste and a deep duplicate. The clipboard is markup, so this also checks that a
         // subtree survives being written out and read back — the same trip a saved file makes.
         void TestClipboard() {
@@ -2163,6 +2204,7 @@ namespace vae {
         TestDebugger();
         TestScreens();
         TestGrouping();
+        TestInlineTextEdit();
         TestClipboard();
         TestFileDrop();
         TestSampleRows();

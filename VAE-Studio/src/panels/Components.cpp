@@ -183,6 +183,83 @@ namespace vae {
 
     }
 
+    // The project's palette, editable. Every token here resolves through the active theme, so a
+    // colour changed once repaints every widget that named it — which is the whole reason tokens
+    // exist and, until now, the one thing the editor could not do to them.
+    void DrawTokensPanel(EditorState& state) {
+        ImGui::Begin("Tokens###Tokens");
+
+        static char fresh[64] = {};
+        ImGui::SetNextItemWidth(-90.0f);
+        const bool entered = ImGui::InputTextWithHint("##new", "New token name…", fresh,
+                                                      sizeof fresh,
+                                                      ImGuiInputTextFlags_EnterReturnsTrue);
+        ImGui::SameLine();
+        const bool taken = fresh[0] != '\0' && state.Doc().FindToken(fresh) != nullptr;
+        ImGui::BeginDisabled(fresh[0] == '\0' || taken);
+        if (ImGui::Button("Add", ImVec2(-1.0f, 0.0f)) || (entered && !taken && fresh[0] != '\0')) {
+            // A new token starts at the accent colour rather than black, so it is visible the
+            // moment it is used and obviously not finished.
+            doc::Token token;
+            token.dark = token.light = Color{ 0.365f, 0.51f, 0.894f, 1.0f };
+            state.Execute(CreateScope<doc::SetTokenCommand>(std::string(fresh), token));
+            fresh[0] = '\0';
+        }
+        ImGui::EndDisabled();
+        if (taken) ImGui::TextDisabled("there is already a token called that");
+
+        ImGui::Separator();
+
+        const doc::Theme theme = state.Doc().ActiveTheme();
+        std::string removing;
+        std::pair<std::string, std::string> renaming;
+
+        for (const auto& [name, token] : state.Doc().Tokens()) {
+            ImGui::PushID(name.c_str());
+
+            // The swatch shows the value for the theme the canvas is showing, because that is the
+            // one the designer is looking at.
+            const doc::Value shown = theme == doc::Theme::Dark ? token.dark : token.light;
+            Color colour{ 0.0f, 0.0f, 0.0f, 1.0f };
+            if (const Color* c = std::get_if<Color>(&shown)) colour = *c;
+
+            ImVec4 edited(colour.r, colour.g, colour.b, colour.a);
+            if (ImGui::ColorEdit4("##swatch", &edited.x,
+                                  ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_AlphaBar)) {
+                doc::Token next = token;
+                const Color value{ edited.x, edited.y, edited.z, edited.w };
+                if (theme == doc::Theme::Dark) next.dark = value; else next.light = value;
+                state.Execute(CreateScope<doc::SetTokenCommand>(name, next));
+            }
+            if (ImGui::IsItemDeactivatedAfterEdit()) state.EndGesture();
+
+            ImGui::SameLine();
+            char label[64];
+            std::snprintf(label, sizeof label, "%s", name.c_str());
+            ImGui::SetNextItemWidth(-64.0f);
+            if (ImGui::InputText("##name", label, sizeof label,
+                                 ImGuiInputTextFlags_EnterReturnsTrue)
+                && label[0] != '\0' && name != label) {
+                renaming = { name, label };
+            }
+
+            ImGui::SameLine();
+            if (ImGui::SmallButton("×")) removing = name;
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("Delete this token. Anything using it falls back to nothing.");
+
+            ImGui::PopID();
+        }
+
+        // Applied after the walk: both edit the map being iterated.
+        if (!renaming.first.empty())
+            state.Execute(CreateScope<doc::RenameTokenCommand>(renaming.first, renaming.second));
+        if (!removing.empty())
+            state.Execute(CreateScope<doc::RemoveTokenCommand>(removing));
+
+        ImGui::End();
+    }
+
     void DrawAssetsPanel(EditorState& state, Canvas& canvas) {
         ImGui::Begin("Assets###Assets");
 

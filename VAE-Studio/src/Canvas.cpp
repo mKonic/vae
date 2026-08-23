@@ -801,6 +801,15 @@ namespace vae {
 
             const Uuid hit = PickAt(state, mouseDoc);
             const bool additive = io.KeyShift;
+            // Double-clicking a label edits it, which is what every design tool does and what a
+            // designer tries before looking for the Inspector.
+            if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left) && hit.Valid()) {
+                const doc::Node* node = state.Doc().Find(hit);
+                if (node && node->kind == doc::NodeKind::Text) {
+                    BeginTextEdit(state, hit);
+                    return;
+                }
+            }
             if (hit.Valid()) {
                 if (!state.IsSelected(hit)) state.Select(hit, additive);
                 m_Gesture = Gesture::Move;
@@ -1009,6 +1018,76 @@ namespace vae {
         m_Pan = center - m_ViewportSize / (2.0f * m_Zoom);
     }
 
+    void Canvas::BeginTextEdit(EditorState& state, Uuid node) {
+        const doc::Node* target = state.Doc().Find(node);
+        if (!target || target->kind != doc::NodeKind::Text) return;
+
+        m_EditingText = node;
+        m_EditBefore = state.Doc().GetProp(node, doc::Prop::Text) == doc::Value{}
+                     ? std::string{}
+                     : std::get<std::string>(state.Doc().GetProp(node, doc::Prop::Text));
+        std::snprintf(m_EditBuffer, sizeof m_EditBuffer, "%s", m_EditBefore.c_str());
+        m_EditFocus = true;
+        state.Select(node);
+    }
+
+    void Canvas::EndTextEdit(bool keep) {
+        (void)keep;
+        m_EditingText = Uuid::Invalid();
+        m_EditFocus = false;
+        m_EditBuffer[0] = '\0';
+    }
+
+    // The field itself: an ImGui input parked over the label it is editing, at the size the label
+    // is drawn. Studio's chrome is ImGui by design, and a caret of our own in the canvas renderer
+    // would be a second text editor to keep correct for no gain.
+    void Canvas::DrawTextEditor(EditorState& state) {
+        if (!m_EditingText.Valid()) return;
+        const doc::Node* node = state.Doc().Find(m_EditingText);
+        if (!node) { EndTextEdit(); return; }
+
+        const Rect box = NodeBounds(state, m_EditingText);
+        const Vec2 tl = ToScreen(box.pos);
+        const Vec2 br = ToScreen({ box.Right(), box.Bottom() });
+        const f32 width = std::max(br.x - tl.x, 60.0f);
+        const f32 height = std::max(br.y - tl.y, ImGui::GetTextLineHeight() + 8.0f);
+
+        ImGui::SetCursorScreenPos(ImVec2(tl.x, tl.y));
+        ImGui::PushStyleColor(ImGuiCol_FrameBg, IM_COL32(20, 22, 28, 235));
+        ImGui::PushStyleColor(ImGuiCol_Border, IM_COL32(93, 130, 228, 255));
+        ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 1.0f);
+        ImGui::PushID("##canvas-text-edit");
+
+        if (m_EditFocus) { ImGui::SetKeyboardFocusHere(); m_EditFocus = false; }
+        const bool multiline = m_EditBefore.find('\n') != std::string::npos
+                            || state.Doc().GetProp(m_EditingText, doc::Prop::TextWrap)
+                               != doc::Value{ std::string("none") };
+        bool changed = false;
+        if (multiline) {
+            changed = ImGui::InputTextMultiline("##v", m_EditBuffer, sizeof m_EditBuffer,
+                                                ImVec2(width, height));
+        } else {
+            ImGui::SetNextItemWidth(width);
+            changed = ImGui::InputText("##v", m_EditBuffer, sizeof m_EditBuffer);
+        }
+        if (changed) state.SetProp(m_EditingText, doc::Prop::Text, std::string(m_EditBuffer));
+
+        // Escape puts back what was there; clicking away or Enter (on a single line) keeps it.
+        if (ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
+            state.SetProp(m_EditingText, doc::Prop::Text, m_EditBefore);
+            state.EndGesture();
+            EndTextEdit(false);
+        } else if (ImGui::IsItemDeactivated()
+                   || (!multiline && ImGui::IsKeyPressed(ImGuiKey_Enter, false))) {
+            state.EndGesture();
+            EndTextEdit();
+        }
+
+        ImGui::PopID();
+        ImGui::PopStyleVar();
+        ImGui::PopStyleColor(2);
+    }
+
     void Canvas::OnImGuiRender(EditorState& state) {
         // With a device the renderer lays the scene out every frame on its way to drawing it.
         // Without one — the headless selftest, a player that has not made its device yet — nobody
@@ -1068,6 +1147,8 @@ namespace vae {
         m_Hovered = ImGui::IsItemHovered();
         HandleInput(state);
         DrawOverlay(state);
+        // After the overlay, so the field sits on top of the selection frame it replaces.
+        DrawTextEditor(state);
         if (m_Rulers && !m_Preview) DrawRulers(state);
 
         ImGui::End();

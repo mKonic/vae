@@ -524,6 +524,62 @@ TEST(command, the_start_screen_and_the_theme_are_edits_too) {
     CHECK(doc.ActiveTheme() == Theme::Light);
 }
 
+TEST(command, renaming_a_token_takes_every_reference_with_it) {
+    // A rename that left the references behind would silently unstyle half the document — every
+    // node that named the old token would resolve to nothing.
+    Document doc;
+    CommandStack stack;
+    doc.SetToken("brand", Token{ Color{ 1, 0, 0, 1 }, Color{ 1, 0, 0, 1 } });
+
+    const Uuid screen = doc.CreateNode(NodeKind::Screen);
+    const Uuid card = doc.CreateNode(NodeKind::Frame, screen, "Card");
+    doc.SetProp(card, Prop::Fill, TokenRef{ "brand" });
+    doc.SetProp(card, "hovered:fill", TokenRef{ "brand" });
+    const Uuid other = doc.CreateNode(NodeKind::Frame, screen, "Other");
+    doc.SetProp(other, Prop::Fill, TokenRef{ "surface" });
+
+    stack.Execute(doc, CreateScope<RenameTokenCommand>("brand", "accent"));
+    CHECK(doc.FindToken("accent") != nullptr);
+    CHECK(doc.FindToken("brand") == nullptr);
+    CHECK(doc.GetProp(card, Prop::Fill) == Value{ TokenRef{ "accent" } });
+    CHECK(*doc.Find(card)->props.Find("hovered:fill") == Value{ TokenRef{ "accent" } });
+    // A node that named a different token is left alone.
+    CHECK(doc.GetProp(other, Prop::Fill) == Value{ TokenRef{ "surface" } });
+
+    stack.Undo(doc);
+    CHECK(doc.FindToken("brand") != nullptr);
+    CHECK(doc.GetProp(card, Prop::Fill) == Value{ TokenRef{ "brand" } });
+}
+
+TEST(command, adding_and_removing_a_token_is_undoable) {
+    Document doc;
+    CommandStack stack;
+
+    Token blue;
+    blue.dark = blue.light = Color{ 0.2f, 0.4f, 0.9f, 1.0f };
+    stack.Execute(doc, CreateScope<SetTokenCommand>("accent", blue));
+    CHECK(doc.FindToken("accent") != nullptr);
+    stack.Undo(doc);
+    CHECK(doc.FindToken("accent") == nullptr);
+    stack.Redo(doc);
+    CHECK(doc.FindToken("accent") != nullptr);
+
+    // Editing an existing one restores the old value rather than deleting it.
+    Token red = blue;
+    red.dark = red.light = Color{ 0.9f, 0.2f, 0.2f, 1.0f };
+    stack.Execute(doc, CreateScope<SetTokenCommand>("accent", red));
+    stack.Undo(doc);
+    CHECK(doc.FindToken("accent") != nullptr);
+    const Value restored = doc.FindToken("accent")->dark;
+    const Value wanted = Value{ Color{ 0.2f, 0.4f, 0.9f, 1.0f } };
+    CHECK(restored == wanted);
+
+    stack.Execute(doc, CreateScope<RemoveTokenCommand>("accent"));
+    CHECK(doc.FindToken("accent") == nullptr);
+    stack.Undo(doc);
+    CHECK(doc.FindToken("accent") != nullptr);
+}
+
 TEST(command, history_is_bounded) {
     Document doc;
     CommandStack stack;

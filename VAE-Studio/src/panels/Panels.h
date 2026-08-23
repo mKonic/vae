@@ -18,6 +18,8 @@ namespace vae {
     // Takes the canvas because the images live on it: the store owns the textures, and the
     // panel is the one place that says why one is not showing.
     void DrawAssetsPanel(EditorState& state, Canvas& canvas);
+    // The project's palette: add, recolour, rename and delete tokens.
+    void DrawTokensPanel(EditorState& state);
     void DrawConsolePanel();
     // Takes the editor state as well as the session: completion that knows the names on
     // the screen being edited is the half a generic code editor cannot have.

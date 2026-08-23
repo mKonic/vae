@@ -219,6 +219,86 @@ namespace vae::doc {
         }
     }
 
+    namespace {
+        // Every place a token name can appear in a property: on a node, and inside an instance's
+        // overrides. Used by the rename, which has to find all of them or leave half a document
+        // pointing at a name that no longer exists.
+        void RewriteTokenRefs(Document& document, std::string_view from, std::string_view to) {
+            for (Uuid id : document.AllNodes()) {
+                Node* node = document.Find(id);
+                if (!node) continue;
+                bool touched = false;
+
+                const auto rewrite = [&](PropBag& bag) {
+                    for (const auto& [prop, value] : bag.Known())
+                        if (const TokenRef* ref = std::get_if<TokenRef>(&value); ref && ref->name == from) {
+                            bag.Set(prop, TokenRef{ std::string(to) });
+                            touched = true;
+                        }
+                    for (const auto& [key, value] : bag.Custom())
+                        if (const TokenRef* ref = std::get_if<TokenRef>(&value); ref && ref->name == from) {
+                            bag.Set(key, TokenRef{ std::string(to) });
+                            touched = true;
+                        }
+                };
+                rewrite(node->props);
+                for (auto& [target, bag] : node->overrides) { (void)target; rewrite(bag); }
+
+                if (touched) document.Touch(id);
+            }
+        }
+    }
+
+    void SetTokenCommand::Apply(Document& document) {
+        if (!m_Captured) {
+            if (const Token* existing = document.FindToken(m_Name)) { m_Old = *existing; m_Existed = true; }
+            m_Captured = true;
+        }
+        document.SetToken(m_Name, m_New);
+    }
+
+    void SetTokenCommand::Undo(Document& document) {
+        if (m_Existed) document.SetToken(m_Name, m_Old);
+        else           document.RemoveToken(m_Name);
+    }
+
+    // Dragging through a colour picker is one edit, the same way dragging a node is one move.
+    bool SetTokenCommand::Coalesce(const Command& newer) {
+        const auto* other = dynamic_cast<const SetTokenCommand*>(&newer);
+        if (!other || other->m_Name != m_Name) return false;
+        m_New = other->m_New;
+        return true;
+    }
+
+    void RemoveTokenCommand::Apply(Document& document) {
+        if (const Token* existing = document.FindToken(m_Name)) { m_Old = *existing; m_Existed = true; }
+        document.RemoveToken(m_Name);
+    }
+
+    void RemoveTokenCommand::Undo(Document& document) {
+        if (m_Existed) document.SetToken(m_Name, m_Old);
+    }
+
+    void RenameTokenCommand::Apply(Document& document) {
+        const Token* token = document.FindToken(m_From);
+        if (!token || m_From == m_To || document.FindToken(m_To)) return;
+        Token moved = *token;
+        document.RemoveToken(m_From);
+        document.SetToken(m_To, std::move(moved));
+        RewriteTokenRefs(document, m_From, m_To);
+        m_Applied = true;
+    }
+
+    void RenameTokenCommand::Undo(Document& document) {
+        if (!m_Applied) return;
+        const Token* token = document.FindToken(m_To);
+        if (!token) return;
+        Token moved = *token;
+        document.RemoveToken(m_To);
+        document.SetToken(m_From, std::move(moved));
+        RewriteTokenRefs(document, m_To, m_From);
+    }
+
     void CloneCommand::Apply(Document& document) {
         if (m_Saved.empty()) {
             m_Created = CloneSubtree(document, m_Source, m_Parent, m_Index);

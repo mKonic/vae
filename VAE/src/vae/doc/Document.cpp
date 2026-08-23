@@ -166,6 +166,13 @@ namespace vae::doc {
         return it == siblings.end() ? 0 : static_cast<u32>(std::distance(siblings.begin(), it));
     }
 
+    std::vector<Uuid> Document::AllNodes() const {
+        std::vector<Uuid> out;
+        out.reserve(m_Nodes.size());
+        for (const auto& [id, node] : m_Nodes) { (void)node; out.push_back(id); }
+        return out;
+    }
+
     std::vector<Uuid> Document::Subtree(Uuid root) const {
         std::vector<Uuid> out;
         if (!Contains(root)) return out;
