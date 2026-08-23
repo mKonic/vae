@@ -496,6 +496,126 @@ namespace vae {
         state.SetLayout(id, style);
     }
 
+    // Where a child's offsetStart is measured from, worked out from a child that is already
+    // there: origin = (where it is) - (what its offset says). Exact, and it does not have to know
+    // whether offsets are measured from the border box or the padded one.
+    Vec2 Canvas::ContentOrigin(EditorState& state, Uuid parent, Uuid reference) const {
+        if (const doc::Node* node = state.Doc().Find(reference))
+            return NodeBounds(state, reference).pos - node->layout.offsetStart;
+        return NodeBounds(state, parent).pos;
+    }
+
+    // Everything selected has to end up in one frame, so everything selected has to have come out
+    // of one frame. Grouping across parents would have to decide which parent wins and move nodes
+    // out of layouts they were positioned by; refusing is the honest answer.
+    bool Canvas::CanGroup(EditorState& state) const {
+        const std::vector<Uuid>& selection = state.Selection();
+        if (selection.empty()) return false;
+        Uuid parent = Uuid::Invalid();
+        for (Uuid id : selection) {
+            const doc::Node* node = state.Doc().Find(id);
+            if (!node || node->kind == doc::NodeKind::Screen || !node->parent.Valid()) return false;
+            if (!parent.Valid()) parent = node->parent;
+            else if (node->parent != parent) return false;
+        }
+        return true;
+    }
+
+    void Canvas::GroupSelection(EditorState& state) {
+        if (!CanGroup(state)) return;
+        const std::vector<Uuid> selection = state.Selection();
+        doc::Document& d = state.Doc();
+        const Uuid parent = d.Find(selection.front())->parent;
+
+        // Where the group lands: in front of the earliest of its members, so grouping does not
+        // change what draws over what.
+        u32 index = UINT32_MAX;
+        for (Uuid id : selection) index = std::min(index, d.IndexInParent(id));
+
+        const doc::Node* parentNode = d.Find(parent);
+        const bool stacked = parentNode && parentNode->layout.mode == layout::LayoutMode::Stack;
+        const Rect bounds = SelectionBounds(state);
+
+        state.Commands().BeginTransaction("Group");
+
+        auto create = CreateScope<doc::CreateNodeCommand>(doc::NodeKind::Frame, parent, "Group");
+        doc::CreateNodeCommand* raw = create.get();
+        state.Execute(std::move(create));
+        const Uuid group = raw->Created();
+        if (!group.Valid()) { state.Commands().EndTransaction(d); return; }
+
+        layout::LayoutStyle style;
+        if (stacked) {
+            // Inside a stack, position is the stack's business. The group takes the parent's axis
+            // and hugs, so the members keep their order and their spacing.
+            style.mode = layout::LayoutMode::Stack;
+            style.axis = parentNode->layout.axis;
+            style.gap = parentNode->layout.gap;
+            style.width = layout::Size::Hug();
+            style.height = layout::Size::Hug();
+        } else {
+            // Absolute: the group is the box the selection occupied, and its members move into it.
+            style.mode = layout::LayoutMode::Absolute;
+            style.offsetStart = bounds.pos - ContentOrigin(state, parent, selection.front());
+            style.width = layout::Size::Px(bounds.size.x);
+            style.height = layout::Size::Px(bounds.size.y);
+        }
+        state.SetLayout(group, style);
+        state.Execute(CreateScope<doc::ReparentCommand>(group, parent, index));
+
+        for (Uuid id : selection) {
+            const doc::Node* node = d.Find(id);
+            if (!node) continue;
+            layout::LayoutStyle child = node->layout;
+            if (!stacked) child.offsetStart = NodeBounds(state, id).pos - bounds.pos;
+            state.Execute(CreateScope<doc::ReparentCommand>(id, group, UINT32_MAX));
+            state.SetLayout(id, child);
+        }
+
+        state.Commands().EndTransaction(d);
+        state.Commands().Break();
+        state.Select(group);
+    }
+
+    bool Canvas::CanUngroup(EditorState& state) const {
+        if (state.Selection().size() != 1) return false;
+        const doc::Node* node = state.Doc().Find(state.Selection().front());
+        // A component master or an instance is not a bag of nodes somebody grouped; dissolving one
+        // would be editing the component through the back door.
+        return node && node->kind == doc::NodeKind::Frame && !node->children.empty()
+            && !node->IsComponent() && !node->IsInstance() && node->parent.Valid();
+    }
+
+    void Canvas::UngroupSelection(EditorState& state) {
+        if (!CanUngroup(state)) return;
+        doc::Document& d = state.Doc();
+        const Uuid group = state.Selection().front();
+        const Uuid parent = d.Find(group)->parent;
+        const u32 index = d.IndexInParent(group);
+        const std::vector<Uuid> children = d.Find(group)->children;
+
+        const doc::Node* parentNode = d.Find(parent);
+        const bool stacked = parentNode && parentNode->layout.mode == layout::LayoutMode::Stack;
+        const Vec2 origin = ContentOrigin(state, parent, group);
+
+        state.Commands().BeginTransaction("Ungroup");
+        u32 at = index;
+        for (Uuid id : children) {
+            const doc::Node* node = d.Find(id);
+            if (!node) continue;
+            // Measured before the move, because moving is what changes it.
+            const Vec2 where = NodeBounds(state, id).pos;
+            layout::LayoutStyle style = node->layout;
+            if (!stacked) style.offsetStart = where - origin;
+            state.Execute(CreateScope<doc::ReparentCommand>(id, parent, at++));
+            state.SetLayout(id, style);
+        }
+        state.Execute(CreateScope<doc::DeleteNodeCommand>(group));
+        state.Commands().EndTransaction(d);
+        state.Commands().Break();
+        state.SelectMany(children);
+    }
+
     void Canvas::AlignSelection(EditorState& state, Edge edge) {
         const std::vector<Uuid> selection = state.Selection();
         if (selection.empty()) return;

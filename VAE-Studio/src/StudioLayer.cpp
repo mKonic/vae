@@ -22,12 +22,21 @@ namespace vae {
     void StudioLayer::OnAttach() {
         InitConsolePanel();
         LoadRecents();
+        LoadSettings();
         std::snprintf(m_OpenPath, sizeof m_OpenPath, "%s", DefaultProjectPath().string().c_str());
         auto& app = Application::Get();
         if (app.HasDevice()) m_Canvas.Init(app.GetDevice());
         m_Scripts.Attach(m_Canvas, m_State);
         VAE_INFO("VAE Studio ready — {} components in the library",
                  m_State.Library().components.size());
+
+        // Dropped from the desktop: a document opens, anything else is imported as an asset. This
+        // is the shortest path from "I have a PNG" to "it is in the project", and every design tool
+        // has it.
+        if (app.HasWindow()) {
+            app.GetWindow().SetFileDropCallback(
+                [this](const std::vector<std::filesystem::path>& files) { OnFilesDropped(files); });
+        }
 
         // A project named on the command line opens it. `vae-studio thing.vaescreen` is what
         // anyone types, and it is what a file manager hands over on "open with" — being shown the
@@ -126,6 +135,40 @@ namespace vae {
             if (!line.empty() && std::filesystem::exists(line)) m_Recent.push_back(line);
     }
 
+    // Editor preferences — not document facts, and not the window layout ImGui already persists in
+    // imgui.ini. Rulers, transitions and preview mode are the three the View menu offers, and an
+    // editor that forgets them every launch is an editor you re-configure every launch.
+    void StudioLayer::LoadSettings() {
+        const auto text = FileSystem::ReadText(FileSystem::ConfigRoot() / "settings.txt");
+        if (!text) return;
+
+        ui::ViewTree::Motion motion = m_Canvas.Host().Tree().MotionSettings();
+        std::istringstream stream(*text);
+        std::string line;
+        while (std::getline(stream, line)) {
+            const std::size_t eq = line.find('=');
+            if (eq == std::string::npos) continue;
+            const std::string key = line.substr(0, eq);
+            const bool on = line.substr(eq + 1) == "1";
+            if (key == "rulers")      m_Canvas.SetRulers(on);
+            else if (key == "preview") m_Canvas.SetPreview(on);
+            else if (key == "transitions") motion.enabled = on;
+        }
+        m_Canvas.Host().Tree().SetMotion(motion);
+    }
+
+    void StudioLayer::SaveSettings() {
+        std::string text;
+        const auto write = [&text](const char* key, bool on) {
+            text += key;
+            text += on ? "=1\n" : "=0\n";
+        };
+        write("rulers", m_Canvas.Rulers());
+        write("preview", m_Canvas.Preview());
+        write("transitions", m_Canvas.Host().Tree().MotionSettings().enabled);
+        FileSystem::WriteText(FileSystem::ConfigRoot() / "settings.txt", text);
+    }
+
     void StudioLayer::RememberProject(const std::filesystem::path& path) {
         const std::string entry = path.string();
         std::erase(m_Recent, entry);
@@ -135,6 +178,33 @@ namespace vae {
         std::string text;
         for (const std::string& line : m_Recent) { text += line; text += '\n'; }
         FileSystem::WriteText(FileSystem::ConfigRoot() / "recent-projects.txt", text);
+    }
+
+    void StudioLayer::OnFilesDropped(const std::vector<std::filesystem::path>& files) {
+        if (files.empty()) return;
+
+        // A document wins over everything else in the drop: dropping a project and three pictures
+        // together means "open this", not "import a .vaescreen as a picture".
+        for (const std::filesystem::path& file : files) {
+            const std::string ext = file.extension().string();
+            if (ext == ".vaescreen" || ext == ".vaecomp" || ext == ".vaeproj") {
+                if (HoldCloseForUnsavedWork()) return;
+                OpenProject(file);
+                m_ShowLauncher = false;
+                return;
+            }
+        }
+
+        u32 imported = 0;
+        for (const std::filesystem::path& file : files) {
+            if (!m_State.ImportAsset(file).Valid()) {
+                VAE_WARN("dropped {}: {}", file.filename().string(),
+                         m_State.AssetError().empty() ? "not imported" : m_State.AssetError());
+                continue;
+            }
+            ++imported;
+        }
+        if (imported > 0) VAE_INFO("imported {} dropped file(s)", imported);
     }
 
     // A project and its logic are one thing: opening, saving or starting a new one moves the
@@ -601,6 +671,11 @@ namespace vae {
                 m_State.DeleteSelection();
             ImGui::Separator();
             // The library stops being the engine's the moment a designer can add to it.
+            if (ImGui::MenuItem("Group", "Ctrl+G", false, m_Canvas.CanGroup(m_State)))
+                m_Canvas.GroupSelection(m_State);
+            if (ImGui::MenuItem("Ungroup", "Ctrl+Shift+G", false, m_Canvas.CanUngroup(m_State)))
+                m_Canvas.UngroupSelection(m_State);
+            ImGui::Separator();
             if (ImGui::MenuItem("Make component", "Ctrl+Alt+K", false, m_State.CanMakeComponent()))
                 m_State.MakeComponentFromSelection();
             ImGui::Separator();
@@ -630,7 +705,7 @@ namespace vae {
             if (ImGui::MenuItem("Zoom 100%", "Ctrl+0")) m_Canvas.ZoomTo(1.0f);
             ImGui::Separator();
             bool rulers = m_Canvas.Rulers();
-            if (ImGui::MenuItem("Rulers", "Ctrl+R", &rulers)) m_Canvas.SetRulers(rulers);
+            if (ImGui::MenuItem("Rulers", "Ctrl+R", &rulers)) { m_Canvas.SetRulers(rulers); SaveSettings(); }
             ImGui::Separator();
             // The theme is a document fact, so switching it here is switching it for the app —
             // every token resolves through it and every widget repaints from the tokens.
@@ -647,11 +722,13 @@ namespace vae {
             // Reduced motion is an accessibility setting, not a preference — and a designer looking
             // at a transition frame by frame wants it off too.
             ui::ViewTree::Motion motion = m_Canvas.Host().Tree().MotionSettings();
-            if (ImGui::MenuItem("Transitions", nullptr, &motion.enabled))
+            if (ImGui::MenuItem("Transitions", nullptr, &motion.enabled)) {
                 m_Canvas.Host().SetMotion(motion);
+                SaveSettings();
+            }
             ImGui::Separator();
             bool preview = m_Canvas.Preview();
-            if (ImGui::MenuItem("Preview", "Ctrl+P", &preview)) m_Canvas.SetPreview(preview);
+            if (ImGui::MenuItem("Preview", "Ctrl+P", &preview)) { m_Canvas.SetPreview(preview); SaveSettings(); }
             ImGui::Separator();
             ImGui::MenuItem("ImGui demo", nullptr, &m_ShowDemo);
             ImGui::EndMenu();
@@ -718,6 +795,14 @@ namespace vae {
         }
         if (ctrl && ImGui::IsKeyPressed(ImGuiKey_Y, false)) { m_State.Redo(); acted = true; }
         if (ctrl && ImGui::IsKeyPressed(ImGuiKey_D, false)) { m_State.DuplicateSelection(); acted = true; }
+        // Shift first: Ctrl+Shift+G is not a Ctrl+G that happens to have shift held.
+        if (ctrl && io.KeyShift && ImGui::IsKeyPressed(ImGuiKey_G, false)) {
+            m_Canvas.UngroupSelection(m_State);
+            acted = true;
+        } else if (ctrl && ImGui::IsKeyPressed(ImGuiKey_G, false)) {
+            m_Canvas.GroupSelection(m_State);
+            acted = true;
+        }
         // Figma's, because it is the one everybody's fingers already know.
         if (ctrl && io.KeyAlt && ImGui::IsKeyPressed(ImGuiKey_K, false)) {
             m_State.MakeComponentFromSelection();

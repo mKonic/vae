@@ -51,6 +51,13 @@ namespace vae {
         // one thing is selected — Figma's rule, and the one that makes "align left" mean something
         // for a single widget instead of nothing.
         enum class Edge { Left, CentreX, Right, Top, CentreY, Bottom };
+        // Wrap the selection in a frame, and dissolve one back into its parent. Here rather than
+        // in EditorState because both need the boxes the layout produced, which only the canvas has.
+        bool CanGroup(EditorState& state) const;
+        void GroupSelection(EditorState& state);
+        bool CanUngroup(EditorState& state) const;
+        void UngroupSelection(EditorState& state);
+
         void AlignSelection(EditorState& state, Edge edge);
         void DistributeSelection(EditorState& state, bool horizontal);
 
@@ -109,6 +116,7 @@ namespace vae {
 
         Rect SelectionBounds(EditorState& state) const;
         Rect NodeBounds(EditorState& state, Uuid id) const;
+        Vec2 ContentOrigin(EditorState& state, Uuid parent, Uuid reference) const;
         Uuid PickAt(EditorState& state, Vec2 document) const;
         // Whether a node is one the thing on the canvas authored, as opposed to the innards of a
         // component being shown inside it. Reached by walking up to the bound root, so it stays

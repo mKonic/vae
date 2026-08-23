@@ -55,6 +55,10 @@ namespace vae {
         // Loads a project that is already on disk. Public alongside CreateProject because they are
         // the two ways a project gets onto the canvas, and the selftest drives both.
         void OpenProject(const std::filesystem::path& path);
+        // What the window does with files dragged in from the desktop. Public for the same reason:
+        // the selftest drops files at it, since nothing else can simulate a drag from a file
+        // manager.
+        void OnFilesDropped(const std::vector<std::filesystem::path>& files);
         // Why the last CreateProject refused, or empty. The dialog shows it; the selftest reads it.
         const std::string& NamingError() const { return m_NamingError; }
         // True when there is something to lose. The script is a separate file with its own dirty
@@ -79,6 +83,8 @@ namespace vae {
         void ExportProject();
         void DrawUnsavedChangesDialog();
         void LoadRecents();
+        void LoadSettings();
+        void SaveSettings();
         void RememberProject(const std::filesystem::path& path);
         std::filesystem::path DefaultProjectPath() const;
 

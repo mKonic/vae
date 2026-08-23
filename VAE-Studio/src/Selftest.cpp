@@ -1484,6 +1484,158 @@ namespace vae {
             std::filesystem::remove(scripts.SourcePath(), ec);
         }
 
+        // Files dragged in from the desktop. Driven through the same handler the window callback
+        // calls, because nothing else can simulate a drag from a file manager.
+        void TestFileDrop() {
+            Section("dropped files");
+            Shortcuts driver;
+            StudioLayer& layer = driver.Layer_();
+            layer.OpenExample();
+            driver.Frame();
+
+            EditorState& state = layer.State();
+            const std::size_t before = state.Doc().Assets().size();
+
+            // The engine's own icon: a real file, of a kind the asset store handles.
+            const std::filesystem::path icon = FileSystem::Asset("VAE/assets/icon.svg");
+            layer.OnFilesDropped({ icon });
+            driver.Frame();
+            Check(state.Doc().Assets().size() == before + 1, "a dropped picture becomes an asset");
+            // "icon", or "icon-2" when the project already has one — importing the same file twice
+            // must not overwrite the first copy, so the name is uniquified.
+            const bool named = std::any_of(state.Doc().Assets().begin(), state.Doc().Assets().end(),
+                                           [](const doc::Document::Asset& a) {
+                                               return a.name.rfind("icon", 0) == 0;
+                                           });
+            Check(named, "under the name of the file it came from");
+
+            // Undoable like any other edit, because that is what importing the wrong file needs.
+            state.Undo();
+            driver.Frame();
+            Check(state.Doc().Assets().size() == before, "and dropping it is undoable");
+
+            // A document in the drop opens instead of being imported as a picture.
+            const std::filesystem::path project = FileSystem::ProjectsRoot() / "Counter example"
+                                                / "Counter example.vaescreen";
+            if (std::filesystem::exists(project)) {
+                layer.OnFilesDropped({ project });
+                driver.Frame();
+                Check(layer.State().Path() == project, "a dropped .vaescreen opens the project");
+                Check(state.Doc().Assets().size() != before + 2,
+                      "rather than being imported as an asset");
+            }
+        }
+
+        // Wrapping a selection in a frame, and dissolving one. The whole risk is arithmetic: a
+        // group that lands somewhere else, or children that jump when they move into it.
+        void TestGrouping() {
+            Section("group and ungroup");
+            Shortcuts driver;
+            StudioLayer& layer = driver.Layer_();
+            layer.OpenExample();
+            driver.Frame();
+
+            EditorState& state = layer.State();
+            doc::Document& d = state.Doc();
+            Canvas& canvas = layer.Surface();
+
+            // An absolute screen, which is where grouping has arithmetic to get wrong. (Inside a
+            // stack the group hugs and the stack does the positioning; that path is checked at the
+            // end.)
+            {
+                doc::Node* screen = d.Find(state.ActiveScreen());
+                screen->layout.mode = layout::LayoutMode::Absolute;
+                d.Touch(state.ActiveScreen());
+            }
+
+            // Two boxes on an absolute screen, 100 apart.
+            const auto box = [&](const char* name, Vec2 at) {
+                const Uuid id = d.CreateNode(doc::NodeKind::Frame, state.ActiveScreen(), name);
+                doc::Node* node = d.Find(id);
+                node->layout.mode = layout::LayoutMode::Absolute;
+                node->layout.offsetStart = at;
+                node->layout.width = layout::Size::Px(80.0f);
+                node->layout.height = layout::Size::Px(40.0f);
+                d.Touch(id);
+                return id;
+            };
+            const Uuid left = box("Left box", { 100.0f, 100.0f });
+            const Uuid right = box("Right box", { 200.0f, 160.0f });
+            driver.Frame();
+
+            const Rect leftBefore = canvas.BoundsOf(state, left);
+            const Rect rightBefore = canvas.BoundsOf(state, right);
+
+            state.SelectMany({ left, right });
+            Check(canvas.CanGroup(state), "two siblings can be grouped");
+            canvas.GroupSelection(state);
+            driver.Frame();
+
+            const Uuid group = state.Selection().empty() ? Uuid::Invalid() : state.Selection().front();
+            if (!Check(group.Valid() && d.Find(group), "grouping selects the new frame")) return;
+            Check(d.Find(left)->parent == group && d.Find(right)->parent == group,
+                  "both boxes are inside it");
+
+            // The only thing that matters: nothing moved on screen.
+            Check(Near(canvas.BoundsOf(state, left).pos.x, leftBefore.pos.x, 1.0f)
+                  && Near(canvas.BoundsOf(state, left).pos.y, leftBefore.pos.y, 1.0f),
+                  "the left box did not move");
+            Check(Near(canvas.BoundsOf(state, right).pos.x, rightBefore.pos.x, 1.0f)
+                  && Near(canvas.BoundsOf(state, right).pos.y, rightBefore.pos.y, 1.0f),
+                  "and neither did the right one");
+
+            const Rect groupBox = canvas.BoundsOf(state, group);
+            Check(Near(groupBox.size.x, 180.0f, 1.0f) && Near(groupBox.size.y, 100.0f, 1.0f),
+                  "the group is the box the selection occupied: got "
+                  + std::to_string(groupBox.size.x) + "x" + std::to_string(groupBox.size.y)
+                  + " at " + std::to_string(groupBox.pos.x) + "," + std::to_string(groupBox.pos.y));
+
+            // Undo puts them back where they were, still as siblings.
+            state.Undo();
+            driver.Frame();
+            Check(d.Find(left)->parent == state.ActiveScreen(), "undo takes them back out");
+            Check(Near(canvas.BoundsOf(state, left).pos.x, leftBefore.pos.x, 1.0f),
+                  "and leaves them where they were");
+
+            state.Redo();
+            driver.Frame();
+            const Uuid regrouped = d.Find(left)->parent;
+            Check(regrouped != state.ActiveScreen(), "redo groups them again");
+
+            // And dissolving it leaves both boxes exactly where they are drawn.
+            state.Select(regrouped);
+            Check(canvas.CanUngroup(state), "a group can be ungrouped");
+            canvas.UngroupSelection(state);
+            driver.Frame();
+            Check(d.Find(left)->parent == state.ActiveScreen(), "the boxes are siblings again");
+            Check(d.Find(regrouped) == nullptr, "and the frame is gone");
+            Check(Near(canvas.BoundsOf(state, left).pos.x, leftBefore.pos.x, 1.0f)
+                  && Near(canvas.BoundsOf(state, right).pos.y, rightBefore.pos.y, 1.0f),
+                  "with nothing having moved");
+
+            // And inside a stack, a group is a stack that hugs: position is the parent's business
+            // there, and a group with a hardcoded box would fight it.
+            {
+                doc::Node* screen = d.Find(state.ActiveScreen());
+                screen->layout.mode = layout::LayoutMode::Stack;
+                screen->layout.axis = layout::Axis::Row;
+                screen->layout.gap = 0.0f;
+                d.Touch(state.ActiveScreen());
+            }
+            driver.Frame();
+            state.SelectMany({ left, right });
+            canvas.GroupSelection(state);
+            driver.Frame();
+            const Uuid stackGroup = state.Selection().front();
+            const doc::Node* stacked = d.Find(stackGroup);
+            Check(stacked && stacked->layout.mode == layout::LayoutMode::Stack,
+                  "a group inside a stack is a stack");
+            Check(stacked && stacked->layout.width.mode == layout::SizeMode::Hug,
+                  "and it hugs rather than pinning a box");
+            Check(Near(canvas.BoundsOf(state, stackGroup).size.x, 160.0f, 2.0f),
+                  "so it comes out exactly as wide as the two boxes in it");
+        }
+
         // A repeated container is a template until something fills it. On the canvas that
         // something is the sample rows the designer typed, and the moment the app runs it is the
         // app.
@@ -1930,6 +2082,8 @@ namespace vae {
         TestPlayMode();
         TestDebugger();
         TestScreens();
+        TestGrouping();
+        TestFileDrop();
         TestSampleRows();
         TestFillFromTheEnd();
         TestFeedExample();
