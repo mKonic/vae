@@ -8,6 +8,7 @@
 
 #include "vae/base/FileSystem.h"
 #include "vae/base/Log.h"
+#include "vae/base/Version.h"
 #include "vae/core/Application.h"
 
 #include <imgui.h>
@@ -462,6 +463,12 @@ namespace vae {
             return;
 
         ImGui::TextDisabled("Start a project, or pick up where you left off.");
+        // Which build this is, where someone would look for it. The log carries the same line, but
+        // a bug report is written by whoever is looking at this window.
+        ImGui::SameLine();
+        const std::string version = Version::String();
+        ImGui::SetCursorPosX(ImGui::GetWindowWidth() - ImGui::CalcTextSize(version.c_str()).x - 16.0f);
+        ImGui::TextDisabled("%s", version.c_str());
         ImGui::Dummy(ImVec2(0.0f, 8.0f));
 
         if (ImGui::Button("New project", ImVec2(160.0f, 32.0f))) {

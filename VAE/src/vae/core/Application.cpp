@@ -3,6 +3,7 @@
 
 #include "vae/app/ImGuiLayer.h"
 #include "vae/base/FileSystem.h"
+#include "vae/base/Version.h"
 
 #include <chrono>
 
@@ -18,11 +19,19 @@ namespace vae {
         return false;
     }
 
+    // Both spellings, because both are typed: `--bench=20` and `--bench 20`. Supporting only the
+    // first is how `--convert --bench 20 file` came to read "20" as the file — the parser ignored
+    // the token and the positional scan picked it up.
     std::optional<std::string_view> CommandLineArgs::Value(std::string_view flag) const {
         for (int i = 1; i < count; ++i) {
             std::string_view a = values[i];
             if (a.starts_with(flag) && a.size() > flag.size() && a[flag.size()] == '=')
                 return a.substr(flag.size() + 1);
+            // A bare flag takes the next token, unless there is none or it is another flag.
+            if (a == flag && i + 1 < count) {
+                const std::string_view next = values[i + 1];
+                if (!next.starts_with("--")) return next;
+            }
         }
         return std::nullopt;
     }
@@ -39,7 +48,10 @@ namespace vae {
         VAE_CORE_ASSERT(!s_Instance, "an Application already exists");
         s_Instance = this;
 
-        VAE_CORE_INFO("VAE engine root: {}", FileSystem::EngineRoot().string());
+        // First line in every log, because it is the first thing a bug report needs and the last
+        // thing anyone remembers to ask for.
+        VAE_CORE_INFO("VAE {} — engine root: {}", Version::String(),
+                      FileSystem::EngineRoot().string());
 
         if (m_Spec.createWindow) {
             m_Window = Window::Create(m_Spec.window);

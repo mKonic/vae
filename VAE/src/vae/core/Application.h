@@ -19,7 +19,8 @@ namespace vae {
 
         std::string_view operator[](int i) const { return (i < count) ? values[i] : std::string_view{}; }
         bool Has(std::string_view flag) const;
-        std::optional<std::string_view> Value(std::string_view flag) const;   // --key=value
+        // `--key=value` or `--key value`; nullopt when the flag is absent or has nothing after it.
+        std::optional<std::string_view> Value(std::string_view flag) const;
     };
 
     struct AppSpec {

@@ -1,3 +1,4 @@
+#include "vae/base/Version.h"
 #include "vae/core/Application.h"
 #include "vae/core/EntryPoint.h"
 #include "vae/draw/Renderer.h"
@@ -10,6 +11,7 @@
 #include "StudioLayer.h"
 #include "WidgetGallery.h"
 
+#include <cstdio>
 #include <cstdlib>
 #include <string_view>
 
@@ -250,6 +252,11 @@ namespace vae {
     class StudioApp final : public Application {
     public:
         explicit StudioApp(AppSpec spec) : Application(std::move(spec)) {
+            if (Spec().args.Has("--version")) {
+                std::printf("VAE Studio %s\n", Version::String().c_str());
+                Application::Get().Close();
+                return;
+            }
             if (Spec().args.Has("--selftest")) {
                 PushLayer(CreateScope<SelftestLayer>());
                 return;
@@ -259,6 +266,9 @@ namespace vae {
                 std::filesystem::path in, out;
                 for (int i = 1; i < args.count; ++i) {
                     const std::string_view a = args[i];
+                    // A flag that takes a value eats the token after it. Without this,
+                    // `--convert --bench 20 file.vaescreen` reads "20" as the file to convert.
+                    if (a == "--bench") { ++i; continue; }
                     if (a.starts_with("--")) continue;
                     if (in.empty()) in = a; else if (out.empty()) out = a;
                 }
@@ -292,7 +302,7 @@ namespace vae {
         // --selftest is not a hidden window: it is no window and no device at all. Every check it
         // runs is about the document, the layout and the gestures, none of which need a GPU, and a
         // verification pass that needs one cannot run where it is most wanted.
-        if (args.Has("--selftest") || args.Has("--convert")) {
+        if (args.Has("--selftest") || args.Has("--convert") || args.Has("--version")) {
             spec.createWindow = false;
             spec.createDevice = false;
             spec.enableImGui  = false;

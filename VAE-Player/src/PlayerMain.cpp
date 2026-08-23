@@ -2,6 +2,7 @@
 
 #include "vae/base/FileSystem.h"
 #include "vae/base/Log.h"
+#include "vae/base/Version.h"
 #include "vae/core/Application.h"
 #include "vae/core/EntryPoint.h"
 
@@ -19,6 +20,7 @@ namespace vae {
             bool headless = false;
             int  frames = 1;
             bool help = false;
+            bool version = false;
         };
 
         Options Parse(CommandLineArgs args) {
@@ -32,6 +34,7 @@ namespace vae {
                 else if (arg == "--headless") options.headless = true;
                 else if (arg == "--frames")   options.frames = std::max(1, std::atoi(next().c_str()));
                 else if (arg == "--help" || arg == "-h") options.help = true;
+                else if (arg == "--version") options.version = true;
                 else if (!arg.starts_with("-")) options.project = arg;
             }
             return options;
@@ -39,6 +42,7 @@ namespace vae {
 
         void Usage() {
             std::cout << "usage: VAE-Player <project.vaescreen> [--screen NAME] [--headless [--frames N]]\n"
+                         "       VAE-Player --version\n"
                          "\n"
                          "  Runs a project. The script beside it — <project>.so or <project>.lua —\n"
                          "  is loaded automatically; a native module wins when both are present.\n"
@@ -66,6 +70,15 @@ namespace vae {
         spec.window.title   = "VAE Player";
         spec.window.wmClass = "VAE";
         spec.enableImGui    = false;
+
+        if (options.version) {
+            std::cout << "VAE Player " << Version::String() << "\n";
+            spec.createWindow = false;
+            spec.createDevice = false;
+            auto* app = new PlayerApp(std::move(spec), CreateScope<app::RunLayer>());
+            app->Close();
+            return app;
+        }
 
         if (options.help || options.project.empty()) {
             Usage();

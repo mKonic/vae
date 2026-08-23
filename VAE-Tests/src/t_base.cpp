@@ -1,5 +1,6 @@
 #include "Test.h"
 
+#include "vae/base/Version.h"
 #include "vae/base/FileSystem.h"
 #include "vae/base/Math.h"
 #include "vae/base/Uuid.h"
@@ -8,6 +9,22 @@
 #include <unordered_set>
 
 using namespace vae;
+
+TEST(base, the_build_says_what_it_is_or_says_it_does_not_know) {
+    // Two states, and no third: a build made from a git checkout knows its number, and one made
+    // without git says "unknown" rather than inventing a plausible one. KernelSU's hardcoded 16
+    // fallback is the reason that rule exists — it produced mismatch reports nobody could read.
+    const std::string text = vae::Version::String();
+    CHECK(!text.empty());
+    if (vae::Version::Known()) {
+        CHECK(vae::Version::Code() >= 10000u);          // 10000 + commits, never below the base
+        CHECK(text.find("build ") != std::string::npos);
+        CHECK(std::string(vae::Version::Name()) != "unknown");
+    } else {
+        CHECK_EQ(vae::Version::Code(), 0u);
+        CHECK_EQ(text, std::string("unknown build"));
+    }
+}
 
 TEST(base, uuid_round_trips_through_hex) {
     const Uuid id;
