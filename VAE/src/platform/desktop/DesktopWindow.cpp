@@ -113,6 +113,17 @@ namespace vae {
             }
         });
 
+        // Files dragged in from the desktop. GLFW hands them over as UTF-8 paths and owns the
+        // array only for the duration of the call, so they are copied out before anything else.
+        glfwSetDropCallback(m_Handle, [](GLFWwindow* w, int count, const char** paths) {
+            auto& data = *static_cast<Data*>(glfwGetWindowUserPointer(w));
+            if (!data.drop || count <= 0) return;
+            std::vector<std::filesystem::path> files;
+            files.reserve(static_cast<std::size_t>(count));
+            for (int i = 0; i < count; ++i) files.emplace_back(paths[i]);
+            data.drop(files);
+        });
+
         glfwSetCharCallback(m_Handle, [](GLFWwindow* w, unsigned int codepoint) {
             auto& data = *static_cast<Data*>(glfwGetWindowUserPointer(w));
             Event e = MakeTextInput(codepoint);

@@ -4,6 +4,8 @@
 #include "vae/core/Event.h"
 
 #include <functional>
+#include <vector>
+#include <filesystem>
 #include <string>
 
 namespace vae {
@@ -28,6 +30,9 @@ namespace vae {
     class Window {
     public:
         using EventCallback = std::function<void(Event&)>;
+        // Files dropped onto the window from the desktop. Not an Event, because Event is a POD
+        // tagged union and a list of paths is neither POD nor one value.
+        using FileDropCallback = std::function<void(const std::vector<std::filesystem::path>&)>;
 
         virtual ~Window() = default;
 
@@ -42,6 +47,7 @@ namespace vae {
         virtual bool Minimized() const = 0;
 
         virtual void SetEventCallback(const EventCallback&) = 0;
+        virtual void SetFileDropCallback(const FileDropCallback&) = 0;
         virtual void SetVSync(bool) = 0;
         virtual bool VSync() const = 0;
         virtual void SetTitle(std::string_view) = 0;

@@ -23,6 +23,7 @@ namespace vae {
         void SetEventCallback(const EventCallback& cb) override { m_Data.callback = cb; }
         void SetVSync(bool on) override { m_Data.vsync = on; }
         bool VSync() const override { return m_Data.vsync; }
+        void SetFileDropCallback(const FileDropCallback& callback) override { m_Data.drop = callback; }
         void SetTitle(std::string_view title) override;
 
     private:
@@ -49,6 +50,7 @@ namespace vae {
             f32 scale = 1.0f;
             bool vsync = true;
             EventCallback callback;
+            FileDropCallback drop;
         };
 
         GLFWwindow* m_Handle = nullptr;

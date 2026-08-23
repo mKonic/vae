@@ -60,6 +60,9 @@ namespace vae {
         static void SetChromeFactory(ChromeFactory factory);
         gpu::Device& GetDevice() { return *m_Device; }
         bool HasDevice() const { return m_Device != nullptr; }
+        // False in --selftest, --convert and every headless run, where GetWindow() would be a
+        // dereferenced null.
+        bool HasWindow() const { return m_Window != nullptr; }
         const AppSpec& Spec() const { return m_Spec; }
         u64 FrameCount() const { return m_FrameCount; }
 
