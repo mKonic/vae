@@ -3,6 +3,8 @@
 
 #include "vae/app/ImGuiTheme.h"
 #include "vae/base/FileSystem.h"
+
+#include <filesystem>
 #include "vae/base/Log.h"
 #include "vae/core/Application.h"
 #include "platform/vulkan/VulkanDevice.h"
@@ -55,7 +57,18 @@ namespace vae::app {
 
         // Layout lives beside the project, not in the working directory a launcher happened to
         // start us from.
-        static std::string iniPath = (FileSystem::EngineRoot() / "imgui.ini").string();
+        // Per user, not per install: an installed engine lives somewhere read-only, and a window
+        // layout is the user's, not the build's. An existing layout beside the engine is carried
+        // over once so nobody's panels move because of where the file went.
+        static std::string iniPath = [] {
+            std::error_code ec;
+            const std::filesystem::path config = FileSystem::ConfigRoot() / "imgui.ini";
+            std::filesystem::create_directories(config.parent_path(), ec);
+            const std::filesystem::path legacy = FileSystem::EngineRoot() / "imgui.ini";
+            if (!std::filesystem::exists(config, ec) && std::filesystem::exists(legacy, ec))
+                std::filesystem::copy_file(legacy, config, ec);
+            return config.string();
+        }();
         io.IniFilename = iniPath.c_str();
 
         LoadFonts();

@@ -83,6 +83,11 @@ namespace vae {
         void ExportProject();
         void DrawUnsavedChangesDialog();
         void LoadRecents();
+        // Bumped whenever the default layout gains a panel, so an existing layout is rebuilt
+        // once instead of hiding the new one.
+        static constexpr int kLayoutVersion = 2;
+        int  m_LayoutVersion = 0;
+
         void TickAutosave();
         void DrawRecoveryDialog();
         bool m_RecoveryAsked = false;

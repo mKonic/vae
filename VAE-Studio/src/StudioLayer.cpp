@@ -77,7 +77,16 @@ namespace vae {
         ImGui::PopStyleVar(3);
 
         const ImGuiID dockspace = ImGui::GetID("StudioDockSpace");
-        if (!m_LayoutBuilt && !ImGui::DockBuilderGetNode(dockspace)) BuildDefaultLayout(dockspace);
+        // Rebuilt when there is no layout at all, and when this build has panels the saved layout
+        // has never heard of. A panel added after someone arranged their windows has nowhere to
+        // go otherwise: it floats over the canvas at stamp size, which is where Tokens landed
+        // until this existed.
+        const bool stale = m_LayoutVersion != kLayoutVersion;
+        if (!m_LayoutBuilt && (stale || !ImGui::DockBuilderGetNode(dockspace))) {
+            BuildDefaultLayout(dockspace);
+            m_LayoutVersion = kLayoutVersion;
+            SaveSettings();
+        }
         m_LayoutBuilt = true;
         ImGui::DockSpace(dockspace, ImVec2(0.0f, 0.0f), ImGuiDockNodeFlags_None);
 
@@ -88,6 +97,9 @@ namespace vae {
     void StudioLayer::BuildDefaultLayout(unsigned dockspace) {
         // Only runs when imgui.ini has no saved layout: once a user has arranged their panels, the
         // editor must never rearrange them behind their back.
+        ImGui::DockBuilderRemoveNode(dockspace);
+        // Removed first: rebuilding on top of an existing node leaves the old splits in place and
+        // docks the new window into whatever is left.
         ImGui::DockBuilderRemoveNode(dockspace);
         ImGui::DockBuilderAddNode(dockspace, ImGuiDockNodeFlags_DockSpace);
         ImGui::DockBuilderSetNodeSize(dockspace, ImGui::GetMainViewport()->WorkSize);
@@ -154,6 +166,7 @@ namespace vae {
             if (key == "rulers")      m_Canvas.SetRulers(on);
             else if (key == "preview") m_Canvas.SetPreview(on);
             else if (key == "transitions") motion.enabled = on;
+            else if (key == "layout") m_LayoutVersion = std::atoi(line.substr(eq + 1).c_str());
         }
         m_Canvas.Host().Tree().SetMotion(motion);
     }
@@ -167,6 +180,7 @@ namespace vae {
         write("rulers", m_Canvas.Rulers());
         write("preview", m_Canvas.Preview());
         write("transitions", m_Canvas.Host().Tree().MotionSettings().enabled);
+        text += "layout=" + std::to_string(m_LayoutVersion) + "\n";
         FileSystem::WriteText(FileSystem::ConfigRoot() / "settings.txt", text);
     }
 

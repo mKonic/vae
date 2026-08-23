@@ -8,6 +8,7 @@
 #include <string_view>
 
 #include <imgui.h>
+#include <imgui_internal.h>
 
 namespace vae {
 
@@ -187,6 +188,14 @@ namespace vae {
     // colour changed once repaints every widget that named it — which is the whole reason tokens
     // exist and, until now, the one thing the editor could not do to them.
     void DrawTokensPanel(EditorState& state) {
+        // A panel added after a layout was saved has nowhere to go, and floats over the canvas as
+        // a stamp-sized window. Docked beside the Inspector on first sight, which is where the
+        // default layout puts it and where anyone with an older layout would have dragged it.
+        if (const ImGuiWindow* beside = ImGui::FindWindowByName("Inspector###Inspector"))
+            if (beside->DockId != 0)
+                ImGui::SetNextWindowDockID(beside->DockId, ImGuiCond_FirstUseEver);
+        ImGui::SetNextWindowSize(ImVec2(360.0f, 480.0f), ImGuiCond_FirstUseEver);
+
         ImGui::Begin("Tokens###Tokens");
 
         static char fresh[64] = {};
