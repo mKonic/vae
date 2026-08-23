@@ -19,7 +19,13 @@ namespace vae::app {
     bool RunLayer::Load(const std::filesystem::path& path, std::string* error) {
         // The standard widgets are compiled in, not carried by the file: the player rebuilds them
         // from the same catalog the Studio drew against.
-        if (!doc::Serializer::Load(path, m_Document, error, &ui::StandardLibrary())) return false;
+        // A `.vaeproj` is the same document spread over one file per screen; everything downstream
+        // of here sees no difference, because the difference is only on disk.
+        doc::Project project;
+        const bool loaded = doc::Project::IsProjectFile(path)
+            ? doc::Project::LoadDocument(path, m_Document, project, error, &ui::StandardLibrary())
+            : doc::Serializer::Load(path, m_Document, error, &ui::StandardLibrary());
+        if (!loaded) return false;
         m_ProjectPath = path;
 
         // The script sits beside the document and is named after it, exactly as the Studio writes

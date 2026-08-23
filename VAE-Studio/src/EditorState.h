@@ -146,6 +146,12 @@ namespace vae {
         void DiscardRecovery();
         bool Load(const std::filesystem::path& path);
         const std::filesystem::path& Path() const { return m_Path; }
+
+        // A `.vaeproj` is a project split across files — one per screen, one per forked component.
+        // Everything else is a single document. Which one this is decides only how Save and Load
+        // touch the disk; the document in memory is the same either way.
+        bool IsSplit() const { return doc::Project::IsProjectFile(m_Path); }
+        doc::Project& ProjectFile() { return m_Project; }
         bool Dirty() const { return m_SavedRevision != m_Document.Revision(); }
         // Recovery loads the copy and then says which project it belongs to, so a save writes the
         // project rather than the recovery file, and says it is unsaved until it does.
@@ -167,6 +173,7 @@ namespace vae {
         doc::StringTable m_Strings;
         svc::Audio m_Preview;
         std::filesystem::path m_Path;
+        doc::Project m_Project;
         u64 m_SavedRevision = 0;
     };
 

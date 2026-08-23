@@ -286,7 +286,7 @@ Exec=$run_bindir/vae-studio %f
 Icon=vae
 Terminal=false
 Categories=Development;IDE;Graphics;
-MimeType=application/x-vae-screen;application/x-vae-component;
+MimeType=application/x-vae-screen;application/x-vae-component;application/x-vae-project;
 StartupWMClass=VAE
 StartupNotify=true
 DESKTOP
@@ -305,11 +305,16 @@ cat > "$tmp" <<'MIME'
     <glob pattern="*.vaecomp"/>
     <sub-class-of type="application/xml"/>
   </mime-type>
+  <mime-type type="application/x-vae-project">
+    <comment>VAE project</comment>
+    <glob pattern="*.vaeproj"/>
+    <sub-class-of type="application/json"/>
+  </mime-type>
 </mime-info>
 MIME
 run install -m644 "$tmp" "$mimedir/vae.xml"
 rm -f "$tmp"
-say "  wrote    the desktop entry, the icon and the .vaescreen file type"
+say "  wrote    the desktop entry, the icon and the VAE file types"
 
 if [ -z "$destdir" ]; then
 	command -v update-desktop-database >/dev/null 2>&1 \
@@ -338,8 +343,8 @@ case ":${PATH}:" in
 esac
 
 say ""
-say "  Start it:  ${c_bold}vae-studio${c_off}   ${c_dim}(or open a .vaescreen from your file manager)${c_off}"
-say "  Run an app: ${c_bold}vae-player <project.vaescreen>${c_off}"
+say "  Start it:  ${c_bold}vae-studio${c_off}   ${c_dim}(or open a project from your file manager)${c_off}"
+say "  Run an app: ${c_bold}vae-player <project.vaeproj>${c_off}"
 
 if [ "$mode" = link ]; then
 	say ""

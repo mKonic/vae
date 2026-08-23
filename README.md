@@ -129,6 +129,23 @@ Attribute sigils: `@token`, `=binding`, `#hex`, `&node`, `*asset`, `$literal`. S
 Files written in the earlier JSON formats still open — `VAE-Studio --convert [--check] [--bench N]`
 rewrites one in format 3, verifies the round trip node for node, or times the load.
 
+A project is a folder. New ones are saved as `<name>.vaeproj`, an index beside the files it names:
+
+```
+Kiosk/
+  Kiosk.vaeproj          index: screens, components, script language, target resolution
+  Kiosk.lua              the logic
+  tokens.vae             theme, the project's own tokens, assets
+  screens/Home.vaescreen one file per screen
+  screens/Menu.vaescreen
+  components/Card.vaecomp one file per component the project forked
+```
+
+Every part is an ordinary format 3 document, so a screen file opens on its own. A history then says
+which screen changed, and two people can edit different screens without conflicting. A single
+`.vaescreen` holding every screen still opens and saves exactly as before — Studio and the Player
+take either — and opening one does not convert it.
+
 ## Languages
 
 A text node can carry a key (`textKey`) beside the text it was authored with. `strings/<locale>.json`

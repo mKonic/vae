@@ -560,7 +560,13 @@ namespace vae {
     }
 
     bool EditorState::Save(const std::filesystem::path& path) {
-        if (!doc::Serializer::Save(m_Document, path, &ui::StandardLibrary())) return false;
+        if (doc::Project::IsProjectFile(path)) {
+            if (m_Project.name == "Untitled") m_Project.name = path.stem().string();
+            if (!doc::Project::SaveDocument(m_Document, m_Project, path, &ui::StandardLibrary()))
+                return false;
+        } else if (!doc::Serializer::Save(m_Document, path, &ui::StandardLibrary())) {
+            return false;
+        }
         m_Path = path;
         m_SavedRevision = m_Document.Revision();
         // There is nothing to recover any more, and a stale recovery file is worse than none: it
@@ -649,13 +655,18 @@ namespace vae {
 
     bool EditorState::Load(const std::filesystem::path& path) {
         doc::Document loaded;
+        doc::Project project;
         std::string error;
-        if (!doc::Serializer::Load(path, loaded, &error, &ui::StandardLibrary())) {
+        const bool ok = doc::Project::IsProjectFile(path)
+            ? doc::Project::LoadDocument(path, loaded, project, &error, &ui::StandardLibrary())
+            : doc::Serializer::Load(path, loaded, &error, &ui::StandardLibrary());
+        if (!ok) {
             VAE_ERROR("could not open {}: {}", path.string(), error);
             return false;
         }
 
         m_Document = std::move(loaded);
+        m_Project = std::move(project);
         m_Commands.Clear();
         m_Selection.clear();
         m_Path = path;

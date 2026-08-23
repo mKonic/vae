@@ -122,6 +122,11 @@ namespace vae::doc {
         // Falls back to the first screen in the document, which is the answer before anyone has
         // chosen and after the chosen one has been deleted.
         Uuid StartScreen() const;
+        // What was actually chosen, with no falling back to the first screen. A file records the
+        // choice somebody made, and a document holding one screen has not made one — writing the
+        // fallback out would turn "no opinion" into "this one", which is wrong the moment that
+        // document is one screen of a project that has several.
+        Uuid ChosenStartScreen() const { return m_StartScreen; }
         // Every screen, in document order.
         std::vector<Uuid> Screens() const;
         ScreenKind KindOf(Uuid screen) const;

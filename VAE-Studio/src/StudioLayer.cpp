@@ -470,7 +470,15 @@ namespace vae {
         // asked for is not an undo anyone wants.
         m_State.Commands().Clear();
 
-        SaveProject(folder / (clean + ".vaescreen"));
+        // A new project is split across files: one per screen, one per forked component. A
+        // thirty-screen app in a single file means every edit touches that file, so its history
+        // cannot say which screen changed and two people cannot work on different screens.
+        // Projects that are already single files stay single files — opening one does not
+        // convert it.
+        m_State.ProjectFile().name = clean;
+        m_State.ProjectFile().scriptLanguage =
+            spec.language == ScriptSession::Language::Cpp ? "cpp" : "lua";
+        SaveProject(folder / (clean + ".vaeproj"));
         // The script file, written now rather than on the first edit. Two reasons, and the second
         // is the load-bearing one: it gives the author a template to start from, and it is the
         // only record on disk of which language the project is written in — reopening reads it

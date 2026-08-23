@@ -269,7 +269,8 @@ namespace vae::doc {
             for (Uuid component : library->Stock(document))
                 for (Uuid node : document.Subtree(component)) named.insert(node);
         }
-        if (document.StartScreen().Valid()) root["start"] = document.StartScreen().ToString();
+        if (document.ChosenStartScreen().Valid())
+            root["start"] = document.ChosenStartScreen().ToString();
 
         json tokens = json::object();
         for (const auto& [name, token] : document.Tokens()) {

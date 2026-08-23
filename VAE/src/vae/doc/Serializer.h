@@ -71,8 +71,10 @@ namespace vae::doc {
         // document in place, and every observer that survives that is holding an id.
         static std::string ToXml(const Document& document, bool pretty = true,
                                  const LibrarySource* library = nullptr, bool keepIds = false);
+        // `merge` reads into whatever `out` already holds instead of replacing it, and skips
+        // installing the library because it is already there. Use LoadInto rather than this.
         static bool FromXml(std::string_view xml, Document& out, std::string* error = nullptr,
-                            const LibrarySource* library = nullptr);
+                            const LibrarySource* library = nullptr, bool merge = false);
 
         // JSON, format 2 and older. Kept as the migration path for every file that already exists,
         // and as the shape a Figma import arrives in.
@@ -89,6 +91,17 @@ namespace vae::doc {
                          const LibrarySource* library = nullptr);
         static bool Load(const std::filesystem::path& path, Document& out,
                          std::string* error = nullptr, const LibrarySource* library = nullptr);
+
+        // Reads a file into a document that already holds something, rather than replacing it.
+        // This is how a project split across files is put back together: its parts are ordinary
+        // format 3 documents, and a screen whose `of=` names a component from another file simply
+        // resolves once that file has been read.
+        //
+        // The library must already be installed in `out`. Installing it a second time would mint
+        // the ids it already minted, so this never does it.
+        static bool LoadInto(const std::filesystem::path& path, Document& out,
+                             std::string* error = nullptr,
+                             const LibrarySource* library = nullptr);
     };
 
     // The project file: which screens exist, where assets live, which scripting language, and the
@@ -104,6 +117,28 @@ namespace vae::doc {
 
         static bool Save(const Project& project, const std::filesystem::path& path);
         static bool Load(const std::filesystem::path& path, Project& out, std::string* error = nullptr);
+
+        // --- a project split across files ---------------------------------------------------
+        //
+        // One document in memory, many files on disk: `screens/<Name>.vaescreen` each holding one
+        // screen, `components/<Name>.vaecomp` each holding one forked component, and `tokens.vae`
+        // holding the theme and the project's own tokens. The `.vaeproj` is only an index.
+        //
+        // The point is the diff. A thirty-screen app in one file means every edit touches that
+        // file, so a version-control history says nothing about which screen changed and two
+        // people cannot edit different screens without conflicting.
+        //
+        // Nothing new is serialized to make this work: every part is a format 3 document that the
+        // ordinary loader reads, which is why a screen file can also just be opened on its own.
+        static bool SaveDocument(const Document& document, Project& project,
+                                 const std::filesystem::path& projectFile,
+                                 const LibrarySource* library = nullptr);
+        static bool LoadDocument(const std::filesystem::path& projectFile, Document& out,
+                                 Project& outProject, std::string* error = nullptr,
+                                 const LibrarySource* library = nullptr);
+
+        // True when the path names a project index rather than a single document.
+        static bool IsProjectFile(const std::filesystem::path& path);
     };
 
 }

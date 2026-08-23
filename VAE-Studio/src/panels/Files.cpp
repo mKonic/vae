@@ -338,7 +338,8 @@ namespace vae {
                         ImGui::SetWindowFocus("Script###Script");
                         break;
                     case Kind::Screen:
-                        if (entry.path.extension() == ".vaescreen") openProject = entry.path;
+                        if (entry.path.extension() == ".vaescreen"
+                            || entry.path.extension() == ".vaeproj") openProject = entry.path;
                         break;
                     default: break;
                 }

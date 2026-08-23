@@ -4,6 +4,7 @@
 #include "vae/doc/Command.h"
 #include "vae/doc/Serializer.h"
 #include "vae/doc/Strings.h"
+#include "vae/ui/Library.h"
 
 #include <string>
 #include <vector>
@@ -1713,3 +1714,142 @@ TEST(serializer, a_format_1_document_still_opens) {
     CHECK((node->props.Find(Prop::ShadowColor)
            && *node->props.Find(Prop::ShadowColor) == Value{ Color{ 0.0f, 0.0f, 0.0f, 0.25f } }));
 }
+
+// ------------------------------------------------------------------ a project split across files
+
+namespace {
+
+    // A project with two screens, a forked component used by both, a token and an asset — enough
+    // that splitting it has something to get wrong in every direction.
+    Document BuildSplittable(Uuid& outCard, Uuid& outHome) {
+        Document doc;
+        ui::StandardLibrary().Install("vae.std", 0, doc);
+
+        doc.SetToken("brand", Token{ Value(Color{ 0.1f, 0.2f, 0.3f, 1.0f }),
+                                     Value(Color{ 0.3f, 0.4f, 0.5f, 1.0f }), "the one colour" });
+        doc.AddAsset("logo", "assets/logo.svg", Uuid::Invalid());
+
+        const Uuid card = doc.CreateNode(NodeKind::Frame, Uuid::Invalid(), "Card");
+        const Uuid label = doc.CreateNode(NodeKind::Text, card, "Label");
+        doc.SetProp(label, Prop::Text, std::string("Hello"));
+        doc.MakeComponent(card, "Card");
+        outCard = card;
+
+        const Uuid home = doc.CreateNode(NodeKind::Screen, Uuid::Invalid(), "Home");
+        doc.CreateInstance(card, home);
+        doc.SetStartScreen(home);
+        outHome = home;
+
+        const Uuid settings = doc.CreateNode(NodeKind::Screen, Uuid::Invalid(), "Settings");
+        doc.CreateInstance(card, settings);
+        return doc;
+    }
+
+    std::filesystem::path ScratchProject(const char* name) {
+        const auto dir = std::filesystem::temp_directory_path() / name;
+        std::error_code ec;
+        std::filesystem::remove_all(dir, ec);
+        std::filesystem::create_directories(dir, ec);
+        return dir / (std::string(name) + ".vaeproj");
+    }
+
+}
+
+TEST(project, a_split_project_is_one_file_per_screen) {
+    Uuid card, home;
+    const Document doc = BuildSplittable(card, home);
+
+    Project project;
+    project.name = "Split";
+    const auto file = ScratchProject("vae-split-one");
+    CHECK(Project::SaveDocument(doc, project, file, &ui::StandardLibrary()));
+
+    // One file per screen, named after the screen — the whole point, because a diff has to say
+    // which screen changed.
+    CHECK_EQ(project.screens.size(), 2u);
+    CHECK(std::filesystem::exists(file.parent_path() / "screens/Home.vaescreen"));
+    CHECK(std::filesystem::exists(file.parent_path() / "screens/Settings.vaescreen"));
+
+    // The forked component gets its own file; the fifty the catalog builds do not.
+    CHECK_EQ(project.components.size(), 1u);
+    CHECK(std::filesystem::exists(file.parent_path() / "components/Card.vaecomp"));
+    CHECK(std::filesystem::exists(file.parent_path() / "tokens.vae"));
+
+    // A screen file holds its screen and not the others.
+    const auto homeText = FileSystem::ReadText(file.parent_path() / "screens/Home.vaescreen");
+    CHECK(homeText.has_value());
+    CHECK(homeText->find("Home") != std::string::npos);
+    CHECK(homeText->find("Settings") == std::string::npos);
+
+    std::error_code ec;
+    std::filesystem::remove_all(file.parent_path(), ec);
+}
+
+TEST(project, a_split_project_reads_back_as_the_document_it_was) {
+    Uuid card, home;
+    const Document doc = BuildSplittable(card, home);
+
+    Project project;
+    project.name = "Split";
+    const auto file = ScratchProject("vae-split-two");
+    CHECK(Project::SaveDocument(doc, project, file, &ui::StandardLibrary()));
+
+    Document back;
+    Project loadedProject;
+    std::string error;
+    CHECK(Project::LoadDocument(file, back, loadedProject, &error, &ui::StandardLibrary()));
+    CHECK(error.empty());
+
+    // The same screens, the same start screen, the same token, the same asset.
+    std::vector<std::string> screens;
+    for (Uuid id : back.Roots())
+        if (const Node* node = back.Find(id); node && node->kind == NodeKind::Screen)
+            screens.push_back(node->name);
+    std::sort(screens.begin(), screens.end());
+    CHECK_EQ(screens.size(), 2u);
+    CHECK_EQ(screens[0], std::string("Home"));
+    CHECK_EQ(screens[1], std::string("Settings"));
+
+    const Node* start = back.Find(back.StartScreen());
+    CHECK(start != nullptr);
+    if (start) CHECK_EQ(start->name, std::string("Home"));
+
+    CHECK(back.Tokens().contains("brand"));
+    CHECK_EQ(back.Assets().size(), std::size_t(1));
+
+    // And the instances on both screens still point at the component the other file defines —
+    // which is the one thing splitting a document could quietly break.
+    const Node* forked = back.Find(card);
+    CHECK(forked != nullptr);
+    u32 instances = 0;
+    for (Uuid id : back.AllNodes())
+        if (const Node* node = back.Find(id); node && node->IsInstance() && node->componentId == card)
+            ++instances;
+    CHECK_EQ(instances, 2u);
+
+    std::error_code ec;
+    std::filesystem::remove_all(file.parent_path(), ec);
+}
+
+TEST(project, a_deleted_screen_stops_being_on_disk) {
+    Uuid card, home;
+    Document doc = BuildSplittable(card, home);
+
+    Project project;
+    project.name = "Split";
+    const auto file = ScratchProject("vae-split-three");
+    CHECK(Project::SaveDocument(doc, project, file, &ui::StandardLibrary()));
+    CHECK(std::filesystem::exists(file.parent_path() / "screens/Settings.vaescreen"));
+
+    for (Uuid id : doc.Roots())
+        if (const Node* node = doc.Find(id); node && node->name == "Settings") { doc.DeleteNode(id); break; }
+
+    // Left behind, the file would still be listed and still load: a deleted screen would come back.
+    CHECK(Project::SaveDocument(doc, project, file, &ui::StandardLibrary()));
+    CHECK(!std::filesystem::exists(file.parent_path() / "screens/Settings.vaescreen"));
+    CHECK_EQ(project.screens.size(), 1u);
+
+    std::error_code ec;
+    std::filesystem::remove_all(file.parent_path(), ec);
+}
+

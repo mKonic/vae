@@ -396,7 +396,7 @@ namespace vae::doc {
         // 540 — scripts address nodes by name, so nothing outside the file needs the rest either.
         std::unordered_set<Uuid> ReferencedIds(const Document& document) {
             std::unordered_set<Uuid> out;
-            if (document.StartScreen().Valid()) out.insert(document.StartScreen());
+            if (document.ChosenStartScreen().Valid()) out.insert(document.ChosenStartScreen());
             for (Uuid rootId : document.Roots()) {
                 for (Uuid id : document.Subtree(rootId)) {
                     const Node* node = document.Find(id);
@@ -559,7 +559,7 @@ namespace vae::doc {
                               { "path", asset.path } }, true);
 
         const std::unordered_set<Uuid> referenced = ReferencedIds(document);
-        const Uuid start = document.StartScreen();
+        const Uuid start = document.ChosenStartScreen();
         for (Uuid id : document.Roots()) {
             if (named.contains(id)) continue;
             WriteNode(w, document, id, referenced, start, keepIds);
@@ -733,7 +733,7 @@ namespace vae::doc {
     }
 
     bool Serializer::FromXml(std::string_view xml, Document& out, std::string* error,
-                             const LibrarySource* library) {
+                             const LibrarySource* library, bool merge) {
         const auto Fail = [&](const std::string& message) {
             if (error) *error = message;
             return false;
@@ -762,12 +762,16 @@ namespace vae::doc {
             return Fail("document was written by a newer VAE (format " + std::to_string(version)
                         + ", this build reads " + std::to_string(kFormatVersion) + ")");
 
-        out.Clear();
+        // Merging reads this file into whatever `out` already holds: the parts of a split project
+        // are read one after another into a single document, and clearing between them would leave
+        // only the last one.
+        if (!merge) out.Clear();
 
         // The library goes in first so the document's own tokens and any forked component land on
-        // top of it rather than under it.
+        // top of it rather than under it. When merging it is already there, and installing it twice
+        // would mint the ids it minted the first time.
         const pugi::xml_attribute libraryAttr = root.attribute("library");
-        if (libraryAttr) {
+        if (libraryAttr && !merge) {
             const std::string ref = libraryAttr.as_string();
             const std::size_t at = ref.rfind('@');
             const std::string id = at == std::string::npos ? ref : ref.substr(0, at);

@@ -1117,7 +1117,7 @@ namespace vae {
             layer.SaveProject(state.Path());
 
             EditorState reopened;
-            Check(reopened.Load(folder / (name + ".vaescreen")), "the project reopens");
+            Check(reopened.Load(folder / (name + ".vaeproj")), "the project reopens");
             Check(reopened.Doc().FindAsset(asset) != nullptr, "with its assets");
             const doc::Node* back = FindByName(reopened.Doc(), "Picture");
             Check(back != nullptr, "and the picture that used it");
@@ -1206,9 +1206,11 @@ namespace vae {
 
             layer.CreateProject(name);
             Check(std::filesystem::exists(folder, ec), "a project is a folder of its own");
-            Check(std::filesystem::exists(folder / (name + ".vaescreen"), ec),
-                  "with the document inside it");
-            Check(state.Path() == folder / (name + ".vaescreen"),
+            Check(std::filesystem::exists(folder / (name + ".vaeproj"), ec),
+                  "with a project index inside it");
+            Check(std::filesystem::exists(folder / "screens", ec),
+                  "and a file per screen rather than one file holding all of them");
+            Check(state.Path() == folder / (name + ".vaeproj"),
                   "and that is the project the editor is now editing");
 
             // A second project of the same name would quietly overwrite the first one's document.
@@ -1249,7 +1251,7 @@ namespace vae {
             // to. Without this, opening a C++ project from a Lua session shows an empty editor and
             // says the project has no logic.
             layer.Scripts().SetLanguage(ScriptSession::Language::Lua);
-            layer.OpenProject(at / (kiosk + ".vaescreen"));
+            layer.OpenProject(at / (kiosk + ".vaeproj"));
             driver.Frame();
             Check(layer.Scripts().Lang() == ScriptSession::Language::Cpp,
                   "reopening it comes back as C++");
