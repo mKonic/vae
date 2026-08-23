@@ -89,14 +89,21 @@ Projects live under `~/Documents/VAE` (or `$VAE_PROJECTS`), one directory each.
 ## Installing
 
 ```sh
-./scripts/install.sh                 # into ~/.local
-./scripts/install.sh --prefix /usr   # system-wide
-./scripts/install.sh --uninstall
+./install.sh              # build, test, and link into ~/.local
+./install.sh --copy       # independent copies, so the clone is disposable
+./install.sh --system     # /usr/local, sudo only for the steps that write there
+./install.sh --uninstall
 ```
 
-Binaries and engine assets go to `<prefix>/lib/vae` with the `.vaeroot` marker beside them, symlinks
-`vae-studio` and `vae-player` go to `<prefix>/bin`, and a `.desktop` file plus icon go to
-`<prefix>/share`. Needs a Dist build and compiled shaders.
+It checks the dependencies, fetches submodules, compiles the shaders, builds, runs the unit suite
+and the editor selftest, and installs only if both pass. `--destdir DIR` stages a package instead of
+installing.
+
+The default is a linked install: `<prefix>/lib/vae` points at this clone, so `git pull && make
+config=dist` takes effect with no reinstall — and moving the clone breaks it. `--copy` puts the
+binaries and the engine's assets under the prefix instead. Either way `<prefix>/bin` gets
+`vae-studio` and `vae-player`, and `<prefix>/share` gets a desktop entry, an icon, and the
+`.vaescreen` file type so a project opens from a file manager.
 
 ## Documents
 
