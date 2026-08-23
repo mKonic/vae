@@ -69,6 +69,9 @@ namespace vae {
         // Play mode: the document stops being a drawing and starts being the app. Input reaches
         // the widgets, and the script runtime drives them.
         ui::UiHost& Host() { return m_Host; }
+        // Sample rows are a design-time drawing aid: on while the canvas is a canvas, off the
+        // moment the script is running, because a playing app shows the rows the app has.
+        void ShowSampleRows(bool on);
         // What to run once the scene is laid out and before it is painted: mount, dispatch, tick,
         // and whatever else the session wants to happen inside a frame rather than between two.
         using Pump = std::function<void(f32 dt)>;
@@ -125,6 +128,7 @@ namespace vae {
         draw::DrawList   m_List;
         text::GlyphAtlas m_Atlas;
         ui::UiHost       m_Host;
+        bool             m_SampleRows = true;
         ui::AssetStore   m_Assets;
         Pump m_Pump;
         gpu::Device*     m_Device = nullptr;

@@ -281,6 +281,11 @@ namespace vae {
         // complaint, which was already logged, rather than a second one about the state of a flag.
         if (!Build()) return false;
 
+        // The rows the designer typed are a drawing aid, and the app is about to say what its
+        // real ones are. Off before the first frame runs, so nobody sees invented names in a
+        // running app.
+        m_Canvas->ShowSampleRows(false);
+
         // The document as it stands, before a single script has touched it.
         // keepIds: this is restored in place so that every observer keeps its subscription, and an
         // observer that survives is holding an id. A file drops the ids nothing references; this
@@ -328,6 +333,7 @@ namespace vae {
 
         m_Canvas->SetPreview(false);
         m_Canvas->SetPump({});
+        m_Canvas->ShowSampleRows(true);
         // Stopping means stopping: a request still in flight would deliver into a runtime that has
         // let go of the document.
         m_Services.Net().CancelAll();

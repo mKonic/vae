@@ -108,6 +108,12 @@ namespace vae {
             fields::Number(state, id, "Opacity", doc::Prop::Opacity, 1.0f, 0.01f, 0.0f, 1.0f);
             fields::Toggle(state, id, "Clip content", doc::Prop::ClipContent, false);
 
+            // Fills from the bottom: a short conversation sits above the composer, a long one
+            // scrolls and stays on the newest message. `justify: end` is what this looked like
+            // until the content outgrew the box, at which point it pushed the newest message out
+            // of the top of it.
+            fields::Toggle(state, id, "From the end", doc::Prop::StickToEnd, false);
+
             // One of its children at a time, by name. Loading, failed, empty and the content are
             // four drawings of one screen, and this is how a designer looks at each of them
             // without running anything — and how a script says which one is true right now.
@@ -136,6 +142,17 @@ namespace vae {
                 // here is the whole of "this list has data in it"; a script sets the same number,
                 // and rows handed over at runtime say how many there really are.
                 fields::Number(state, id, "Repeat", doc::Prop::Repeat, 0.0f, 1.0f, 0.0f, 2000.0f);
+
+                // What the canvas draws those copies with. Without it a repeat is the same row
+                // N times and the columns a designer is binding to are invisible until the app
+                // runs. The first line names the columns, every line after it is a row:
+                //
+                //     author | body        | tint
+                //     Ada    | Hello there | accent
+                //
+                // Design time only — the moment the app runs, its own rows are what show.
+                fields::Text(state, id, "Sample rows", doc::Prop::Sample,
+                             "author | body", true);
             }
 
             // Which column of a row this node draws. Only means anything inside a repeated

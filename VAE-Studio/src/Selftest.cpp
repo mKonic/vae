@@ -1484,6 +1484,151 @@ namespace vae {
             std::filesystem::remove(scripts.SourcePath(), ec);
         }
 
+        // A repeated container is a template until something fills it. On the canvas that
+        // something is the sample rows the designer typed, and the moment the app runs it is the
+        // app.
+        void TestSampleRows() {
+            Section("sample rows");
+            Shortcuts driver;
+            StudioLayer& layer = driver.Layer_();
+            layer.OpenExample();
+            driver.Frame();
+
+            EditorState& state = layer.State();
+            doc::Document& d = state.Doc();
+            const Uuid screen = state.ActiveScreen();
+
+            const Uuid list = d.CreateNode(doc::NodeKind::Frame, screen, "Messages");
+            {
+                doc::Node* node = d.Find(list);
+                node->layout.mode = layout::LayoutMode::Stack;
+                node->layout.axis = layout::Axis::Column;
+                node->layout.offsetStart = { 24.0f, 24.0f };
+                node->layout.width = layout::Size::Px(240.0f);
+                node->layout.height = layout::Size::Hug();
+                node->layout.gap = 4.0f;
+            }
+            d.SetProp(list, doc::Prop::Repeat, 2.0f);
+            d.SetProp(list, doc::Prop::Sample, std::string("author\nAda\nGrace\nAlan\n"));
+
+            const Uuid row = d.CreateNode(doc::NodeKind::Frame, list, "Message");
+            {
+                doc::Node* node = d.Find(row);
+                node->layout.mode = layout::LayoutMode::Stack;
+                node->layout.width = layout::Size::Fill();
+                node->layout.height = layout::Size::Px(20.0f);
+            }
+            const Uuid label = d.CreateNode(doc::NodeKind::Text, row, "Author");
+            d.SetProp(label, doc::Prop::Field, std::string("author"));
+            driver.Frame();
+
+            ui::UiHost& host = layer.Surface().Host();
+            const auto copies = [&] {
+                const ui::ViewTree& tree = host.Tree();
+                u32 count = 0;
+                for (u32 i = 0; i < tree.ViewCount(); ++i)
+                    if (tree.At(i).name.rfind("Message ", 0) == 0) ++count;
+                return count;
+            };
+            const auto drew = [&](i32 which) {
+                const ui::ViewTree& tree = host.Tree();
+                for (u32 i = 0; i < tree.ViewCount(); ++i)
+                    if (tree.At(i).name == "Author" && tree.At(i).row == which)
+                        return tree.Str(i, doc::Prop::Text);
+                return std::string{};
+            };
+
+            Check(copies() == 3, "the canvas draws one copy per sample row, not the placeholder count");
+            Check(drew(0) == "Ada" && drew(2) == "Alan",
+                  "and every copy drew its own row, so the bindings are visible while they are drawn");
+
+            // Half a table is the state the field spends most of its life in.
+            d.SetProp(list, doc::Prop::Sample, std::string("author"));
+            driver.Frame();
+            Check(copies() == 2, "column names with nothing under them leave the placeholder alone");
+
+            d.SetProp(list, doc::Prop::Sample, std::string("author\nAda\nGrace\nAlan\n"));
+            driver.Frame();
+
+            // And it is a drawing aid, not content: pressing Play must not leave invented people
+            // in a running app.
+            ScriptSession& scripts = layer.Scripts();
+            driver.Press(ImGuiKey_F5);
+            driver.Frame();
+            if (Check(scripts.Playing(), "F5 starts the app")) {
+                Check(copies() == 2, "the sample rows are gone the moment it runs");
+                Check(drew(0).empty(), "and nothing invented is left on screen");
+            }
+
+            driver.Press(ImGuiKey_F5, false, true);
+            driver.Frame();
+            Check(!scripts.Playing(), "stopped");
+            Check(copies() == 3, "and the designer gets their sample rows back");
+        }
+
+        // A container that fills from its far edge, which is what a chat log is. Checked on the
+        // canvas because the failure it replaces was a visual one: `justify: end` pushing the
+        // newest message out of the top of the box the moment the conversation overflowed.
+        void TestFillFromTheEnd() {
+            Section("fills from the end");
+            Shortcuts driver;
+            StudioLayer& layer = driver.Layer_();
+            layer.OpenExample();
+            driver.Frame();
+
+            EditorState& state = layer.State();
+            doc::Document& d = state.Doc();
+
+            const Uuid log = d.CreateNode(doc::NodeKind::Frame, state.ActiveScreen(), "Log");
+            {
+                doc::Node* node = d.Find(log);
+                node->layout.mode = layout::LayoutMode::Stack;
+                node->layout.axis = layout::Axis::Column;
+                node->layout.offsetStart = { 24.0f, 24.0f };
+                node->layout.width = layout::Size::Px(240.0f);
+                node->layout.height = layout::Size::Px(120.0f);
+            }
+            d.SetProp(log, doc::Prop::ClipContent, true);
+            d.SetProp(log, doc::Prop::Role, std::string("scroll"));
+            d.SetProp(log, doc::Prop::StickToEnd, true);
+
+            const auto message = [&](const std::string& name) {
+                const Uuid id = d.CreateNode(doc::NodeKind::Frame, log, name);
+                doc::Node* node = d.Find(id);
+                node->layout.width = layout::Size::Fill();
+                node->layout.height = layout::Size::Px(30.0f);
+                d.Touch(id);
+                return id;
+            };
+            const Uuid first = message("One");
+            message("Two");
+            const Uuid third = message("Three");
+            driver.Frame();
+
+            ui::UiHost& host = layer.Surface().Host();
+            const auto box = [&](Uuid id) {
+                const ui::ViewTree& tree = host.Tree();
+                return tree.Bounds(tree.ViewOf(ui::WidgetId{ id, Uuid::Invalid() }));
+            };
+            const auto scroll = [&] {
+                const ui::ViewTree& tree = host.Tree();
+                return tree.At(tree.ViewOf(ui::WidgetId{ log, Uuid::Invalid() })).scroll.y;
+            };
+
+            Check(Near(box(third).Bottom(), box(log).Bottom(), 1.0f),
+                  "three short messages sit against the bottom of the box");
+            Check(box(first).pos.y > box(log).pos.y,
+                  "a short conversation is held down, not floating under the title");
+            Check(Near(scroll(), 0.0f), "and nothing scrolled to do it");
+
+            // Past the box: the same property becomes scrolling, still showing the newest.
+            for (int i = 4; i <= 8; ++i) message("Message " + std::to_string(i));
+            driver.Frame();
+            Check(scroll() > 0.0f, "a conversation longer than the box scrolls instead");
+            Check(Near(box(d.Find(log)->children.back()).Bottom(), box(log).Bottom(), 1.0f),
+                  "and the newest message is the one on screen");
+        }
+
         // The three things a screen that talks to something needs, checked where they live: in
         // the document, so the canvas can show each of them with nothing running.
         void TestFeedExample() {
@@ -1785,6 +1930,8 @@ namespace vae {
         TestPlayMode();
         TestDebugger();
         TestScreens();
+        TestSampleRows();
+        TestFillFromTheEnd();
         TestFeedExample();
         TestExampleSound();
         TestScreenSizing();

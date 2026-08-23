@@ -137,6 +137,11 @@ namespace vae {
                        draw::Stroke{ 1.0f / m_Zoom, { 1.0f, 1.0f, 1.0f, 0.16f } });
     }
 
+    void Canvas::ShowSampleRows(bool on) {
+        m_SampleRows = on;
+        m_Host.Tree().ShowSampleRows(on);
+    }
+
     void Canvas::SyncScene(EditorState& state, f32 dt) {
         if (state.ActiveScreen() != m_BoundScreen) {
             // Framed after it has been laid out, not now: a component that hugs has no size until
@@ -146,6 +151,7 @@ namespace vae {
             m_PendingFrame = m_BoundScreen.Valid();
             m_BoundScreen = state.ActiveScreen();
             m_Host.SetDocument(state.Doc(), m_BoundScreen);
+            m_Host.Tree().ShowSampleRows(m_SampleRows);
             m_Assets.Rebind(state.Doc());
         }
 
