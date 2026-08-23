@@ -86,6 +86,18 @@ Projects live under `~/Documents/VAE` (or `$VAE_PROJECTS`), one directory each.
 | `VAE_ROOT` | Engine asset root. Otherwise the engine walks up from the executable for a `.vaeroot` marker. |
 | `VAE_FRAMES` | Render N frames and exit. |
 
+## Installing
+
+```sh
+./scripts/install.sh                 # into ~/.local
+./scripts/install.sh --prefix /usr   # system-wide
+./scripts/install.sh --uninstall
+```
+
+Binaries and engine assets go to `<prefix>/lib/vae` with the `.vaeroot` marker beside them, symlinks
+`vae-studio` and `vae-player` go to `<prefix>/bin`, and a `.desktop` file plus icon go to
+`<prefix>/share`. Needs a Dist build and compiled shaders.
+
 ## Documents
 
 `.vaescreen` and `.vaecomp` are XML (format 3). The element name is the node kind, the tree is the
