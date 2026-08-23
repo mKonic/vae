@@ -18,6 +18,18 @@ namespace vae {
         return Uuid(x ? x : 1ull);
     }
 
+    // FNV-1a over the name, then splitmix64's finalizer to spread the low bits — FNV alone leaves
+    // near-identical names ("vae.std/Button#3" and "#4") in adjacent buckets, and these ids are
+    // hashed again by the node map.
+    Uuid Uuid::FromName(std::string_view name) {
+        u64 x = 0xCBF29CE484222325ull;
+        for (unsigned char c : name) { x ^= c; x *= 0x100000001B3ull; }
+        x = (x ^ (x >> 30)) * 0xBF58476D1CE4E5B9ull;
+        x = (x ^ (x >> 27)) * 0x94D049BB133111EBull;
+        x ^= x >> 31;
+        return Uuid(x ? x : 1ull);
+    }
+
     namespace {
         std::mt19937_64& Engine() {
             // thread_local so parallel document loads cannot collide on the same stream.

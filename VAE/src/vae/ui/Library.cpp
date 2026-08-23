@@ -1512,68 +1512,75 @@ namespace vae::ui {
         InstallDefaultTokens(document);
 
         Library library;
-        library.components["Button"]    = BuildButton(document);
-        library.components["TextInput"] = BuildTextInput(document);
-        library.components["Checkbox"]  = BuildCheckLike(document, "Checkbox", Role::Checkbox, 4.0f, 4.0f, 2.0f);
-        library.components["Radio"]     = BuildCheckLike(document, "Radio", Role::Radio, 9.0f, 5.0f, 4.0f);
-        library.components["Switch"]    = BuildSwitch(document);
-        library.components["Slider"]    = BuildSlider(document);
-        library.components["Dropdown"]  = BuildDropdown(document);
-        library.components["Tabs"]      = BuildTabs(document);
-        library.components["Scroll"]    = BuildScroll(document);
-        library.components["List"]      = BuildList(document);
-        library.components["Table"]     = BuildTable(document);
-        library.components["Modal"]     = BuildModal(document);
-        library.components["Popover"]   = BuildPopover(document);
-        library.components["Toast"]     = BuildToast(document);
-        library.components["Router"]    = BuildRouter(document);
-        library.components["Icon"]      = BuildIcon(document);
-        library.components["Image"]     = BuildImage(document);
+        // Each widget gets its own id scope, so the catalog comes back on the same ids every time
+        // it is rebuilt and adding a widget cannot renumber the ones already in people's files.
+        auto Add = [&](const char* name, auto&& build) {
+            document.PushIdScope(std::string("vae.std/") + name);
+            library.components[name] = build(document);
+            document.PopIdScope();
+        };
+        Add("Button", BuildButton);
+        Add("TextInput", BuildTextInput);
+        Add("Checkbox", [](doc::Document& d) { return BuildCheckLike(d, "Checkbox", Role::Checkbox, 4.0f, 4.0f, 2.0f); });
+        Add("Radio", [](doc::Document& d) { return BuildCheckLike(d, "Radio", Role::Radio, 9.0f, 5.0f, 4.0f); });
+        Add("Switch", BuildSwitch);
+        Add("Slider", BuildSlider);
+        Add("Dropdown", BuildDropdown);
+        Add("Tabs", BuildTabs);
+        Add("Scroll", BuildScroll);
+        Add("List", BuildList);
+        Add("Table", BuildTable);
+        Add("Modal", BuildModal);
+        Add("Popover", BuildPopover);
+        Add("Toast", BuildToast);
+        Add("Router", BuildRouter);
+        Add("Icon", BuildIcon);
+        Add("Image", BuildImage);
 
         // Containers and the states an app spends most of its time in. All composition — frames,
         // text and the layout modes — which is what having a layout engine is for.
-        library.components["Card"]        = BuildCard(document);
-        library.components["Section"]     = BuildSection(document);
-        library.components["Separator"]   = BuildSeparator(document);
-        library.components["AspectRatio"] = BuildAspectRatio(document);
-        library.components["Grid"]        = BuildGridView(document);
-        library.components["Sidebar"]     = BuildSidebar(document);
-        library.components["Field"]       = BuildField(document);
-        library.components["ButtonGroup"] = BuildButtonGroup(document);
-        library.components["InputGroup"]  = BuildInputGroup(document);
-        library.components["Item"]        = BuildItem(document);
-        library.components["Badge"]       = BuildBadge(document);
-        library.components["Kbd"]         = BuildKbd(document);
-        library.components["Empty"]       = BuildEmpty(document);
-        library.components["Alert"]       = BuildAlert(document);
-        library.components["Skeleton"]    = BuildSkeleton(document);
-        library.components["Avatar"]      = BuildAvatar(document);
-        library.components["Breadcrumb"]  = BuildBreadcrumb(document);
-        library.components["Toggle"]      = BuildToggle(document);
+        Add("Card", BuildCard);
+        Add("Section", BuildSection);
+        Add("Separator", BuildSeparator);
+        Add("AspectRatio", BuildAspectRatio);
+        Add("Grid", BuildGridView);
+        Add("Sidebar", BuildSidebar);
+        Add("Field", BuildField);
+        Add("ButtonGroup", BuildButtonGroup);
+        Add("InputGroup", BuildInputGroup);
+        Add("Item", BuildItem);
+        Add("Badge", BuildBadge);
+        Add("Kbd", BuildKbd);
+        Add("Empty", BuildEmpty);
+        Add("Alert", BuildAlert);
+        Add("Skeleton", BuildSkeleton);
+        Add("Avatar", BuildAvatar);
+        Add("Breadcrumb", BuildBreadcrumb);
+        Add("Toggle", BuildToggle);
 
         // Behaviour, not composition: each of these needed a native half before the component
         // could exist. Together they are what a long page, a running task and a right-click are.
-        library.components["Collapsible"] = BuildCollapsible(document);
-        library.components["Accordion"]   = BuildAccordion(document);
-        library.components["Progress"]    = BuildProgress(document);
-        library.components["Spinner"]     = BuildSpinner(document);
-        library.components["Chart"]       = BuildChart(document);
-        library.components["InputOtp"]    = BuildInputOtp(document);
-        library.components["Carousel"]    = BuildCarousel(document);
-        library.components["Combobox"]    = BuildCombobox(document);
-        library.components["Calendar"]    = BuildCalendar(document);
-        library.components["Splitter"]    = BuildSplitter(document);
-        library.components["Tooltip"]     = BuildTooltip(document);
-        library.components["ContextMenu"] = BuildContextMenu(document);
+        Add("Collapsible", BuildCollapsible);
+        Add("Accordion", BuildAccordion);
+        Add("Progress", BuildProgress);
+        Add("Spinner", BuildSpinner);
+        Add("Chart", BuildChart);
+        Add("InputOtp", BuildInputOtp);
+        Add("Carousel", BuildCarousel);
+        Add("Combobox", BuildCombobox);
+        Add("Calendar", BuildCalendar);
+        Add("Splitter", BuildSplitter);
+        Add("Tooltip", BuildTooltip);
+        Add("ContextMenu", BuildContextMenu);
 
         // Menus, navigation, and the two things every page has that no input covers: text you can
         // copy out of, and a place to say more without clicking.
-        library.components["Menu"]           = BuildMenu(document);
-        library.components["Menubar"]        = BuildMenubar(document);
-        library.components["Navbar"]         = BuildNavbar(document);
-        library.components["Pagination"]     = BuildPagination(document);
-        library.components["Command"]        = BuildCommand(document);
-        library.components["HoverCard"]      = BuildHoverCard(document);
+        Add("Menu", BuildMenu);
+        Add("Menubar", BuildMenubar);
+        Add("Navbar", BuildNavbar);
+        Add("Pagination", BuildPagination);
+        Add("Command", BuildCommand);
+        Add("HoverCard", BuildHoverCard);
         return library;
     }
 

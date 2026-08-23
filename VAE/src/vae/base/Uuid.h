@@ -4,6 +4,7 @@
 
 #include <functional>
 #include <string>
+#include <string_view>
 
 namespace vae {
 
@@ -19,6 +20,11 @@ namespace vae {
         // a single document node, but every copy of the outer component puts a distinct one of it
         // on screen — so the pair (where it is, what it is) is the id, not the node alone.
         static Uuid Derive(Uuid context, Uuid node);
+        // A stable id for something rebuilt from code rather than authored. The standard widget
+        // catalog is compiled into the binary and re-created on every load, so its nodes have to
+        // land on the same ids every time — an instance's overrides are keyed by the id of the
+        // node INSIDE the component, and would go stale the moment the file was reopened.
+        static Uuid FromName(std::string_view name);
 
         std::string ToString() const;
         u64  Value() const { return m_Value; }
