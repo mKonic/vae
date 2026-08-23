@@ -2107,6 +2107,232 @@ TEST(ui, a_container_repeats_the_row_the_designer_styled) {
     CHECK(named("Row 2") == ui::ViewTree::kInvalid);
 }
 
+TEST(ui, rows_handed_to_a_container_become_the_rows_it_draws) {
+    Ui ui;
+    // A message list, the way it is actually drawn: a scroller holding a column, holding one row
+    // somebody designed. Nothing here is a List widget — the rows are frames and labels, and what
+    // makes them a list is the data behind them.
+    const Uuid scroller = ui.document.CreateNode(doc::NodeKind::Frame, ui.screen, "Scroll");
+    {
+        doc::Node* node = ui.document.Find(scroller);
+        node->layout.mode = layout::LayoutMode::Stack;
+        node->layout.axis = layout::Axis::Column;
+        node->layout.offsetStart = { 20.0f, 20.0f };
+        node->layout.width = layout::Size::Px(300.0f);
+        node->layout.height = layout::Size::Px(120.0f);
+        ui.document.SetProp(scroller, doc::Prop::ClipContent, true);
+        ui.document.SetProp(scroller, doc::Prop::Role, std::string("scroll"));
+    }
+    const Uuid list = ui.document.CreateNode(doc::NodeKind::Frame, scroller, "Messages");
+    {
+        doc::Node* node = ui.document.Find(list);
+        node->layout.mode = layout::LayoutMode::Stack;
+        node->layout.axis = layout::Axis::Column;
+        node->layout.gap = 6.0f;
+        node->layout.width = layout::Size::Fill();
+        node->layout.height = layout::Size::Hug();
+    }
+    const Uuid row = ui.document.CreateNode(doc::NodeKind::Frame, list, "Message");
+    {
+        doc::Node* node = ui.document.Find(row);
+        node->layout.mode = layout::LayoutMode::Stack;
+        node->layout.axis = layout::Axis::Column;
+        node->layout.width = layout::Size::Fill();
+        node->layout.height = layout::Size::Px(30.0f);
+    }
+    const Uuid author = ui.document.CreateNode(doc::NodeKind::Text, row, "Author");
+    ui.document.SetProp(author, doc::Prop::Field, std::string("author"));
+    ui.document.SetProp(author, doc::Prop::FontSize, 12.0f);
+    ui.Frame();
+
+    const auto named = [&](std::string_view name) {
+        const ui::ViewTree& tree = ui.host.Tree();
+        for (u32 i = 0; i < tree.ViewCount(); ++i)
+            if (tree.At(i).name == name) return i;
+        return ui::ViewTree::kInvalid;
+    };
+    const auto rowsOf = [&](Uuid node) { return WidgetId{ node, Uuid::Invalid() }; };
+    // A part of a copy is (name, row) away: every copy is the same node, so the name alone cannot
+    // say which one, and the row number is exactly what makes it unambiguous.
+    const auto part = [&](std::string_view name, i32 which) {
+        const ui::ViewTree& tree = ui.host.Tree();
+        for (u32 i = 0; i < tree.ViewCount(); ++i)
+            if (tree.At(i).name == name && tree.At(i).row == which) return i;
+        return ui::ViewTree::kInvalid;
+    };
+
+    // Nothing handed over yet: one row, exactly as drawn.
+    CHECK(named("Message") != ui::ViewTree::kInvalid);
+    CHECK(named("Message 1") == ui::ViewTree::kInvalid);
+
+    doc::RowTable table;
+    table.columns = { "author" };
+    table.cells = { "Ada", "Grace", "Alan", "Barbara" };
+    ui.host.Tree().SetRows(rowsOf(list), table);
+    ui.host.MarkDirty();
+    ui.Frame();
+
+    for (int i = 1; i <= 4; ++i) CHECK(named("Message " + std::to_string(i)) != ui::ViewTree::kInvalid);
+    CHECK(named("Message 5") == ui::ViewTree::kInvalid);
+    CHECK(named("Message") == ui::ViewTree::kInvalid);
+
+    // Each copy drew its own row's data, and they are stacked rather than piled up.
+    const ui::ViewTree& tree = ui.host.Tree();
+    const u32 first = named("Message 1");
+    const u32 last = named("Message 4");
+    CHECK(part("Author", 0) != ui::ViewTree::kInvalid);
+    CHECK(part("Author", 3) != ui::ViewTree::kInvalid);
+    CHECK(tree.Str(part("Author", 0), doc::Prop::Text) == std::string("Ada"));
+    CHECK(tree.Str(part("Author", 3), doc::Prop::Text) == std::string("Barbara"));
+    CHECK(tree.Bounds(last).pos.y > tree.Bounds(first).pos.y);
+
+    // Rows survive the rebuild they caused: handing them over dirties the tree, and a table that
+    // was forgotten in the rebuild would leave the list empty one frame later.
+    ui.host.MarkDirty();
+    ui.Frame();
+    CHECK(named("Message 4") != ui::ViewTree::kInvalid);
+    CHECK(ui.host.Tree().RowsOf(rowsOf(list)) != nullptr);
+
+    // A click anywhere inside a copy — on the label, not the row — can still say which copy.
+    const u32 label = part("Author", 2);
+    CHECK(label != ui::ViewTree::kInvalid);
+    const u32 owner = ui.host.Tree().RowOwner(label);
+    CHECK(owner != ui::ViewTree::kInvalid);
+    CHECK(owner == named("Message 3"));
+    CHECK_EQ(ui.host.Tree().At(owner).row, 2);
+    CHECK_EQ(ui.host.Tree().RowOwner(named("Scroll")), ui::ViewTree::kInvalid);
+
+    // Fewer rows is fewer copies, without anyone touching the document.
+    doc::RowTable shorter;
+    shorter.columns = { "author" };
+    shorter.cells = { "Ada" };
+    ui.host.Tree().SetRows(rowsOf(list), shorter);
+    ui.host.MarkDirty();
+    ui.Frame();
+    CHECK(named("Message 1") != ui::ViewTree::kInvalid);
+    CHECK(named("Message 2") == ui::ViewTree::kInvalid);
+
+    // And clearing them hands the container back to the designer.
+    ui.host.Tree().ClearRows(rowsOf(list));
+    ui.host.MarkDirty();
+    ui.Frame();
+    CHECK(named("Message") != ui::ViewTree::kInvalid);
+}
+
+TEST(ui, the_selected_row_is_the_copy_that_lights_up) {
+    Ui ui;
+    const Uuid list = ui.document.CreateNode(doc::NodeKind::Frame, ui.screen, "Channels");
+    {
+        doc::Node* node = ui.document.Find(list);
+        node->layout.mode = layout::LayoutMode::Stack;
+        node->layout.axis = layout::Axis::Column;
+        node->layout.offsetStart = { 20.0f, 20.0f };
+        node->layout.width = layout::Size::Px(200.0f);
+        node->layout.height = layout::Size::Hug();
+    }
+    const Uuid row = ui.document.CreateNode(doc::NodeKind::Frame, list, "Channel");
+    {
+        doc::Node* node = ui.document.Find(row);
+        node->layout.width = layout::Size::Fill();
+        node->layout.height = layout::Size::Px(28.0f);
+    }
+    // The one thing the designer says about selection: what a selected row looks like.
+    ui.document.SetProp(row, doc::Prop::Fill, Color{ 0.1f, 0.1f, 0.1f, 1.0f });
+    ui.document.Find(row)->props.Set("selected:fill", Color{ 0.9f, 0.2f, 0.2f, 1.0f });
+    ui.document.Touch(row);
+
+    doc::RowTable table;
+    table.columns = { "name" };
+    table.cells = { "general", "design", "engine" };
+    ui.host.Tree().SetRows(WidgetId{ list, Uuid::Invalid() }, table);
+    ui.document.SetProp(list, doc::Prop::SelectedIndex, 1.0f);
+    ui.host.MarkDirty();
+    ui.Settle();
+
+    const auto named = [&](std::string_view name) {
+        const ui::ViewTree& tree = ui.host.Tree();
+        for (u32 i = 0; i < tree.ViewCount(); ++i)
+            if (tree.At(i).name == name) return i;
+        return ui::ViewTree::kInvalid;
+    };
+
+    const ui::ViewTree& tree = ui.host.Tree();
+    CHECK(HasState(tree.At(named("Channel 2")).state, StateBit::Selected));
+    CHECK(!HasState(tree.At(named("Channel 1")).state, StateBit::Selected));
+    CHECK(!HasState(tree.At(named("Channel 3")).state, StateBit::Selected));
+
+    // And the overlay the designer drew is what it is painted with, which is the whole point of
+    // saying it in the document rather than in a script.
+    const doc::Value fill = tree.ResolvedProp(named("Channel 2"), doc::Prop::Fill);
+    CHECK(std::holds_alternative<Color>(fill));
+    if (std::holds_alternative<Color>(fill)) CHECK(std::get<Color>(fill).r > 0.5f);
+
+    ui.document.SetProp(list, doc::Prop::SelectedIndex, 2.0f);
+    ui.host.MarkDirty();
+    ui.Settle();
+    CHECK(HasState(ui.host.Tree().At(named("Channel 3")).state, StateBit::Selected));
+    CHECK(!HasState(ui.host.Tree().At(named("Channel 2")).state, StateBit::Selected));
+}
+
+TEST(ui, a_scroller_told_to_stay_at_the_end_waits_for_the_rows_that_move_it) {
+    Ui ui;
+    const Uuid scroller = ui.document.CreateNode(doc::NodeKind::Frame, ui.screen, "Scroll");
+    {
+        doc::Node* node = ui.document.Find(scroller);
+        node->layout.mode = layout::LayoutMode::Stack;
+        node->layout.axis = layout::Axis::Column;
+        node->layout.offsetStart = { 20.0f, 20.0f };
+        node->layout.width = layout::Size::Px(200.0f);
+        node->layout.height = layout::Size::Px(100.0f);
+        ui.document.SetProp(scroller, doc::Prop::ClipContent, true);
+        ui.document.SetProp(scroller, doc::Prop::Role, std::string("scroll"));
+    }
+    const Uuid list = ui.document.CreateNode(doc::NodeKind::Frame, scroller, "Messages");
+    {
+        doc::Node* node = ui.document.Find(list);
+        node->layout.mode = layout::LayoutMode::Stack;
+        node->layout.axis = layout::Axis::Column;
+        node->layout.width = layout::Size::Fill();
+        node->layout.height = layout::Size::Hug();
+    }
+    const Uuid row = ui.document.CreateNode(doc::NodeKind::Frame, list, "Message");
+    {
+        doc::Node* node = ui.document.Find(row);
+        node->layout.width = layout::Size::Fill();
+        node->layout.height = layout::Size::Px(40.0f);
+    }
+
+    const auto fill = [&](u32 count) {
+        doc::RowTable table;
+        table.columns = { "body" };
+        for (u32 i = 0; i < count; ++i) table.cells.push_back("line " + std::to_string(i));
+        ui.host.Tree().SetRows(WidgetId{ list, Uuid::Invalid() }, table);
+    };
+    const auto scrollView = [&] { return ui.host.Tree().ViewOf(WidgetId{ scroller, Uuid::Invalid() }); };
+
+    fill(5);
+    ui.host.MarkDirty();
+    ui.Frame();
+    CHECK_NEAR(ui.host.Tree().At(scrollView()).scroll.y, 0.0f);
+
+    // Told at the same moment the rows arrive. The rows that decide where the end *is* have not
+    // been laid out yet, so a scroller that obeyed immediately would land at the old end.
+    fill(20);
+    ui.host.Tree().KeepAtEnd(WidgetId{ scroller, Uuid::Invalid() });
+    ui.host.MarkDirty();
+    ui.Frame();
+
+    const u32 view = scrollView();
+    const f32 limit = ui.host.Tree().ContentSize(view).y - ui.host.Tree().Bounds(view).size.y;
+    CHECK(limit > 0.0f);
+    CHECK_NEAR(ui.host.Tree().At(view).scroll.y, limit);
+
+    // One request, not a lock: the user can scroll back up and stay there.
+    ui.host.Tree().SetScroll(view, { 0.0f, 0.0f });
+    ui.Frame();
+    CHECK_NEAR(ui.host.Tree().At(scrollView()).scroll.y, 0.0f);
+}
+
 // --------------------------------------------------------------------------- slots
 
 TEST(ui, an_instance_puts_its_own_children_in_the_components_slot) {
@@ -2525,4 +2751,194 @@ TEST(ui, a_calendar_lays_out_a_real_month_and_picks_a_day) {
         ui.host.Tree().FindAllRoles(ui.View(calendar), Role::Tab)[40]).Center());
     ui.Frame();
     CHECK_EQ(ui.Str(calendar, doc::Prop::Text), std::string("2026-03-20"));
+}
+
+// --------------------------------------------------- the catalog is named, not copied
+
+TEST(library, the_standard_catalog_is_not_written_into_the_file) {
+    // The whole point: 53 components and ~480 nodes are compiled into the binary, so a screen file
+    // holds the screen. Before this, they were 89% of every document.
+    doc::Document document;
+    const Library library = BuildStandardLibrary(document);
+    const Uuid screen = document.CreateNode(doc::NodeKind::Screen, Uuid::Invalid(), "Home");
+    document.CreateInstance(library.Find("Button"), screen);
+
+    const std::string named = doc::Serializer::ToJson(document, true, &StandardLibrary());
+    const std::string copied = doc::Serializer::ToJson(document);
+    CHECK(named.size() * 10 < copied.size());
+    CHECK(named.find("\"vae.std\"") != std::string::npos);
+
+    doc::Document loaded;
+    std::string error;
+    CHECK_MESSAGE(doc::Serializer::FromJson(named, loaded, &error, &StandardLibrary()), error);
+    // Same ids, so the instance still points at a Button that exists.
+    const Uuid button = library.Find("Button");
+    CHECK(loaded.Find(button) != nullptr);
+    CHECK(loaded.Find(screen) != nullptr);
+    CHECK_EQ(loaded.NodeCount(), document.NodeCount());
+}
+
+TEST(library, format_3_names_the_catalog_too) {
+    // The same saving, through the markup codec: a document says which library it uses and lets the
+    // binary rebuild it, rather than carrying 53 components it did not write.
+    doc::Document document;
+    const Library library = BuildStandardLibrary(document);
+    const Uuid screen = document.CreateNode(doc::NodeKind::Screen, Uuid::Invalid(), "Home");
+    document.CreateInstance(library.Find("Button"), screen);
+
+    const std::string named = doc::Serializer::ToXml(document, true, &StandardLibrary());
+    const std::string copied = doc::Serializer::ToXml(document);
+    CHECK(named.size() * 10 < copied.size());
+    CHECK(named.find("library=\"vae.std@") != std::string::npos);
+
+    doc::Document loaded;
+    std::string error;
+    CHECK_MESSAGE(doc::Serializer::FromXml(named, loaded, &error, &StandardLibrary()), error);
+    CHECK(loaded.Find(library.Find("Button")) != nullptr);
+    CHECK_EQ(loaded.NodeCount(), document.NodeCount());
+
+    // A document that needs a library and is handed none says so rather than half-loading.
+    doc::Document orphan;
+    std::string orphanError;
+    CHECK(!doc::Serializer::FromXml(named, orphan, &orphanError));
+    CHECK(orphanError.find("vae.std") != std::string::npos);
+}
+
+TEST(library, a_format_3_document_that_inlines_the_catalog_is_folded_on_load) {
+    // Written with no library, so every component is in the file; read with one, so they fold back
+    // down to a reference. Without this the saving would only apply to files written from here on.
+    doc::Document document;
+    const Library library = BuildStandardLibrary(document);
+    const Uuid screen = document.CreateNode(doc::NodeKind::Screen, Uuid::Invalid(), "Home");
+    document.CreateInstance(library.Find("Button"), screen);
+    const std::string copied = doc::Serializer::ToXml(document);
+
+    doc::Document loaded;
+    std::string error;
+    CHECK_MESSAGE(doc::Serializer::FromXml(copied, loaded, &error, &StandardLibrary()), error);
+    CHECK_EQ(loaded.NodeCount(), document.NodeCount());
+    CHECK(loaded.Find(library.Find("Button")) != nullptr);
+    // And it is the library's Button now, not the file's copy: saving again names it.
+    const std::string again = doc::Serializer::ToXml(loaded, true, &StandardLibrary());
+    CHECK(again.size() * 10 < copied.size());
+}
+
+TEST(library, a_forked_component_beats_the_built_one_in_format_3) {
+    doc::Document document;
+    const Library library = BuildStandardLibrary(document);
+    const Uuid button = library.Find("Button");
+    document.Find(button)->name = "Button";
+    document.SetProp(button, doc::Prop::CornerRadius, 99.0f);
+
+    const std::string xml = doc::Serializer::ToXml(document, true, &StandardLibrary());
+    doc::Document loaded;
+    std::string error;
+    CHECK_MESSAGE(doc::Serializer::FromXml(xml, loaded, &error, &StandardLibrary()), error);
+    CHECK_EQ(loaded.GetProp(button, doc::Prop::CornerRadius), doc::Value{ 99.0f });
+}
+
+TEST(library, the_catalog_comes_back_on_the_same_ids_every_time) {
+    // Overrides are keyed by the id of the node INSIDE the component. If a rebuild renumbered
+    // them, every instance in every saved file would quietly lose its overrides.
+    doc::Document first, second;
+    const Library a = BuildStandardLibrary(first);
+    const Library b = BuildStandardLibrary(second);
+    CHECK(a.Find("Button") == b.Find("Button"));
+    CHECK(first.Subtree(a.Find("Button")) == second.Subtree(b.Find("Button")));
+    CHECK(a.Find("Button") != a.Find("Card"));
+}
+
+TEST(library, a_document_without_the_library_available_says_so) {
+    doc::Document document;
+    BuildStandardLibrary(document);
+    const std::string json = doc::Serializer::ToJson(document, true, &StandardLibrary());
+
+    doc::Document loaded;
+    std::string error;
+    CHECK(!doc::Serializer::FromJson(json, loaded, &error));
+    CHECK(error.find("vae.std") != std::string::npos);
+}
+
+TEST(library, an_edited_component_is_written_out_and_wins_over_the_built_one) {
+    // A designer restyling Button is the case the reference must not swallow: the fork lives in
+    // the file that forked it, and reading it back must give the fork, not the stock widget.
+    doc::Document document;
+    const Library library = BuildStandardLibrary(document);
+    const Uuid button = library.Find("Button");
+    document.SetProp(button, doc::Prop::CornerRadius, 99.0f);
+
+    const std::string json = doc::Serializer::ToJson(document, true, &StandardLibrary());
+    CHECK(json.find("\"vae.std\"") != std::string::npos);
+
+    doc::Document loaded;
+    std::string error;
+    CHECK_MESSAGE(doc::Serializer::FromJson(json, loaded, &error, &StandardLibrary()), error);
+    CHECK_EQ(loaded.GetProp(button, doc::Prop::CornerRadius), doc::Value{ 99.0f });
+    // ...and exactly once: the built copy must not survive beside it.
+    CHECK_EQ(loaded.Subtree(button).size(), document.Subtree(button).size());
+    CHECK_EQ(std::count(loaded.Roots().begin(), loaded.Roots().end(), button), 1);
+}
+
+TEST(library, a_document_with_the_catalog_inlined_is_folded_down_on_load) {
+    // Every file written before format 2 carries its own copy of the catalog under ids that were
+    // random at the time. Reading one has to recognise the copy and rewrite what pointed into it,
+    // or the saving would only ever apply to files made from here on.
+    doc::Document document;
+    const Library library = BuildStandardLibrary(document);
+    const Uuid button = library.Find("Button");
+    const Uuid label = document.Find(button)->children.front();
+    const Uuid screen = document.CreateNode(doc::NodeKind::Screen, Uuid::Invalid(), "Home");
+    const Uuid instance = document.CreateInstance(button, screen);
+    document.SetOverride(instance, label, doc::Prop::Text, std::string("Send"));
+
+    // Stand in for an old file: the catalog inlined, under ids that are nothing like today's.
+    std::string json = doc::Serializer::ToJson(document);
+    for (Uuid id : document.Subtree(button)) {
+        const std::string was = id.ToString();
+        const std::string now = Uuid::FromName("old/" + was).ToString();
+        for (std::size_t at = json.find(was); at != std::string::npos; at = json.find(was, at))
+            json.replace(at, was.size(), now);
+    }
+    CHECK(json.find(button.ToString()) == std::string::npos);
+
+    doc::Document loaded;
+    std::string error;
+    CHECK_MESSAGE(doc::Serializer::FromJson(json, loaded, &error, &StandardLibrary()), error);
+
+    // The copy is gone, the real Button is back, and the instance still points at it with its
+    // override intact — which is the only thing that could have been silently lost.
+    CHECK(loaded.Find(button) != nullptr);
+    CHECK_EQ(std::count(loaded.Roots().begin(), loaded.Roots().end(), button), 1);
+    CHECK(loaded.Find(instance) != nullptr);
+    CHECK(loaded.Find(instance)->componentId == button);
+    CHECK_EQ(loaded.ResolvedProps(instance, label).Text(doc::Prop::Text), std::string("Send"));
+    CHECK_EQ(loaded.NodeCount(), document.NodeCount());
+
+    // Saved again, it is now a reference like any other document.
+    const std::string again = doc::Serializer::ToJson(loaded, true, &StandardLibrary());
+    CHECK(again.size() * 10 < json.size());
+}
+
+TEST(library, an_inlined_component_the_designer_edited_stays_inlined) {
+    // The mirror of the case above: an old file whose Button was restyled is not the stock widget
+    // and must not be replaced by it.
+    doc::Document document;
+    const Library library = BuildStandardLibrary(document);
+    const Uuid button = library.Find("Button");
+    document.SetProp(button, doc::Prop::CornerRadius, 99.0f);
+
+    std::string json = doc::Serializer::ToJson(document);
+    for (Uuid id : document.Subtree(button)) {
+        const std::string was = id.ToString();
+        const std::string now = Uuid::FromName("old/" + was).ToString();
+        for (std::size_t at = json.find(was); at != std::string::npos; at = json.find(was, at))
+            json.replace(at, was.size(), now);
+    }
+
+    doc::Document loaded;
+    std::string error;
+    CHECK_MESSAGE(doc::Serializer::FromJson(json, loaded, &error, &StandardLibrary()), error);
+    const Uuid forked = Uuid::FromName("old/" + button.ToString());
+    CHECK(loaded.Find(forked) != nullptr);
+    CHECK_EQ(loaded.GetProp(forked, doc::Prop::CornerRadius), doc::Value{ 99.0f });
 }

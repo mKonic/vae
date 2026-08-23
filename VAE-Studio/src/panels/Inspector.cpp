@@ -133,9 +133,18 @@ namespace vae {
                 ImGui::PopID();
 
                 // How many times its first child is drawn. One row styled by hand and a number
-                // here is the whole of "this list has data in it"; a script sets the same number.
+                // here is the whole of "this list has data in it"; a script sets the same number,
+                // and rows handed over at runtime say how many there really are.
                 fields::Number(state, id, "Repeat", doc::Prop::Repeat, 0.0f, 1.0f, 0.0f, 2000.0f);
             }
+
+            // Which column of a row this node draws. Only means anything inside a repeated
+            // container, which is where a node is drawn once per row rather than once.
+            //
+            // "body" fills whatever this node naturally shows — text on a label, the picture on an
+            // image. "fill:tint" names the property outright, and the cell is read as that property
+            // is: a hex triple is a colour, anything else is a token, an empty cell is false.
+            fields::Text(state, id, "Field", doc::Prop::Field, "column, or prop:column");
 
             // What it looks like while the pointer is on it. Without this a button recoloured red
             // still hovers whatever colour the library authored, because "hovered:fill" is a

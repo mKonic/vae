@@ -8,6 +8,7 @@
 #include "vae/ui/Widget.h"
 
 #include <map>
+#include <set>
 
 namespace vae::text { class GlyphAtlas; }
 
@@ -73,6 +74,9 @@ namespace vae::ui {
             // One of a repeated container's copies. What a widget changes about it is kept here
             // rather than written to the document, because every copy is the same document node.
             bool repeated = false;
+            i32  row = -1;                   // which copy, or -1 outside one
+            bool rowRoot = false;            // the copy itself, not something drawn inside it
+
             bool visible = true;
             bool clip = false;
             Behavior* behavior = nullptr;    // owned by m_Behaviors; stable across vector growth
@@ -136,6 +140,22 @@ namespace vae::ui {
         void SetViewPropLocal(u32 view, doc::Prop prop, doc::Value value);
 
         void SetState(u32 view, StateBit bit, bool on);
+
+        // --- rows ---------------------------------------------------------------------------------
+        // What a repeated container repeats over. Kept here rather than in the document because
+        // rows are data an app is showing, not a design anyone drew — and, like scroll offsets,
+        // they have to survive the rebuild that showing them causes.
+        void SetRows(WidgetId widget, doc::RowTable rows);
+        void ClearRows(WidgetId widget);
+        const doc::RowTable* RowsOf(WidgetId widget) const;
+        // The copy a view is part of, or kInvalid. The innermost one: a click on a label inside
+        // the third message of the second channel happened in the third message, and that is what
+        // it should be able to say.
+        u32 RowOwner(u32 view) const;
+        // "Keep this scroller at the bottom." Deferred to the next layout on purpose: the rows
+        // that make it taller do not exist yet when a script asks — it has only just handed them
+        // over — so scrolling now would scroll to the end of the list as it was.
+        void KeepAtEnd(WidgetId widget);
 
         // --- motion ------------------------------------------------------------------------------
         // State changes ease rather than snap. A button whose fill jumps between rest and hover
@@ -209,6 +229,10 @@ namespace vae::ui {
         // What a widget changed about a repeated copy. Keyed the same way scroll is, and kept for
         // the same reason: the copy has no node of its own, and a rebuild must not forget it.
         std::map<WidgetId, doc::PropBag> m_RuntimeProps;
+        // The rows behind each repeated container, by the container's identity.
+        std::map<WidgetId, doc::RowTable> m_Rows;
+        // Scrollers asked to sit at the end once the layout that decides where that is has run.
+        std::set<WidgetId> m_ScrollToEnd;
         // Which properties are worth easing: the ones a state overlay can change, that have
         // something to interpolate. A token resolves to a colour before it gets here.
         static const std::vector<doc::Prop>& Animatable();

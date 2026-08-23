@@ -385,6 +385,35 @@ struct Feed : vae::Script {
 };
 
 VAE_SCRIPT(Feed, "Feed")
+
+// A repeated container the designer drew one row of, driven by named columns. Nothing here says
+// what a row looks like — that is in the document — and nothing in the document says how many
+// there are or what they say, which is here.
+struct Roster : vae::Script {
+    void OnMount() override {
+        vae::Rows rows({ "name", "tint", "online" });
+        rows.Add({ "Ada", "#ff8800", "1" });
+        rows.Add({ "Grace", "accent", "1" });
+        rows.Add({ "Alan", "accent", "" });
+        self["People"].SetRows(rows);
+        self["Picked"].SetText("text", "none");
+        self["Search"].Focus();
+    }
+    void OnEvent(const vae::Event& event) override {
+        // Which row, not which node: every copy is the same node, so the name cannot say.
+        if (event.ClickedRow("People")) {
+            self["Picked"].SetText("text", std::to_string(event.row));
+            self.SetState("picked", event.row);
+            self["People"].SetNumber("selectedIndex", event.row);
+        }
+        if (event.Is(VAE_EVENT_SUBMITTED)) {
+            self["Picked"].SetText("text", std::string("typed ") + event.text);
+            self["Scroller"].ScrollToEnd();
+        }
+    }
+};
+
+VAE_SCRIPT(Roster, "Roster")
 )";
 
     // A module that is shaped right and answers with the wrong ABI. The engine has to refuse it,
@@ -438,6 +467,29 @@ vae.component("Lister", {
   end,
   on_event = function(self, event)
     if event.kind == "clicked" then self:clear_rows("Rows") end
+  end,
+})
+
+vae.component("Roster", {
+  on_mount = function(self)
+    self:set_rows("People", {
+        { name = "Ada",   tint = "#ff8800", online = "1" },
+        { name = "Grace", tint = "accent",  online = "1" },
+        { name = "Alan",  tint = "accent",  online = "" },
+    })
+    self:set_text("Picked", "text", "none")
+    self:focus("Search")
+  end,
+  on_event = function(self, event)
+    if event.kind == "clicked" and event.list == "People" then
+      self:set_text("Picked", "text", tostring(event.row))
+      self:set_state("picked", event.row)
+      self:set_number("People", "selectedIndex", event.row)
+    end
+    if event.kind == "submitted" then
+      self:set_text("Picked", "text", "typed " .. event.text)
+      self:scroll_to_end("Scroller")
+    end
   end,
 })
 
@@ -584,9 +636,9 @@ TEST(script, a_script_runs_on_mount_and_on_click) {
         Scope<script::Host> host = MakeHost(lang, &error);
         CHECK_MESSAGE(host != nullptr, std::string(Name(lang)) + ": " + error);
         if (!host) continue;
-        // Counter, Ticker, Reacher, Speaker, Panel, Lister and Feed: one module, several
+        // Counter, Ticker, Reacher, Speaker, Panel, Lister, Feed and Roster: one module, several
         // components.
-        CHECK(host->Components().size() == 7);
+        CHECK(host->Components().size() == 8);
 
         Scripted ui;
         ui.runtime.AddHost(std::move(host));
@@ -979,6 +1031,190 @@ TEST(script, a_script_fills_a_list_the_designer_only_styled) {
     frame();
     CHECK(ui.DataSource(ui::WidgetId{ tree.At(list).sourceId, tree.At(list).instanceId })
           == nullptr);
+  }
+}
+
+// The whole point of a repeated container: a designer draws one row, a script says what the rows
+// are, and neither has to know the other's half. The test proves the seam in both directions —
+// the data reaches the drawing, and a click on the drawing reaches the script as a row number.
+TEST(script, a_designed_row_is_drawn_once_per_row_the_script_hands_over) {
+  for (const Lang lang : { Lang::Cpp, Lang::Lua }) {
+    std::string error;
+    Scope<script::Host> host = MakeHost(lang, &error);
+    CHECK_MESSAGE(host != nullptr, std::string(Name(lang)) + ": " + error);
+    if (!host) continue;
+
+    doc::Document document;
+    const vae::ui::Library library = vae::ui::BuildStandardLibrary(document);
+
+    const Uuid screen = document.CreateNode(doc::NodeKind::Screen, Uuid::Invalid(), "Roster");
+    {
+        doc::Node* node = document.Find(screen);
+        node->layout.mode = layout::LayoutMode::Absolute;
+        node->layout.width = layout::Size::Px(400.0f);
+        node->layout.height = layout::Size::Px(300.0f);
+    }
+
+    const Uuid scroller = document.CreateNode(doc::NodeKind::Frame, screen, "Scroller");
+    {
+        doc::Node* node = document.Find(scroller);
+        node->layout.mode = layout::LayoutMode::Stack;
+        node->layout.axis = layout::Axis::Column;
+        node->layout.offsetStart = { 10.0f, 10.0f };
+        node->layout.width = layout::Size::Px(220.0f);
+        node->layout.height = layout::Size::Px(60.0f);
+        document.SetProp(scroller, doc::Prop::ClipContent, true);
+        document.SetProp(scroller, doc::Prop::Role, std::string(ui::RoleName(ui::Role::Scroll)));
+    }
+    const Uuid people = document.CreateNode(doc::NodeKind::Frame, scroller, "People");
+    {
+        doc::Node* node = document.Find(people);
+        node->layout.mode = layout::LayoutMode::Stack;
+        node->layout.axis = layout::Axis::Column;
+        node->layout.width = layout::Size::Fill();
+        node->layout.height = layout::Size::Hug();
+    }
+    // One row, drawn once, styled once — including what it looks like when it is the chosen one.
+    const Uuid person = document.CreateNode(doc::NodeKind::Frame, people, "Person");
+    {
+        doc::Node* node = document.Find(person);
+        node->layout.mode = layout::LayoutMode::Stack;
+        node->layout.axis = layout::Axis::Row;
+        node->layout.width = layout::Size::Fill();
+        node->layout.height = layout::Size::Px(24.0f);
+        document.SetProp(person, doc::Prop::Role, std::string(ui::RoleName(ui::Role::Button)));
+        document.SetProp(person, doc::Prop::Field, std::string("fill:tint"));
+        node->props.Set("selected:fill", Color{ 0.0f, 1.0f, 0.0f, 1.0f });
+        document.Touch(person);
+    }
+    const Uuid personName = document.CreateNode(doc::NodeKind::Text, person, "Name");
+    document.SetProp(personName, doc::Prop::Field, std::string("name"));
+    document.SetProp(personName, doc::Prop::FontSize, 12.0f);
+    const Uuid dot = document.CreateNode(doc::NodeKind::Frame, person, "Dot");
+    {
+        doc::Node* node = document.Find(dot);
+        node->layout.width = layout::Size::Px(8.0f);
+        node->layout.height = layout::Size::Px(8.0f);
+        document.SetProp(dot, doc::Prop::Visible, true);
+        document.SetProp(dot, doc::Prop::Field, std::string("visible:online"));
+    }
+
+    const Uuid picked = document.CreateNode(doc::NodeKind::Text, screen, "Picked");
+    document.Find(picked)->layout.offsetStart = { 10.0f, 200.0f };
+    document.SetProp(picked, doc::Prop::Text, std::string("-"));
+
+    const Uuid search = document.CreateInstance(library.Find("TextInput"), screen);
+    document.Find(search)->name = "Search";
+    document.Find(search)->layout.offsetStart = { 10.0f, 240.0f };
+    document.Touch(search);
+
+    ui::UiHost ui;
+    ui.SetDocument(document, screen);
+    script::Runtime runtime;
+    runtime.Attach(ui, document);
+    runtime.AddHost(std::move(host));
+
+    const Vec2 size{ 400.0f, 300.0f };
+    const auto frame = [&] {
+        runtime.Dispatch(ui.TakeActions());
+        ui.Update(size, 1.0f / 60.0f);
+        runtime.Sync();
+        runtime.Update(1.0f / 60.0f);
+    };
+    frame();
+    frame();
+
+    const auto viewNamed = [&](std::string_view name) {
+        const ui::ViewTree& tree = ui.Tree();
+        for (u32 i = 0; i < tree.ViewCount(); ++i)
+            if (tree.At(i).name == name) return i;
+        return ui::ViewTree::kInvalid;
+    };
+    const auto part = [&](std::string_view name, i32 row) {
+        const ui::ViewTree& tree = ui.Tree();
+        for (u32 i = 0; i < tree.ViewCount(); ++i)
+            if (tree.At(i).name == name && tree.At(i).row == row) return i;
+        return ui::ViewTree::kInvalid;
+    };
+    const std::string who(Name(lang));
+    // A missing view is a failure to report, not a crash to debug.
+    const auto textAt = [&](u32 view) {
+        return view == ui::ViewTree::kInvalid ? std::string("<missing>")
+                                              : ui.Tree().Str(view, doc::Prop::Text);
+    };
+
+    // Three rows the document never mentioned, and the row the designer drew is gone: it was the
+    // template, not one of the answers.
+    CHECK_MESSAGE(viewNamed("Person 3") != ui::ViewTree::kInvalid, who + ": no third row");
+    CHECK(viewNamed("Person 4") == ui::ViewTree::kInvalid);
+    CHECK(viewNamed("Person") == ui::ViewTree::kInvalid);
+
+    // Each part of each copy drew its own row's cell.
+    CHECK_MESSAGE(textAt(part("Name", 0)) == "Ada", who + ": " + textAt(part("Name", 0)));
+    CHECK(textAt(part("Name", 2)) == "Alan");
+    // A hex cell is a colour and a bare one is a token: the same column feeds both.
+    // A copy is named for its place; everything inside it keeps the name it was drawn with.
+    const u32 firstRow = viewNamed("Person 1");
+    const u32 secondRow = viewNamed("Person 2");
+    CHECK_MESSAGE(firstRow != ui::ViewTree::kInvalid && secondRow != ui::ViewTree::kInvalid,
+                  who + ": the rows are not there");
+    if (firstRow == ui::ViewTree::kInvalid || secondRow == ui::ViewTree::kInvalid) continue;
+    const doc::Value* first = ui.Tree().At(firstRow).props.Find(doc::Prop::Fill);
+    CHECK(first && std::holds_alternative<Color>(*first));
+    const doc::Value* second = ui.Tree().At(secondRow).props.Find(doc::Prop::Fill);
+    CHECK(second && std::holds_alternative<doc::TokenRef>(*second));
+    // And an empty cell is a false: Alan's presence dot is not drawn.
+    CHECK(ui.Tree().Flag(part("Dot", 0), doc::Prop::Visible));
+    CHECK(!ui.Tree().At(part("Dot", 2)).props.Flag(doc::Prop::Visible, true));
+
+    // The script asked for focus by name and got it, so the app is typeable without a click.
+    CHECK_MESSAGE(ui.Focused() != ui::ViewTree::kInvalid, who + ": nothing was focused");
+
+    // A click on the *label* inside the second row. Not the row's own frame: a click lands on
+    // whatever is under it, and the answer must still be "row 1 of People".
+    {
+        const Rect box = ui.Tree().Bounds(part("Name", 1));
+        const Vec2 point = box.Center();
+        ui.Dispatch(MakeMouseMoved(point.x, point.y));
+        ui.Dispatch(MakeMouseButton(EventType::MouseButtonPressed, Mouse::Left,
+                                    point.x, point.y, Mod::None));
+        ui.Dispatch(MakeMouseButton(EventType::MouseButtonReleased, Mouse::Left,
+                                    point.x, point.y, Mod::None));
+    }
+    frame();
+    frame();
+    CHECK_MESSAGE(textAt(viewNamed("Picked")) == "1", who + ": " + textAt(viewNamed("Picked")));
+
+    // Saying so lights up the row the designer styled for it, and no other.
+    CHECK_MESSAGE(ui::HasState(ui.Tree().At(viewNamed("Person 2")).state, ui::StateBit::Selected),
+                  who + ": the picked row is not selected");
+    CHECK(!ui::HasState(ui.Tree().At(viewNamed("Person 1")).state, ui::StateBit::Selected));
+
+    // Typing into the field and pressing Enter: the script hears it, and the scroller it asks
+    // for lands at the end of what is in it now. Clicked into first — picking a row moved the
+    // focus the script set on mount, which is what a click on a button is supposed to do.
+    {
+        const Vec2 point = ui.Tree().Bounds(viewNamed("Search")).Center();
+        ui.Dispatch(MakeMouseMoved(point.x, point.y));
+        ui.Dispatch(MakeMouseButton(EventType::MouseButtonPressed, Mouse::Left,
+                                    point.x, point.y, Mod::None));
+        ui.Dispatch(MakeMouseButton(EventType::MouseButtonReleased, Mouse::Left,
+                                    point.x, point.y, Mod::None));
+    }
+    frame();
+    ui.Dispatch(MakeTextInput('h'));
+    ui.Dispatch(MakeTextInput('i'));
+    ui.Dispatch(MakeKey(EventType::KeyPressed, Key::Enter, Mod::None));
+    frame();
+    frame();
+    CHECK_MESSAGE(textAt(viewNamed("Picked")) == "typed hi",
+                  who + ": " + textAt(viewNamed("Picked")));
+
+    const u32 scrollView = viewNamed("Scroller");
+    const f32 limit = ui.Tree().ContentSize(scrollView).y - ui.Tree().Bounds(scrollView).size.y;
+    CHECK(limit > 0.0f);
+    CHECK_MESSAGE(std::abs(ui.Tree().At(scrollView).scroll.y - limit) < 0.5f,
+                  who + ": the scroller did not reach the end");
   }
 }
 

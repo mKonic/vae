@@ -17,7 +17,7 @@ extern "C" {
 #endif
 
 /* Bumped whenever anything below changes shape. The host refuses a script that does not match. */
-#define VAE_SCRIPT_ABI_VERSION 4u
+#define VAE_SCRIPT_ABI_VERSION 5u
 
 /* The script's "self": one component instance. Opaque — the engine owns what is behind it. */
 typedef struct VaeInstanceOpaque* VaeInstance;
@@ -60,6 +60,11 @@ typedef struct VaeEvent {
     const char* name;      /* timer or signal name, "" otherwise */
     double      number;    /* the numeric payload, 0 when there is none */
     const char* text;      /* the text payload, "" when there is none */
+    /* Where it happened, when it happened inside a repeated container: the container's name and
+     * which copy, counting from zero. A click in a list is "the third channel", not "the node
+     * called Channel 3" — and `source` cannot say that, because every copy shares one node. */
+    const char* list;      /* the repeated container's name, "" outside one */
+    int         row;       /* which copy, or -1 outside one */
 } VaeEvent;
 
 /* Every pointer is non-null for a valid host. Strings returned by the engine point at storage the
@@ -144,8 +149,22 @@ typedef struct VaeScriptAPI {
 
     void (*set_rows)  (VaeInstance, const char* node, const char* const* cells,
                        int rows, int columns);
+    /* The same rows with their columns named, which is what a repeated container needs: the
+     * template says which column each part of it draws ("author", "body"), and a position would
+     * break the moment a column moved. `columns` is `columnCount` names; `cells` is row-major and
+     * that many wide. */
+    void (*set_named_rows)(VaeInstance, const char* node, const char* const* columns,
+                           int columnCount, const char* const* cells, int rows);
     void (*clear_rows)(VaeInstance, const char* node);
     int  (*row_count) (VaeInstance, const char* node);
+
+    /* --- where a scroller is, and what has the keyboard -----------------------------------------
+     * Both are facts about the running app rather than about the design, so neither is a property
+     * a designer would find on a node. A chat that does not scroll to the newest message, or that
+     * makes you click the box before you can type, is broken in a way no styling fixes. */
+    void (*scroll_to)    (VaeInstance, const char* node, double y);
+    void (*scroll_to_end)(VaeInstance, const char* node);
+    void (*focus)        (VaeInstance, const char* node);
 
     /* --- sound ----------------------------------------------------------------------------------
      * By the name the sound was imported under, because that is what the Assets panel shows and

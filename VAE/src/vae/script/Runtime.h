@@ -153,7 +153,13 @@ namespace vae::script {
         u32 ViewFor(const Record& record, const char* node) const;
         // What a widget's state is keyed on, for the view a name resolved to.
         ui::WidgetId WidgetOf(u32 view) const;
+        static ui::WidgetId WidgetIn(const ui::ViewTree& tree, u32 view);
         struct Rows;
+        // Rows onto a node, whichever kind of thing it is: a virtualized list reads them through
+        // the host, a repeated container out of the tree it is rebuilt from. Empty columns clear.
+        void PutRows(Record& record, const char* node, std::vector<std::string> columns,
+                     const char* const* cells, u32 total);
+        void ScrollTo(Record& record, const char* node, f32 y, bool toEnd);
         // Which instance asked for each live connection, so its messages go to the script that
         // wanted them and stop when that script leaves the screen.
         void PumpSockets();

@@ -283,14 +283,53 @@ namespace vae::script {
             return m_Api->socket_live(handleOf(self), name.c_str()) != 0;
         });
 
-        // Rows for a list or a table: `{ "a", "b" }` for one column, `{ {"a","b"}, ... }` for
-        // several. Sequences either way, because that is what a table of rows looks like in Lua
-        // and asking for a struct per row would be a shape nobody would type twice.
+        // Rows for a list, a table or a repeated container: `{ "a", "b" }` for one column,
+        // `{ {"a","b"}, ... }` for several, and `{ {author="Ada", body="hi"}, ... }` when the row
+        // template names what it draws. Sequences either way, because that is what a table of rows
+        // looks like in Lua and asking for a struct per row would be a shape nobody would type
+        // twice — but a record row is exactly what a designed row wants, so both are read.
         base.set_function("set_rows", [this, handleOf](sol::table self, std::string node,
                                                        sol::table rows) {
+            const std::size_t count = rows.size();
+
+            // Named columns, if the rows are records. The union across every row, sorted, so a row
+            // that leaves a column out is a blank cell rather than a different shape of table.
+            std::vector<std::string> names;
+            for (std::size_t r = 1; r <= count; ++r) {
+                sol::optional<sol::table> row = rows[r];
+                if (!row) continue;
+                for (const auto& [key, value] : *row) {
+                    if (key.get_type() != sol::type::string) continue;
+                    std::string name = key.as<std::string>();
+                    if (std::find(names.begin(), names.end(), name) == names.end())
+                        names.push_back(std::move(name));
+                }
+            }
+            if (!names.empty()) {
+                std::sort(names.begin(), names.end());
+                std::vector<std::string> owned;
+                owned.reserve(count * names.size());
+                for (std::size_t r = 1; r <= count; ++r) {
+                    sol::optional<sol::table> row = rows[r];
+                    for (const std::string& name : names)
+                        owned.push_back(row ? row->get_or(name, std::string{}) : std::string{});
+                }
+
+                std::vector<const char*> columns;
+                columns.reserve(names.size());
+                for (const std::string& name : names) columns.push_back(name.c_str());
+                std::vector<const char*> flatNamed;
+                flatNamed.reserve(owned.size());
+                for (const std::string& cell : owned) flatNamed.push_back(cell.c_str());
+
+                m_Api->set_named_rows(handleOf(self), node.c_str(), columns.data(),
+                                      static_cast<int>(columns.size()), flatNamed.data(),
+                                      static_cast<int>(count));
+                return;
+            }
+
             std::vector<std::string> cells;
             std::size_t columns = 1;
-            const std::size_t count = rows.size();
             for (std::size_t r = 1; r <= count; ++r)
                 if (sol::optional<sol::table> row = rows[r]; row)
                     columns = std::max(columns, row->size());
@@ -344,6 +383,19 @@ namespace vae::script {
         });
         base.set_function("row_count", [this, handleOf](sol::table self, std::string node) {
             return m_Api->row_count(handleOf(self), node.c_str());
+        });
+
+        // Where a scroller is, and what has the keyboard. Both are facts about the running app
+        // rather than the design, which is why neither is a property on a node.
+        base.set_function("scroll_to", [this, handleOf](sol::table self, std::string node,
+                                                        double y) {
+            m_Api->scroll_to(handleOf(self), node.c_str(), y);
+        });
+        base.set_function("scroll_to_end", [this, handleOf](sol::table self, std::string node) {
+            m_Api->scroll_to_end(handleOf(self), node.c_str());
+        });
+        base.set_function("focus", [this, handleOf](sol::table self, std::string node) {
+            m_Api->focus(handleOf(self), node.c_str());
         });
 
         // vae.component(name, class) — the Lua half of VAE_SCRIPT.
@@ -462,6 +514,9 @@ namespace vae::script {
         event["name"]   = raw->name   ? raw->name   : "";
         event["number"] = raw->number;
         event["text"]   = raw->text   ? raw->text   : "";
+        // Which row of which list, when it happened inside a repeated container.
+        event["list"]   = raw->list   ? raw->list   : "";
+        event["row"]    = raw->row;
 
         const sol::protected_function_result result = (*fn)(it->second, event);
         if (!result.valid()) {

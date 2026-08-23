@@ -8,6 +8,21 @@
 namespace vae::script {
 
     namespace {
+        // An event with nothing in it. Everything the engine raises starts here, so a field
+        // nobody filled in reads as absent rather than as row zero of a list called "".
+        VaeEvent BlankEvent() {
+            VaeEvent event{};
+            event.source = "";
+            event.name = "";
+            event.text = "";
+            event.list = "";
+            event.row = -1;
+            return event;
+        }
+    }
+
+
+    namespace {
 
         VaeEventKind KindOf(ui::ActionKind kind) {
             switch (kind) {
@@ -247,7 +262,7 @@ namespace vae::script {
 
             Record& record = *found->second;
             socket->Pump([&](const svc::Socket::Event& incoming) {
-                VaeEvent event{};
+                VaeEvent event = BlankEvent();
                 event.source = "";
                 event.name = name.c_str();
                 event.number = 0.0;
@@ -290,7 +305,7 @@ namespace vae::script {
             if (fired.empty()) continue;
             std::erase_if(record->timers, [](const Timer& t) { return t.remaining <= 0.0f; });
             for (const std::string& name : fired) {
-                VaeEvent event{};
+                VaeEvent event = BlankEvent();
                 event.kind = VAE_EVENT_TIMER;
                 event.source = "";
                 event.name = name.c_str();
@@ -307,7 +322,7 @@ namespace vae::script {
             for (const Signal& signal : pending) {
                 for (auto& [instance, record] : m_Live) {
                     if (instance == signal.from) continue;
-                    VaeEvent event{};
+                    VaeEvent event = BlankEvent();
                     event.kind = VAE_EVENT_SIGNAL;
                     event.source = "";
                     event.name = signal.name.c_str();
@@ -356,12 +371,30 @@ namespace vae::script {
             Record& record = *receiver;
 
             const std::string text = TextOf(action.value);
-            VaeEvent event{};
+            VaeEvent event = BlankEvent();
             event.kind   = KindOf(action.kind);
             event.source = action.name.c_str();
             event.name   = "";
             event.number = NumberOf(action.value);
             event.text   = text.c_str();
+
+            // Which row of which list, when it happened inside one. Every copy of a repeated
+            // container shares one document node, so the name of the thing clicked cannot say
+            // which copy it was and the index has to travel beside it.
+            std::string list;
+            if (m_Host) {
+                for (ui::ViewTree* tree : m_Host->Trees()) {
+                    const u32 view = tree->ViewOf(ui::WidgetId{ action.source, action.instance });
+                    if (view == ui::ViewTree::kInvalid) continue;
+                    if (const u32 copy = tree->RowOwner(view); copy != ui::ViewTree::kInvalid) {
+                        event.row = tree->At(copy).row;
+                        const u32 owner = tree->At(copy).parent;
+                        if (owner != ui::ViewTree::kInvalid) list = tree->At(owner).name;
+                    }
+                    break;
+                }
+            }
+            event.list = list.c_str();
             Deliver(record, event);
         }
     }
@@ -403,24 +436,87 @@ namespace vae::script {
         return view;
     }
 
-    // Rows a script handed over, kept flat: a table of tables would be a pointer chase per cell
-    // for no gain, and the widget only ever asks for one cell at a time.
+    // A virtualized list's view of the same rows a repeated container gets. One table, two
+    // readers: the widget that draws its own rows asks a cell at a time, the container flattens
+    // the whole thing into copies.
     struct Runtime::Rows final : public ui::UiHost::ListDataSource {
-        std::vector<std::string> cells;
-        u32 columns = 1;
+        doc::RowTable table;
 
-        u32 Count() const override {
-            return columns == 0 ? 0u : static_cast<u32>(cells.size() / columns);
-        }
+        u32 Count() const override { return table.Count(); }
         std::string Cell(u32 row, u32 column) const override {
-            const std::size_t at = static_cast<std::size_t>(row) * columns + column;
-            return column < columns && at < cells.size() ? cells[at] : std::string{};
+            return std::string(table.Cell(row, column));
         }
     };
 
     ui::WidgetId Runtime::WidgetOf(u32 view) const {
         const ui::ViewTree::View& node = m_Host->Tree().At(view);
         return ui::WidgetId{ node.sourceId, node.instanceId };
+    }
+
+    ui::WidgetId Runtime::WidgetIn(const ui::ViewTree& tree, u32 view) {
+        const ui::ViewTree::View& node = tree.At(view);
+        return ui::WidgetId{ node.sourceId, node.instanceId };
+    }
+
+    void Runtime::PutRows(Record& record, const char* node, std::vector<std::string> columns,
+                          const char* const* cells, u32 total) {
+        u32 root = ui::ViewTree::kInvalid;
+        ui::ViewTree* tree = TreeOf(record, &root);
+        const u32 view = ViewFor(record, node);
+        if (!tree || view == ui::ViewTree::kInvalid || !m_Host) return;
+
+        const ui::WidgetId widget = WidgetIn(*tree, view);
+        if (columns.empty()) {
+            tree->ClearRows(widget);
+            m_Host->SetDataSource(widget, nullptr);
+            m_Host->MarkDirty();
+            return;
+        }
+
+        doc::RowTable table;
+        table.columns = std::move(columns);
+        table.cells.reserve(total);
+        for (u32 i = 0; i < total; ++i)
+            table.cells.emplace_back(cells && cells[i] ? cells[i] : "");
+
+        auto source = CreateRef<Rows>();
+        source->table = table;
+        m_Host->SetDataSource(widget, std::move(source));
+        tree->SetRows(widget, std::move(table));
+        // The copies are made when the tree is rebuilt, and the tree is rebuilt because of this.
+        m_Host->MarkDirty();
+    }
+
+    void Runtime::ScrollTo(Record& record, const char* node, f32 y, bool toEnd) {
+        u32 root = ui::ViewTree::kInvalid;
+        ui::ViewTree* tree = TreeOf(record, &root);
+        const u32 view = ViewFor(record, node);
+        if (!tree || view == ui::ViewTree::kInvalid) return;
+
+        // The scroller is the node itself, or the nearest one above it: a script says "the
+        // messages", meaning the thing they are inside.
+        u32 scroller = ui::ViewTree::kInvalid;
+        for (u32 at = view; at != ui::ViewTree::kInvalid; at = tree->At(at).parent) {
+            const ui::Role role = tree->At(at).role;
+            if (role == ui::Role::Scroll || role == ui::Role::List || role == ui::Role::Table) {
+                scroller = at;
+                break;
+            }
+        }
+        if (scroller == ui::ViewTree::kInvalid) {
+            VAE_CORE_WARN("[{}] '{}' is not in anything that scrolls", record.componentName,
+                          node ? node : "");
+            return;
+        }
+
+        if (toEnd) {
+            tree->KeepAtEnd(WidgetIn(*tree, scroller));
+            if (m_Host) m_Host->MarkDirty();
+            return;
+        }
+        const f32 limit = std::max(tree->ContentSize(scroller).y
+                                   - tree->Bounds(scroller).size.y, 0.0f);
+        tree->SetScroll(scroller, { tree->At(scroller).scroll.x, std::clamp(y, 0.0f, limit) });
     }
 
     namespace {
@@ -793,7 +889,7 @@ namespace vae::script {
 
             std::string error;
             if (!runtime.m_Services->Live(tag).Open(url ? url : "", &error)) {
-                VaeEvent event{};
+                VaeEvent event = BlankEvent();
                 event.kind = VAE_EVENT_SOCKET_CLOSED;
                 event.source = "";
                 event.name = tag.c_str();
@@ -887,31 +983,69 @@ namespace vae::script {
         m_Api.set_rows = [](VaeInstance handle, const char* node, const char* const* cells,
                             int rows, int columns) {
             Record& record = Of(handle);
-            const u32 view = record.runtime->ViewFor(record, node);
-            if (view == ui::ViewTree::kInvalid || !record.runtime->m_Host) return;
+            const u32 width = static_cast<u32>(std::max(columns, 1));
+            // Unnamed columns are numbered, so a positional caller and a named one produce the
+            // same table and a template can still bind to "0" if it wants to.
+            std::vector<std::string> names;
+            names.reserve(width);
+            for (u32 i = 0; i < width; ++i) names.push_back(std::to_string(i));
+            record.runtime->PutRows(record, node, std::move(names), cells,
+                                    static_cast<u32>(std::max(rows, 0)) * width);
+        };
 
-            auto source = CreateRef<Rows>();
-            source->columns = static_cast<u32>(std::max(columns, 1));
-            source->cells.reserve(static_cast<std::size_t>(std::max(rows, 0)) * source->columns);
-            for (int i = 0; i < std::max(rows, 0) * static_cast<int>(source->columns); ++i)
-                source->cells.emplace_back(cells && cells[i] ? cells[i] : "");
-            record.runtime->m_Host->SetDataSource(record.runtime->WidgetOf(view),
-                                                  std::move(source));
+        m_Api.set_named_rows = [](VaeInstance handle, const char* node, const char* const* columns,
+                                  int columnCount, const char* const* cells, int rows) {
+            Record& record = Of(handle);
+            std::vector<std::string> names;
+            names.reserve(static_cast<std::size_t>(std::max(columnCount, 0)));
+            for (int i = 0; i < std::max(columnCount, 0); ++i)
+                names.emplace_back(columns && columns[i] ? columns[i] : "");
+            const u32 total = static_cast<u32>(std::max(rows, 0))
+                            * static_cast<u32>(names.size());
+            record.runtime->PutRows(record, node, std::move(names), cells, total);
         };
 
         m_Api.clear_rows = [](VaeInstance handle, const char* node) {
             Record& record = Of(handle);
-            const u32 view = record.runtime->ViewFor(record, node);
-            if (view == ui::ViewTree::kInvalid || !record.runtime->m_Host) return;
-            record.runtime->m_Host->SetDataSource(record.runtime->WidgetOf(view), nullptr);
+            record.runtime->PutRows(record, node, {}, nullptr, 0);
         };
 
         m_Api.row_count = [](VaeInstance handle, const char* node) -> int {
             Record& record = Of(handle);
+            u32 root = ui::ViewTree::kInvalid;
+            ui::ViewTree* tree = record.runtime->TreeOf(record, &root);
             const u32 view = record.runtime->ViewFor(record, node);
-            if (view == ui::ViewTree::kInvalid || !record.runtime->m_Host) return 0;
-            const auto* source = record.runtime->m_Host->DataSource(record.runtime->WidgetOf(view));
-            return source ? static_cast<int>(source->Count()) : 0;
+            if (!tree || view == ui::ViewTree::kInvalid) return 0;
+            if (const doc::RowTable* table = tree->RowsOf(record.runtime->WidgetIn(*tree, view)))
+                return static_cast<int>(table->Count());
+            return 0;
+        };
+
+        // Where a scroller is. Clamped by the widget, so "further than there is" is the end and
+        // not an empty view of nothing.
+        m_Api.scroll_to = [](VaeInstance handle, const char* node, double y) {
+            Record& record = Of(handle);
+            record.runtime->ScrollTo(record, node, static_cast<f32>(y), false);
+        };
+        m_Api.scroll_to_end = [](VaeInstance handle, const char* node) {
+            Record& record = Of(handle);
+            record.runtime->ScrollTo(record, node, 0.0f, true);
+        };
+
+        m_Api.focus = [](VaeInstance handle, const char* node) {
+            Record& record = Of(handle);
+            u32 root = ui::ViewTree::kInvalid;
+            ui::ViewTree* tree = record.runtime->TreeOf(record, &root);
+            const u32 view = record.runtime->ViewFor(record, node);
+            if (!tree || view == ui::ViewTree::kInvalid || !record.runtime->m_Host) return;
+            // Only into the tree events are going to: focusing a node underneath an open dialog
+            // would give the keyboard to something the user cannot see.
+            if (tree != &record.runtime->m_Host->ActiveTree()) {
+                VAE_CORE_WARN("[{}] cannot focus '{}': something is presented over it",
+                              record.componentName, node ? node : "");
+                return;
+            }
+            record.runtime->m_Host->Focus(tree->BehaviorOwner(view));
         };
     }
 
@@ -930,7 +1064,7 @@ namespace vae::script {
             const auto it = m_Live.find(instance);
             if (it == m_Live.end()) return;      // it left while the request was in flight
 
-            VaeEvent event{};
+            VaeEvent event = BlankEvent();
             event.kind = VAE_EVENT_HTTP;
             event.source = "";
             event.name = name.c_str();

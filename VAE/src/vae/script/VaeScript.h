@@ -52,6 +52,42 @@ namespace vae {
     using Color = VaeColor;
     using Vec2  = VaeVec2;
 
+    // Rows for a list, a table, or a repeated container. Columns are named because a row template
+    // names the part of a row it draws:
+    //
+    //     vae::Rows rows{ "author", "body", "time" };
+    //     rows.Add({ "Ada", "morning", "09:14" });
+    //     self["Messages"].SetRows(rows);
+    class Rows {
+    public:
+        Rows() = default;
+        Rows(std::initializer_list<const char*> columns) {
+            for (const char* column : columns) m_Columns.emplace_back(column);
+        }
+
+        // Short rows are padded and long ones are cut, so a row that forgot a column is a blank
+        // cell rather than every later row shifted by one.
+        Rows& Add(std::initializer_list<std::string> cells) {
+            std::size_t at = 0;
+            for (const std::string& cell : cells) {
+                if (at++ >= m_Columns.size()) break;
+                m_Cells.push_back(cell);
+            }
+            while (at++ < m_Columns.size()) m_Cells.emplace_back();
+            return *this;
+        }
+        void Clear() { m_Cells.clear(); }
+        std::size_t Count() const {
+            return m_Columns.empty() ? 0 : m_Cells.size() / m_Columns.size();
+        }
+        const std::vector<std::string>& Columns() const { return m_Columns; }
+        const std::vector<std::string>& Cells() const { return m_Cells; }
+
+    private:
+        std::vector<std::string> m_Columns;
+        std::vector<std::string> m_Cells;
+    };
+
     // A node inside the component, addressed by the name the designer gave it. Names survive a
     // reorder, a restyle and a reload; the index of a child does not.
     class Node {
@@ -114,8 +150,31 @@ namespace vae {
             detail::g_Api->set_rows(m_Instance, m_Name, flat.data(),
                                     static_cast<int>(flat.size()), 1);
         }
+        // Named rows: the form a repeated container wants, and the one a table with more than
+        // two columns wants too.
+        void SetRows(const Rows& rows) {
+            if (rows.Columns().empty()) { detail::g_Api->clear_rows(m_Instance, m_Name); return; }
+            std::vector<const char*> columns;
+            columns.reserve(rows.Columns().size());
+            for (const std::string& column : rows.Columns()) columns.push_back(column.c_str());
+
+            std::vector<const char*> cells;
+            cells.reserve(rows.Cells().size());
+            for (const std::string& cell : rows.Cells()) cells.push_back(cell.c_str());
+
+            detail::g_Api->set_named_rows(m_Instance, m_Name, columns.data(),
+                                          static_cast<int>(columns.size()), cells.data(),
+                                          static_cast<int>(rows.Count()));
+        }
         void ClearRows() { detail::g_Api->clear_rows(m_Instance, m_Name); }
         int RowCount() const { return detail::g_Api->row_count(m_Instance, m_Name); }
+
+        // Where this scroller is. A chat that does not follow the newest message is a chat you
+        // have to drag every time somebody speaks.
+        void ScrollTo(double y) { detail::g_Api->scroll_to(m_Instance, m_Name, y); }
+        void ScrollToEnd() { detail::g_Api->scroll_to_end(m_Instance, m_Name); }
+        // Give this node the keyboard. What "and now type" means when the user did not click.
+        void Focus() { detail::g_Api->focus(m_Instance, m_Name); }
 
     private:
         VaeInstance m_Instance;
@@ -253,8 +312,19 @@ namespace vae {
         const char* name   = "";
         double      number = 0.0;
         const char* text   = "";
+        // Set when it happened inside a repeated container: which container, and which copy.
+        const char* list   = "";
+        int         row    = -1;
 
         bool From(const char* node) const { return std::strcmp(source, node) == 0; }
+        // "A row of this list was clicked" — and `row` says which. The question a list of
+        // channels, of people or of anything else asks about every click it gets.
+        bool InList(const char* container) const {
+            return row >= 0 && std::strcmp(list, container) == 0;
+        }
+        bool ClickedRow(const char* container) const {
+            return kind == VAE_EVENT_CLICKED && InList(container);
+        }
         bool Is(VaeEventKind k) const { return kind == k; }
         bool Clicked(const char* node) const { return kind == VAE_EVENT_CLICKED && From(node); }
         bool Changed(const char* node) const {
@@ -315,6 +385,8 @@ namespace vae {
                 event.name   = raw->name   ? raw->name   : "";
                 event.number = raw->number;
                 event.text   = raw->text   ? raw->text   : "";
+                event.list   = raw->list   ? raw->list   : "";
+                event.row    = raw->row;
                 object->OnEvent(event);
             }
             static void Unmount(VaeInstance handle) {

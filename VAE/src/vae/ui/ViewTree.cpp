@@ -61,7 +61,13 @@ namespace vae::ui {
     }
 
     void ViewTree::BuildViews() {
-        const auto flat = m_Document->Flatten(m_RootId);
+        // The rows an app handed over travel into the flatten, because they decide how many copies
+        // a repeated container has and what each one draws.
+        const auto flat = m_Document->Flatten(m_RootId,
+            [this](Uuid node, Uuid instance) -> const doc::RowTable* {
+                const auto it = m_Rows.find(WidgetId{ node, instance });
+                return it == m_Rows.end() ? nullptr : &it->second;
+            });
         m_Views.reserve(flat.size());
 
         for (const auto& node : flat) {
@@ -76,6 +82,8 @@ namespace vae::ui {
             view.name = node.name;
             view.props = node.props;
             view.repeated = node.repeated;
+            view.row = node.row;
+            view.rowRoot = node.rowRoot;
             // What a widget already changed about this copy, put back. Keyed on the copy's own
             // identity, so row three keeps its tick and row one keeps not having one.
             if (view.repeated) {
@@ -131,6 +139,20 @@ namespace vae::ui {
             if (shown.empty()) continue;
             for (const u32 child : view.children)
                 if (m_Views[child].name != shown) m_Views[child].visible = false;
+        }
+
+        // A repeated container that names a selected row marks that copy selected, so the row the
+        // designer styled with `selected:fill` is the row that lights up. Same property a list
+        // uses, and the same meaning, on a container whose rows are real nodes.
+        for (View& view : m_Views) {
+            if (view.children.empty()) continue;
+            const doc::Value* value = view.props.Find(doc::Prop::SelectedIndex);
+            if (!value) continue;
+            const auto* index = std::get_if<f32>(value);
+            if (!index) continue;
+            for (const u32 child : view.children)
+                if (m_Views[child].row >= 0 && m_Views[child].row == static_cast<i32>(*index))
+                    m_Views[child].state = WithState(m_Views[child].state, StateBit::Selected, true);
         }
 
         // The root of a tree someone asked to build is always shown. Hiding a subtree is expressed
@@ -204,6 +226,20 @@ namespace vae::ui {
         m_Layout.Compute(m_Views[m_Root].layoutNode, available);
         m_LayoutDirty = false;
         ComputeFrames();
+
+        // Now that the boxes are real, the scrollers that were told to stay at the end can be:
+        // a chat that has just been handed a new message ends up showing it.
+        if (m_ScrollToEnd.empty()) return;
+        for (u32 i = 0; i < m_Views.size(); ++i) {
+            const WidgetId id{ m_Views[i].sourceId, m_Views[i].instanceId };
+            if (!m_ScrollToEnd.contains(id)) continue;
+            const f32 limit = std::max(ContentSize(i).y - m_Frames[i].rect.size.y, 0.0f);
+            if (std::abs(m_Views[i].scroll.y - limit) > 0.01f) {
+                SetScroll(i, { m_Views[i].scroll.x, limit });
+                ComputeFrames();
+            }
+        }
+        m_ScrollToEnd.clear();
     }
 
     void ViewTree::SetOrigin(Vec2 origin) {
@@ -504,6 +540,25 @@ namespace vae::ui {
         if (!Valid(view) || m_Views[view].visible == visible) return;
         m_Views[view].visible = visible;
         m_LayoutDirty = true;
+    }
+
+    void ViewTree::SetRows(WidgetId widget, doc::RowTable rows) {
+        m_Rows[widget] = std::move(rows);
+    }
+
+    void ViewTree::ClearRows(WidgetId widget) { m_Rows.erase(widget); }
+
+    void ViewTree::KeepAtEnd(WidgetId widget) { m_ScrollToEnd.insert(widget); }
+
+    const doc::RowTable* ViewTree::RowsOf(WidgetId widget) const {
+        const auto it = m_Rows.find(widget);
+        return it == m_Rows.end() ? nullptr : &it->second;
+    }
+
+    u32 ViewTree::RowOwner(u32 view) const {
+        for (u32 at = view; at != kInvalid; at = m_Views[at].parent)
+            if (m_Views[at].rowRoot) return at;
+        return kInvalid;
     }
 
     void ViewTree::SetScroll(u32 view, Vec2 scroll) {
