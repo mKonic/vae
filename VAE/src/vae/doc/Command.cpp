@@ -219,6 +219,43 @@ namespace vae::doc {
         }
     }
 
+    void AddAssetCommand::Apply(Document& document) {
+        // The id is minted once and reused on redo: a node that referred to this asset before the
+        // undo has to find the same asset after the redo.
+        m_Id = document.AddAsset(m_Name, m_Path, m_Id);
+    }
+
+    void AddAssetCommand::Undo(Document& document) { document.RemoveAsset(m_Id); }
+
+    void RemoveAssetCommand::Apply(Document& document) {
+        if (!m_Captured) {
+            if (const Document::Asset* asset = document.FindAsset(m_Id)) {
+                m_Name = asset->name;
+                m_Path = asset->path;
+                m_Captured = true;
+            }
+        }
+        document.RemoveAsset(m_Id);
+    }
+
+    void RemoveAssetCommand::Undo(Document& document) {
+        if (m_Captured) document.AddAsset(m_Name, m_Path, m_Id);
+    }
+
+    void SetStartScreenCommand::Apply(Document& document) {
+        if (!m_Captured) { m_Old = document.StartScreen(); m_Captured = true; }
+        document.SetStartScreen(m_New);
+    }
+
+    void SetStartScreenCommand::Undo(Document& document) { document.SetStartScreen(m_Old); }
+
+    void SetThemeCommand::Apply(Document& document) {
+        if (!m_Captured) { m_Old = document.ActiveTheme(); m_Captured = true; }
+        document.SetTheme(m_New);
+    }
+
+    void SetThemeCommand::Undo(Document& document) { document.SetTheme(m_Old); }
+
     bool RenameCommand::Coalesce(const Command& newer) {
         const auto* other = dynamic_cast<const RenameCommand*>(&newer);
         if (!other || other->m_Node != m_Node) return false;

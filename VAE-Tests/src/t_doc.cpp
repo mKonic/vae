@@ -469,6 +469,61 @@ TEST(command, executing_after_undo_clears_the_redo_stack) {
     CHECK(!stack.CanRedo());
 }
 
+TEST(command, an_asset_comes_back_with_the_id_it_had) {
+    // Nodes point at assets by id. An undo that restored the asset under a fresh id would leave
+    // every picture that used it blank, which is worse than not undoing at all.
+    Document doc;
+    CommandStack stack;
+
+    auto add = CreateScope<AddAssetCommand>("logo", "assets/logo.png");
+    AddAssetCommand* added = add.get();
+    stack.Execute(doc, std::move(add));
+    const Uuid id = added->Created();
+    CHECK(id.Valid());
+    CHECK_EQ(doc.Assets().size(), 1u);
+
+    const Uuid picture = doc.CreateNode(NodeKind::Image, Uuid::Invalid(), "Logo");
+    doc.SetProp(picture, Prop::Image, AssetRef{ id });
+
+    stack.Undo(doc);
+    CHECK(doc.Assets().empty());
+    stack.Redo(doc);
+    CHECK_EQ(doc.Assets().size(), 1u);
+    CHECK_EQ(doc.Assets()[0].id, id);                 // the same id, so the node still resolves
+    CHECK(doc.FindAsset(id) != nullptr);
+
+    // And removing one is undoable in the same way.
+    stack.Execute(doc, CreateScope<RemoveAssetCommand>(id));
+    CHECK(doc.Assets().empty());
+    stack.Undo(doc);
+    CHECK_EQ(doc.Assets().size(), 1u);
+    CHECK_EQ(doc.Assets()[0].id, id);
+    CHECK_EQ(doc.Assets()[0].name, std::string("logo"));
+    CHECK_EQ(doc.Assets()[0].path, std::string("assets/logo.png"));
+}
+
+TEST(command, the_start_screen_and_the_theme_are_edits_too) {
+    // Both are written into the file, and anything written into the file has to be undoable.
+    Document doc;
+    CommandStack stack;
+    const Uuid home = doc.CreateNode(NodeKind::Screen, Uuid::Invalid(), "Home");
+    const Uuid detail = doc.CreateNode(NodeKind::Screen, Uuid::Invalid(), "Detail");
+    doc.SetStartScreen(home);
+
+    stack.Execute(doc, CreateScope<SetStartScreenCommand>(detail));
+    CHECK_EQ(doc.StartScreen(), detail);
+    stack.Undo(doc);
+    CHECK_EQ(doc.StartScreen(), home);
+
+    CHECK(doc.ActiveTheme() == Theme::Dark);
+    stack.Execute(doc, CreateScope<SetThemeCommand>(Theme::Light));
+    CHECK(doc.ActiveTheme() == Theme::Light);
+    stack.Undo(doc);
+    CHECK(doc.ActiveTheme() == Theme::Dark);
+    stack.Redo(doc);
+    CHECK(doc.ActiveTheme() == Theme::Light);
+}
+
 TEST(command, history_is_bounded) {
     Document doc;
     CommandStack stack;

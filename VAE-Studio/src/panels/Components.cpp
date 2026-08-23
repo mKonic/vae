@@ -134,7 +134,7 @@ namespace vae {
 
             if (ImGui::BeginPopupContextItem("##screen")) {
                 if (ImGui::MenuItem("Open on this screen", nullptr, isStart, !isStart)) {
-                    state.Doc().SetStartScreen(screen);
+                    state.Execute(CreateScope<doc::SetStartScreenCommand>(screen));
                     state.Doc().Touch(screen);
                 }
                 ImGui::Separator();

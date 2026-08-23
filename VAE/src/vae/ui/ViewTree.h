@@ -1,5 +1,6 @@
 #pragma once
 
+#include "vae/base/Assert.h"
 #include "vae/doc/Document.h"
 #include "vae/draw/DrawList.h"
 #include "vae/layout/LayoutTree.h"
@@ -111,8 +112,11 @@ namespace vae::ui {
 
         u32 Root() const { return m_Root; }
         u32 ViewCount() const { return static_cast<u32>(m_Views.size()); }
-        const View& At(u32 view) const { return m_Views[view]; }
-        View& At(u32 view) { return m_Views[view]; }
+        // Asserted rather than clamped: unlike Bounds, there is no sensible empty View to hand
+        // back, and every caller here walks ViewCount() or has already checked Valid(). An index
+        // that is out of range is a bug in the caller, and kInvalid is UINT32_MAX.
+        const View& At(u32 view) const { VAE_CORE_ASSERT(Valid(view), "view out of range"); return m_Views[view]; }
+        View& At(u32 view) { VAE_CORE_ASSERT(Valid(view), "view out of range"); return m_Views[view]; }
         bool Valid(u32 view) const { return view < m_Views.size(); }
         // Absolute, scroll-adjusted. Painting and hit-testing read exactly the same numbers, so a
         // control can never be drawn somewhere it cannot be clicked.

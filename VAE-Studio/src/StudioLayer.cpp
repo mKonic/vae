@@ -636,11 +636,11 @@ namespace vae {
             // every token resolves through it and every widget repaints from the tokens.
             const bool dark = m_State.Doc().ActiveTheme() == doc::Theme::Dark;
             if (ImGui::MenuItem("Dark theme", nullptr, dark, !dark)) {
-                m_State.Doc().SetTheme(doc::Theme::Dark);
+                m_State.Execute(CreateScope<doc::SetThemeCommand>(doc::Theme::Dark));
                 m_State.Doc().Touch(m_State.ActiveScreen());
             }
             if (ImGui::MenuItem("Light theme", nullptr, !dark, dark)) {
-                m_State.Doc().SetTheme(doc::Theme::Light);
+                m_State.Execute(CreateScope<doc::SetThemeCommand>(doc::Theme::Light));
                 m_State.Doc().Touch(m_State.ActiveScreen());
             }
             ImGui::Separator();

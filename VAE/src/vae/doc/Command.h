@@ -204,6 +204,68 @@ namespace vae::doc {
         bool m_Captured = false;
     };
 
+    // Bringing a picture into the project, and taking one back out. Both are edits like any other
+    // — a designer who imports the wrong file expects Ctrl+Z to answer, and one who deletes an
+    // asset that six nodes point at expects it back with its id intact, or those nodes are drawing
+    // nothing forever.
+    class AddAssetCommand final : public Command {
+    public:
+        AddAssetCommand(std::string name, std::string path) : m_Name(std::move(name)),
+                                                              m_Path(std::move(path)) {}
+
+        void Apply(Document& document) override;
+        void Undo(Document& document) override;
+        std::string_view Name() const override { return "Add asset"; }
+        Uuid Created() const { return m_Id; }
+
+    private:
+        std::string m_Name, m_Path;
+        Uuid m_Id = Uuid::Invalid();
+    };
+
+    class RemoveAssetCommand final : public Command {
+    public:
+        explicit RemoveAssetCommand(Uuid id) : m_Id(id) {}
+
+        void Apply(Document& document) override;
+        void Undo(Document& document) override;
+        std::string_view Name() const override { return "Remove asset"; }
+
+    private:
+        Uuid m_Id;
+        std::string m_Name, m_Path;
+        bool m_Captured = false;
+    };
+
+    // Which screen the app opens on, and which theme it opens in. Both are properties of the
+    // design rather than of the editor, so both are written into the file — and anything written
+    // into the file has to be undoable.
+    class SetStartScreenCommand final : public Command {
+    public:
+        explicit SetStartScreenCommand(Uuid screen) : m_New(screen) {}
+
+        void Apply(Document& document) override;
+        void Undo(Document& document) override;
+        std::string_view Name() const override { return "Start screen"; }
+
+    private:
+        Uuid m_New, m_Old;
+        bool m_Captured = false;
+    };
+
+    class SetThemeCommand final : public Command {
+    public:
+        explicit SetThemeCommand(Theme theme) : m_New(theme) {}
+
+        void Apply(Document& document) override;
+        void Undo(Document& document) override;
+        std::string_view Name() const override { return "Theme"; }
+
+    private:
+        Theme m_New, m_Old = Theme::Dark;
+        bool m_Captured = false;
+    };
+
     // Several commands that undo and redo as one. Built by BeginTransaction/EndTransaction.
     class CompositeCommand final : public Command {
     public:

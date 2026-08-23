@@ -294,9 +294,14 @@ namespace vae {
         }
 
         const std::string relative = ("assets/" + target.filename().string());
-        const Uuid id = m_Document.AddAsset(target.stem().string(), relative);
+        // Through the stack: importing the wrong file is an edit like any other, and Ctrl+Z is
+        // what anyone reaches for. The copied file stays on disk — undo takes it out of the
+        // project, not off the user's machine.
+        auto command = CreateScope<doc::AddAssetCommand>(target.stem().string(), relative);
+        doc::AddAssetCommand* added = command.get();
+        Execute(std::move(command));
         VAE_INFO("imported {} as {}", file.string(), relative);
-        return id;
+        return added->Created();
     }
 
     std::string EditorState::PreviewAsset(Uuid asset) {
@@ -313,7 +318,9 @@ namespace vae {
 
     void EditorState::RemoveAsset(Uuid asset) {
         m_AssetError.clear();
-        m_Document.RemoveAsset(asset);
+        // Undoable, and it comes back with the same id: nodes point at assets by id, so restoring
+        // one under a fresh id would leave every picture that used it blank.
+        Execute(CreateScope<doc::RemoveAssetCommand>(asset));
     }
 
     void EditorState::OpenComponent(Uuid component) {
