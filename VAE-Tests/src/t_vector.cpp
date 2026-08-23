@@ -1,5 +1,7 @@
 #include "Test.h"
 
+#include "vae/base/FileSystem.h"
+
 #include "vae/vector/Svg.h"
 
 #include <cmath>
@@ -35,6 +37,31 @@ namespace {
 }
 
 // ------------------------------------------------------------------------------------ geometry
+
+TEST(vector, the_window_icon_that_ships_actually_draws) {
+    // The icon is rasterized from SVG at window creation, and every failure path there is a silent
+    // early return — a window with no icon looks like a window with no icon, not like a bug. This
+    // is what notices that the file stopped parsing.
+    const auto source = FileSystem::ReadText(FileSystem::Asset("VAE/assets/icon.svg"));
+    CHECK(source.has_value());
+    if (!source) return;
+
+    vector::Picture picture;
+    std::string error;
+    CHECK_MESSAGE(vector::ParseSvg(*source, picture, &error), error);
+    CHECK(!picture.Empty());
+
+    const vector::Bitmap bitmap = vector::Render(picture, 64, 64);
+    CHECK_EQ(bitmap.width, 64u);
+    CHECK_EQ(bitmap.height, 64u);
+
+    std::size_t opaque = 0;
+    for (std::size_t i = 3; i < bitmap.pixels.size(); i += 4)
+        if (bitmap.pixels[i] > 128) ++opaque;
+    // Most of a 64x64 tile, so an icon that renders to nothing — or to a single stray pixel — is
+    // a failure rather than a pass.
+    CHECK(opaque > 2000);
+}
 
 TEST(vector, a_transform_composes_the_way_nesting_reads) {
     // A child scaled by two inside a parent moved by ten is at the parent's offset plus twice its

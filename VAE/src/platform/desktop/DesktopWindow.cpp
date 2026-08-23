@@ -1,6 +1,9 @@
 #include "vaepch.h"
 #include "platform/desktop/DesktopWindow.h"
 
+#include "vae/base/FileSystem.h"
+#include "vae/vector/Svg.h"
+
 #include <GLFW/glfw3.h>
 
 namespace vae {
@@ -38,6 +41,8 @@ namespace vae {
                                     spec.title.c_str(), nullptr, nullptr);
         VAE_CORE_ASSERT(m_Handle, "glfwCreateWindow failed");
         ++s_WindowCount;
+
+        SetIcon();
 
         int fbw = 0, fbh = 0;
         glfwGetFramebufferSize(m_Handle, &fbw, &fbh);
@@ -152,6 +157,28 @@ namespace vae {
 
     void DesktopWindow::SetShouldClose(bool should) {
         glfwSetWindowShouldClose(m_Handle, should ? GLFW_TRUE : GLFW_FALSE);
+    }
+
+    // Rasterized from the engine's own SVG at startup, rather than shipping a pile of PNGs at four
+    // sizes. Wayland ignores this — a compositor takes the icon from the .desktop file, which is
+    // why WM_CLASS is set — but X11, and every screenshot of an X11 session, uses it.
+    void DesktopWindow::SetIcon() {
+        const auto source = FileSystem::ReadText(FileSystem::Asset("VAE/assets/icon.svg"));
+        if (!source) return;
+
+        vector::Picture picture;
+        if (!vector::ParseSvg(*source, picture) || picture.Empty()) return;
+
+        // Two sizes, so a window list and a task switcher each pick the one they want.
+        vector::Bitmap large = vector::Render(picture, 64, 64);
+        vector::Bitmap small = vector::Render(picture, 32, 32);
+        if (large.Empty() || small.Empty()) return;
+
+        const GLFWimage images[2] = {
+            { static_cast<int>(large.width), static_cast<int>(large.height), large.pixels.data() },
+            { static_cast<int>(small.width), static_cast<int>(small.height), small.pixels.data() },
+        };
+        glfwSetWindowIcon(m_Handle, 2, images);
     }
 
     void DesktopWindow::SetTitle(std::string_view title) {

@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- The window icon, drawn by the engine's own rasterizer at startup rather than shipped as a
+     pile of PNGs at four sizes. A slate-blue tile with the V cut out of it. -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <rect x="2" y="2" width="60" height="60" rx="14" fill="#5d82e4"/>
+  <path d="M 16 18 L 32 46 L 48 18 L 40 18 L 32 32 L 24 18 Z" fill="#ffffff"/>
+</svg>

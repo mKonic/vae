@@ -24,6 +24,11 @@ namespace vae {
         void SetVSync(bool on) override { m_Data.vsync = on; }
         bool VSync() const override { return m_Data.vsync; }
         void SetTitle(std::string_view title) override;
+
+    private:
+        void SetIcon();
+
+    public:
         void SetCursor(Cursor cursor) override;
 
         void SetClipboardText(const std::string& text) override;
