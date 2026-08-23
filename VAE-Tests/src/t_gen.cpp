@@ -1,6 +1,7 @@
 #include "Test.h"
 
 #include "vae/base/FileSystem.h"
+#include "vae/base/Log.h"
 #include "vae/base/Platform.h"
 #include "vae/doc/Builder.h"
 #include "vae/svc/Services.h"
@@ -292,6 +293,30 @@ TEST(gen, exporting_a_project_writes_something_that_builds) {
     CHECK(fs::exists(dir / "Document.cpp"));
     CHECK(fs::exists(dir / "Main.cpp"));
     CHECK(fs::exists(dir / "premake5.lua"));
+
+    // And it links. Checking the text of the generated premake is what let the export ship for
+    // weeks without miniaudio or pugixml in its link list — the file said everything a reader
+    // would look for and the linker said "undefined reference to ma_sound_uninit". The only thing
+    // that can tell the difference is a linker.
+    //
+    // Skipped, loudly, where premake5 is not on PATH: a machine that cannot generate the project
+    // cannot answer the question either way, and failing there would be reporting the wrong thing.
+    if (const int probe = std::system("premake5 --version >/dev/null 2>&1"); probe != 0) {
+        VAE_WARN("gen: premake5 not on PATH — the exported project was written but not linked");
+    } else {
+        const std::string generate = "cd '" + dir.string() + "' && premake5 gmake >/dev/null 2>&1";
+        CHECK_EQ(std::system(generate.c_str()), 0);
+        const std::string build = "cd '" + dir.string() + "' && make config=release -j4 "
+                                  "> build.log 2>&1";
+        const bool linked = std::system(build.c_str()) == 0;
+        if (!linked) {
+            const auto log = FileSystem::ReadText(dir / "build.log");
+            CHECK_MESSAGE(linked, log ? log->substr(0, 2000) : std::string("no build log"));
+        } else {
+            CHECK(linked);
+            CHECK(fs::exists(dir / "bin" / "Release-linux-x86_64" / "Sample"));
+        }
+    }
 
     const auto premake = FileSystem::ReadText(dir / "premake5.lua");
     CHECK(premake.has_value());

@@ -463,7 +463,15 @@ namespace vae::gen {
                    "   -- The engine's own output folder is named after the system it was built on, so\n"
                    "   -- this has to be spelled the same way premake spells it rather than hardcoded.\n"
                    "   libdirs { VAE_ROOT .. \"/bin/\" .. outputdir .. \"/*\" }\n"
-                   "   links { \"VAE\", \"VAE-Core\", \"spdlog\", \"GLFW\", \"VulkanDeps\", \"ImGui\", \"Lua\" }\n"
+                   // Every static library the engine itself links, because a StaticLib link is not
+                   // transitive under gmake and a missing one is an undefined reference at the very
+                   // last step of somebody else's build. Kept in step with VAE-Player's list, which
+                   // is the same thing this is: the engine with no editor around it.
+                   // No ImGui: the editor chrome is installed through a factory the editor names,
+                   // so a shipped app does not reference it and must not link it either. That is
+                   // 1.4 MB of toolkit an exported app used to carry and could never open.
+                   "   links { \"VAE\", \"VAE-Core\", \"spdlog\", \"GLFW\", \"VulkanDeps\",\n"
+                   "           \"Lua\", \"miniaudio\", \"pugixml\" }\n"
                    "\n"
                    "   filter \"system:linux\"\n"
                    "      defines { \"VAE_PLATFORM_LINUX\" }\n"
