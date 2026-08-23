@@ -7,6 +7,7 @@
 #include "vae/svc/Services.h"
 #include "vae/doc/Serializer.h"
 #include "vae/gen/Emit.h"
+#include "vae/text/FontDB.h"
 #include "vae/script/NativeHost.h"
 #include "vae/ui/Library.h"
 #include "vae/ui/UiHost.h"
@@ -285,6 +286,11 @@ TEST(gen, exporting_a_project_writes_something_that_builds) {
     std::error_code ec;
     fs::remove_all(dir, ec);
 
+    // What the running editor has loaded is what the exporter copies, so the test has to have it
+    // loaded too.
+    text::FontDB::Get().RegisterDirectory(FileSystem::Asset("VAE/assets/fonts"), false, true);
+    text::FontDB::Get().SetDefaultFamily("JetBrains Mono Nerd Font");
+
     gen::Options options;
     options.appName = "Sample";
     std::string error;
@@ -293,6 +299,16 @@ TEST(gen, exporting_a_project_writes_something_that_builds) {
     CHECK(fs::exists(dir / "Document.cpp"));
     CHECK(fs::exists(dir / "Main.cpp"));
     CHECK(fs::exists(dir / "premake5.lua"));
+
+    // The fonts travel with it: an exported app that renders in whatever the target machine
+    // happens to have installed is an app that looks different everywhere, silently.
+    std::error_code fontEc;
+    const bool anyFont = fs::exists(dir / "fonts", fontEc)
+                      && fs::directory_iterator(dir / "fonts", fontEc) != fs::directory_iterator();
+    CHECK(anyFont);
+    const auto entry = FileSystem::ReadText(dir / "Main.cpp");
+    CHECK(entry.has_value());
+    if (entry) CHECK(entry->find("RegisterDirectory(\"fonts\"") != std::string::npos);
 
     // And it links. Checking the text of the generated premake is what let the export ship for
     // weeks without miniaudio or pugixml in its link list — the file said everything a reader

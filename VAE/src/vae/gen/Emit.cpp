@@ -1,5 +1,6 @@
 #include "vaepch.h"
 #include "vae/gen/Emit.h"
+#include "vae/text/FontDB.h"
 
 #include "vae/base/FileSystem.h"
 #include "vae/base/Log.h"
@@ -387,6 +388,7 @@ namespace vae::gen {
                    "#include <vae/app/RunLayer.h>\n"
                    "#include <vae/core/Application.h>\n"
                    "#include <vae/core/EntryPoint.h>\n"
+                   "#include <vae/text/FontDB.h>\n"
                    "\n"
                    "void " + options.function + "(vae::doc::Document& document);\n"
                    "\n"
@@ -408,6 +410,11 @@ namespace vae::gen {
                    "        spec.enableImGui    = false;\n"
                    "        spec.window.width   = static_cast<u32>(layer->DesignSize().x);\n"
                    "        spec.window.height  = static_cast<u32>(layer->DesignSize().y);\n"
+                   "\n"
+                   "        // The fonts the design used, carried beside the binary. Registered\n"
+                   "        // before the system ones so the app looks the same on a machine that\n"
+                   "        // does not have them installed.\n"
+                   "        text::FontDB::Get().RegisterDirectory(\"fonts\", false, true);\n"
                    "\n"
                    "        auto* app = new Application(std::move(spec));\n"
                    "        app->PushLayer(std::move(layer));\n"
@@ -542,8 +549,40 @@ namespace vae::gen {
             ec.clear();
         }
 
-        VAE_INFO("export: wrote {} to {}{}", options.appName, directory.string(),
-                 copied ? " (" + std::to_string(copied) + " assets)" : "");
+        // The fonts the document actually names, beside the binary. An exported app that relies
+        // on the designer's machine having their fonts installed is an app that renders differently
+        // everywhere else — and the fallback is silent, so nobody notices until a screenshot.
+        //
+        // Only what the document names, never the whole system: this is copying somebody's font
+        // files, and the licence for that is the exporter's to check, not ours to assume.
+        u32 fonts = 0;
+        {
+            std::set<std::string> families;
+            for (Uuid id : document.AllNodes()) {
+                const doc::Node* node = document.Find(id);
+                if (!node) continue;
+                const std::string family = node->props.Text(doc::Prop::FontFamily);
+                if (!family.empty()) families.insert(family);
+            }
+            families.insert(text::FontDB::Get().DefaultFamily());
+
+            for (const std::string& family : families) {
+                for (const text::FontFaceInfo& face : text::FontDB::Get().Faces(family)) {
+                    if (face.path.empty()) continue;
+                    const std::filesystem::path to = directory / "fonts" / face.path.filename();
+                    std::filesystem::create_directories(to.parent_path(), ec);
+                    std::filesystem::copy_file(face.path, to,
+                                               std::filesystem::copy_options::overwrite_existing, ec);
+                    if (!ec) ++fonts;
+                    ec.clear();
+                }
+            }
+        }
+
+        VAE_INFO("export: wrote {} to {}{}{}", options.appName, directory.string(),
+                 copied ? " (" + std::to_string(copied) + " assets)" : "",
+                 fonts ? " (" + std::to_string(fonts) + " font files — check their licences before "
+                                "shipping)" : "");
         return true;
     }
 
