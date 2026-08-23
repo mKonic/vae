@@ -67,6 +67,12 @@ source file — the project files are generated from globs.
 ./bin/Debug-linux-x86_64/VAE-Player/VAE-Player <project.vaescreen> [--screen NAME]
 ```
 
+Both binaries answer `--version`. The build number is `10000 + commits on HEAD` and the name is
+`git describe --tags --always --dirty`, both produced by `scripts/version.sh` and generated into a
+header before every build — releasing is tagging, and nothing declares a version in a file. A build
+made without git says `unknown build` rather than inventing a number. Compatibility is separate and
+hand-bumped: the document format version, the script ABI version and the widget-library version.
+
 The Player loads the script beside the project — `<project>.so` or `<project>.lua`, native winning
 when both exist. `--headless [--frames N]` lays out and paints without a window and exits non-zero if
 the project or its script failed.
