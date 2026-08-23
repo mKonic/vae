@@ -19,13 +19,14 @@ project "VAE-Tests"
       "%{IncludeDir.glm}",
       "%{IncludeDir.stb}",
       "%{IncludeDir.json}",
+      "%{IncludeDir.pugixml}",
       "%{IncludeDir.httplib}",
    }
 
    -- https when the host has OpenSSL; plain http and a clear error when not.
    VaeHttpTls()
 
-   links { "VAE-Core", "spdlog", "Lua", "miniaudio" }
+   links { "VAE-Core", "spdlog", "Lua", "miniaudio", "pugixml" }
 
    -- The codegen test compiles the emitted builder into a module and dlopens it. That module calls
    -- back into vae::doc::Builder, which lives in this binary, so this binary has to export it.

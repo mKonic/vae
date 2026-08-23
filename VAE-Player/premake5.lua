@@ -22,6 +22,7 @@ project "VAE-Player"
       "%{IncludeDir.spdlog}",
       "%{IncludeDir.glm}",
       "%{IncludeDir.json}",
+      "%{IncludeDir.pugixml}",
       "%{IncludeDir.httplib}",
       "%{IncludeDir.GLFW}",
       "%{IncludeDir.ImGui}",
@@ -32,7 +33,7 @@ project "VAE-Player"
    VaeHttpTls()
 
    -- StaticLib links are NOT transitive under gmake, so every dependency is relisted here.
-   links { "VAE", "VAE-Core", "spdlog", "GLFW", "VulkanDeps", "ImGui", "Lua", "miniaudio" }
+   links { "VAE", "VAE-Core", "spdlog", "GLFW", "VulkanDeps", "ImGui", "Lua", "miniaudio", "pugixml" }
 
    filter "system:linux"
       systemversion "latest"

@@ -41,3 +41,6 @@
 [submodule "VAE/vendor/miniaudio"]
 	path = VAE/vendor/miniaudio
 	url = https://github.com/mackron/miniaudio
+[submodule "VAE/vendor/pugixml"]
+	path = VAE/vendor/pugixml
+	url = https://github.com/zeux/pugixml.git

@@ -19,6 +19,7 @@ group "Dependencies"
    include "vendor-build/TextEditor.lua"
    include "vendor-build/lua.lua"
    include "vendor-build/miniaudio.lua"
+   include "vendor-build/pugixml.lua"
 group ""
 
 -- VAE-Core (headless, host-testable) and VAE (full engine) are both declared here.
