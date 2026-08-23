@@ -4,6 +4,7 @@
 #include "vae/text/FontDB.h"
 #include "vae/text/TextDraw.h"
 
+#include "Convert.h"
 #include "LayoutDemo.h"
 #include "Selftest.h"
 #include "StudioLayer.h"
@@ -253,6 +254,20 @@ namespace vae {
                 PushLayer(CreateScope<SelftestLayer>());
                 return;
             }
+            if (Spec().args.Has("--convert")) {
+                const CommandLineArgs& args = Spec().args;
+                std::filesystem::path in, out;
+                for (int i = 1; i < args.count; ++i) {
+                    const std::string_view a = args[i];
+                    if (a.starts_with("--")) continue;
+                    if (in.empty()) in = a; else if (out.empty()) out = a;
+                }
+                int bench = 0;
+                if (const auto n = args.Value("--bench")) bench = std::atoi(std::string(*n).c_str());
+                PushLayer(CreateScope<ConvertLayer>(std::move(in), std::move(out),
+                                                    args.Has("--check"), bench));
+                return;
+            }
 
             // VAE_SCENE picks the verification scene: `zoo` is the P3/P4 primitive zoo, `layout`
             // the P5 solver demo. The default is the P7 widget gallery, which exercises the most.
@@ -277,7 +292,7 @@ namespace vae {
         // --selftest is not a hidden window: it is no window and no device at all. Every check it
         // runs is about the document, the layout and the gestures, none of which need a GPU, and a
         // verification pass that needs one cannot run where it is most wanted.
-        if (args.Has("--selftest")) {
+        if (args.Has("--selftest") || args.Has("--convert")) {
             spec.createWindow = false;
             spec.createDevice = false;
             spec.enableImGui  = false;
