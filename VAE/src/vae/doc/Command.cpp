@@ -270,6 +270,78 @@ namespace vae::doc {
         return true;
     }
 
+    void SetComponentPropertyCommand::Apply(Document& document) {
+        if (!m_Captured) {
+            if (const ComponentProperty* existing = document.FindProperty(m_Component, m_New.name)) {
+                m_Old = *existing;
+                m_Existed = true;
+            }
+            m_Captured = true;
+        }
+        document.SetComponentProperty(m_Component, m_New);
+    }
+
+    void SetComponentPropertyCommand::Undo(Document& document) {
+        if (m_Existed) document.SetComponentProperty(m_Component, m_Old);
+        else           document.RemoveComponentProperty(m_Component, m_New.name);
+    }
+
+    // Typing a default, or dragging through a picker for one, is one edit.
+    bool SetComponentPropertyCommand::Coalesce(const Command& newer) {
+        const auto* other = dynamic_cast<const SetComponentPropertyCommand*>(&newer);
+        if (!other || other->m_Component != m_Component || other->m_New.name != m_New.name)
+            return false;
+        m_New = other->m_New;
+        return true;
+    }
+
+    void RemoveComponentPropertyCommand::Apply(Document& document) {
+        const auto& properties = document.PropertiesOf(m_Component);
+        for (u32 i = 0; i < properties.size(); ++i) {
+            if (properties[i].name != m_Name) continue;
+            m_Old = properties[i];
+            m_Index = i;
+            m_Existed = true;
+            break;
+        }
+        document.RemoveComponentProperty(m_Component, m_Name);
+    }
+
+    void RemoveComponentPropertyCommand::Undo(Document& document) {
+        if (!m_Existed) return;
+        // Back where it was: a property list is ordered, and a panel that reshuffles on undo is
+        // not the state that was undone to.
+        Node* node = document.Find(m_Component);
+        if (!node) return;
+        const u32 at = std::min(m_Index, static_cast<u32>(node->properties.size()));
+        node->properties.insert(node->properties.begin() + at, m_Old);
+        document.Touch(m_Component);
+    }
+
+    void SetInstancePropertyCommand::Apply(Document& document) {
+        if (!m_Captured) {
+            if (const Node* node = document.Find(m_Instance))
+                if (const Value* existing = node->props.Find(InstancePropertyKey(m_Name))) {
+                    m_Old = *existing;
+                    m_Existed = true;
+                }
+            m_Captured = true;
+        }
+        document.SetInstanceProperty(m_Instance, m_Name, m_New);
+    }
+
+    void SetInstancePropertyCommand::Undo(Document& document) {
+        if (m_Existed) document.SetInstanceProperty(m_Instance, m_Name, m_Old);
+        else           document.ClearInstanceProperty(m_Instance, m_Name);
+    }
+
+    bool SetInstancePropertyCommand::Coalesce(const Command& newer) {
+        const auto* other = dynamic_cast<const SetInstancePropertyCommand*>(&newer);
+        if (!other || other->m_Instance != m_Instance || other->m_Name != m_Name) return false;
+        m_New = other->m_New;
+        return true;
+    }
+
     void RemoveTokenCommand::Apply(Document& document) {
         if (const Token* existing = document.FindToken(m_Name)) { m_Old = *existing; m_Existed = true; }
         document.RemoveToken(m_Name);

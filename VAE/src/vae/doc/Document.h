@@ -108,6 +108,21 @@ namespace vae::doc {
         // Resolves tokens against the active theme; returns the literal a renderer should use.
         Value ResolveValue(const Value& value) const;
 
+        // --- component properties ----------------------------------------------------------
+        // What an instance picked for one of its component's properties, or the component's
+        // default when it picked nothing. Unset when the component has no such property.
+        Value InstanceProperty(Uuid instance, std::string_view name) const;
+        void  SetInstanceProperty(Uuid instance, std::string_view name, Value value);
+        void  ClearInstanceProperty(Uuid instance, std::string_view name);
+        // The properties an instance can be given, which are its component's.
+        const std::vector<ComponentProperty>& PropertiesOf(Uuid component) const;
+        const ComponentProperty* FindProperty(Uuid component, std::string_view name) const;
+        void SetComponentProperty(Uuid component, ComponentProperty property);
+        void RemoveComponentProperty(Uuid component, std::string_view name);
+        // Answers the bindings that name a component property and applies the variant overlays for
+        // the options an instance picked. Public because the runtime resolves the same way.
+        void ApplyComponentProperties(Uuid component, Uuid instance, PropBag& bag) const;
+
         // --- tokens ----------------------------------------------------------------------------
         void SetToken(const std::string& name, Token token);
         void RemoveToken(const std::string& name);

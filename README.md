@@ -126,6 +126,21 @@ unreferenced ids and the stock component catalog are all left out.
 Attribute sigils: `@token`, `=binding`, `#hex`, `&node`, `*asset`, `$literal`. Sizes are `72`, `hug`,
 `fill`, `fill 2` or `50%`; padding takes 1, 2 or 4 values.
 
+A component declares what may vary, and each instance answers:
+
+```xml
+<component name="Chip" fill="#38508c">
+  <property name="label" type="string" default="Chip"/>
+  <property name="tone" type="string" default="neutral" options="neutral,success,danger"/>
+  <prop name="tone=danger:fill" type="color" value="#9e3338"/>
+  <text name="Label" text="=label"/>
+</component>
+```
+
+A plain property is read with a binding (`text="=label"`); a variant is answered with overlays keyed
+to an option (`tone=danger:fill`), the same shape as the `hovered:fill` state overlays. An
+instance's own override still beats a variant.
+
 Files written in the earlier JSON formats still open — `VAE-Studio --convert [--check] [--bench N]`
 rewrites one in format 3, verifies the round trip node for node, or times the load.
 

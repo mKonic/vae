@@ -305,6 +305,61 @@ namespace vae::doc {
         bool m_Existed = false, m_Captured = false;
     };
 
+    // --- component properties ---------------------------------------------------------------
+
+    // Declaring or editing one of a component's properties. Undoable like everything else, because
+    // renaming a property that instances already answer is exactly the edit somebody wants back.
+    class SetComponentPropertyCommand final : public Command {
+    public:
+        SetComponentPropertyCommand(Uuid component, ComponentProperty property)
+            : m_Component(component), m_New(std::move(property)) {}
+
+        void Apply(Document& document) override;
+        void Undo(Document& document) override;
+        std::string_view Name() const override { return "Set component property"; }
+        bool Coalesce(const Command& newer) override;
+
+    private:
+        Uuid m_Component;
+        ComponentProperty m_New, m_Old;
+        bool m_Existed = false, m_Captured = false;
+    };
+
+    class RemoveComponentPropertyCommand final : public Command {
+    public:
+        RemoveComponentPropertyCommand(Uuid component, std::string name)
+            : m_Component(component), m_Name(std::move(name)) {}
+
+        void Apply(Document& document) override;
+        void Undo(Document& document) override;
+        std::string_view Name() const override { return "Remove component property"; }
+
+    private:
+        Uuid m_Component;
+        std::string m_Name;
+        ComponentProperty m_Old;
+        u32 m_Index = 0;
+        bool m_Existed = false;
+    };
+
+    // One instance's answer to one of them.
+    class SetInstancePropertyCommand final : public Command {
+    public:
+        SetInstancePropertyCommand(Uuid instance, std::string name, Value value)
+            : m_Instance(instance), m_Name(std::move(name)), m_New(std::move(value)) {}
+
+        void Apply(Document& document) override;
+        void Undo(Document& document) override;
+        std::string_view Name() const override { return "Set property"; }
+        bool Coalesce(const Command& newer) override;
+
+    private:
+        Uuid m_Instance;
+        std::string m_Name;
+        Value m_New, m_Old;
+        bool m_Existed = false, m_Captured = false;
+    };
+
     class RemoveTokenCommand final : public Command {
     public:
         explicit RemoveTokenCommand(std::string name) : m_Name(std::move(name)) {}

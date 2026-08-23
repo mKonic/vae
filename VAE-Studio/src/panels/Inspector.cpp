@@ -422,6 +422,162 @@ namespace vae {
             }
         }
 
+        // Authoring the knobs, on the component itself. An instance answers them; this is where
+        // somebody decides what the questions are.
+        if (node->IsComponent()) {
+            SectionHeader("Properties");
+            const auto& properties = state.Doc().PropertiesOf(id);
+
+            for (std::size_t i = 0; i < properties.size(); ++i) {
+                const doc::ComponentProperty property = properties[i];   // copied: edits rewrite it
+                ImGui::PushID(static_cast<int>(i));
+
+                char name[96];
+                std::snprintf(name, sizeof name, "%s", property.name.c_str());
+                ImGui::SetNextItemWidth(-56.0f);
+                if (ImGui::InputText("##name", name, sizeof name) && name[0]) {
+                    // A rename is a remove and an add, because instances answer by name and the
+                    // old answers belong to the old name.
+                    state.Commands().BeginTransaction("Rename property");
+                    state.Execute(CreateScope<doc::RemoveComponentPropertyCommand>(id, property.name));
+                    doc::ComponentProperty renamed = property;
+                    renamed.name = name;
+                    state.Execute(CreateScope<doc::SetComponentPropertyCommand>(id, renamed));
+                    state.Commands().EndTransaction(state.Doc());
+                }
+                if (ImGui::IsItemDeactivatedAfterEdit()) state.EndGesture();
+
+                ImGui::SameLine();
+                if (ImGui::SmallButton("Remove")) {
+                    state.Execute(CreateScope<doc::RemoveComponentPropertyCommand>(id, property.name));
+                    state.EndGesture();
+                    ImGui::PopID();
+                    break;
+                }
+
+                // Options make it a variant. Comma-separated, because that is how a short list is
+                // typed and a table of one-word values is a panel nobody wants.
+                std::string joined;
+                for (const std::string& option : property.options) {
+                    if (!joined.empty()) joined += ", ";
+                    joined += option;
+                }
+                char options[256];
+                std::snprintf(options, sizeof options, "%s", joined.c_str());
+                ImGui::SetNextItemWidth(-1.0f);
+                if (ImGui::InputTextWithHint("##options", "options, comma separated — blank for a "
+                                             "plain property", options, sizeof options)) {
+                    doc::ComponentProperty edited = property;
+                    edited.options.clear();
+                    std::string_view rest(options);
+                    while (!rest.empty()) {
+                        const std::size_t comma = rest.find(',');
+                        std::string_view piece = rest.substr(0, comma);
+                        while (!piece.empty() && piece.front() == ' ') piece.remove_prefix(1);
+                        while (!piece.empty() && piece.back() == ' ')  piece.remove_suffix(1);
+                        if (!piece.empty()) edited.options.emplace_back(piece);
+                        if (comma == std::string_view::npos) break;
+                        rest.remove_prefix(comma + 1);
+                    }
+                    state.Execute(CreateScope<doc::SetComponentPropertyCommand>(id, edited));
+                }
+                if (ImGui::IsItemDeactivatedAfterEdit()) state.EndGesture();
+
+                if (property.IsVariant()) {
+                    ImGui::TextDisabled("nodes answer with \"%s=%s:fill\" and the like",
+                                        property.name.c_str(), property.options.front().c_str());
+                } else {
+                    ImGui::TextDisabled("nodes read it with \"=%s\"", property.name.c_str());
+                }
+                ImGui::PopID();
+                ImGui::Separator();
+            }
+
+            if (ImGui::SmallButton("Add property")) {
+                doc::ComponentProperty added;
+                added.name = "property" + std::to_string(properties.size() + 1);
+                added.type = doc::ValueType::Text;
+                added.defaultValue = std::string{};
+                state.Execute(CreateScope<doc::SetComponentPropertyCommand>(id, added));
+                state.EndGesture();
+            }
+        }
+
+        // The knobs this instance's component exposes. Above the overrides on purpose: a property
+        // is the answer somebody should reach for first, and an override is what is left when the
+        // component did not think of it.
+        if (master && !master->properties.empty()) {
+            SectionHeader("Properties");
+            for (const doc::ComponentProperty& property : master->properties) {
+                const doc::Value current = state.Doc().InstanceProperty(id, property.name);
+                const std::string field = "##prop_" + property.name;
+
+                if (property.IsVariant()) {
+                    const std::string picked = std::holds_alternative<std::string>(current)
+                                             ? std::get<std::string>(current) : std::string{};
+                    ImGui::TextUnformatted(property.name.c_str());
+                    ImGui::SetNextItemWidth(-1.0f);
+                    if (ImGui::BeginCombo(field.c_str(), picked.c_str())) {
+                        for (const std::string& option : property.options)
+                            if (ImGui::Selectable(option.c_str(), option == picked)) {
+                                state.Execute(CreateScope<doc::SetInstancePropertyCommand>(
+                                    id, property.name, option));
+                                state.EndGesture();
+                            }
+                        ImGui::EndCombo();
+                    }
+                    continue;
+                }
+
+                switch (property.type) {
+                    case doc::ValueType::Bool: {
+                        bool flag = std::holds_alternative<bool>(current) && std::get<bool>(current);
+                        if (ImGui::Checkbox((property.name + field).c_str(), &flag)) {
+                            state.Execute(CreateScope<doc::SetInstancePropertyCommand>(
+                                id, property.name, flag));
+                            state.EndGesture();
+                        }
+                        break;
+                    }
+                    case doc::ValueType::Number: {
+                        f32 number = std::holds_alternative<f32>(current) ? std::get<f32>(current) : 0.0f;
+                        ImGui::TextUnformatted(property.name.c_str());
+                        ImGui::SetNextItemWidth(-1.0f);
+                        if (ImGui::DragFloat(field.c_str(), &number, 0.5f))
+                            state.Execute(CreateScope<doc::SetInstancePropertyCommand>(
+                                id, property.name, number));
+                        if (ImGui::IsItemDeactivatedAfterEdit()) state.EndGesture();
+                        break;
+                    }
+                    case doc::ValueType::Colour: {
+                        Color colour = std::holds_alternative<Color>(current)
+                                     ? std::get<Color>(current) : Color{ 0, 0, 0, 1 };
+                        ImGui::TextUnformatted(property.name.c_str());
+                        ImGui::SetNextItemWidth(-1.0f);
+                        if (ImGui::ColorEdit4(field.c_str(), &colour.r,
+                                              ImGuiColorEditFlags_AlphaBar))
+                            state.Execute(CreateScope<doc::SetInstancePropertyCommand>(
+                                id, property.name, colour));
+                        if (ImGui::IsItemDeactivatedAfterEdit()) state.EndGesture();
+                        break;
+                    }
+                    default: {
+                        char buffer[256];
+                        const std::string text = std::holds_alternative<std::string>(current)
+                                               ? std::get<std::string>(current) : std::string{};
+                        std::snprintf(buffer, sizeof buffer, "%s", text.c_str());
+                        ImGui::TextUnformatted(property.name.c_str());
+                        ImGui::SetNextItemWidth(-1.0f);
+                        if (ImGui::InputText(field.c_str(), buffer, sizeof buffer))
+                            state.Execute(CreateScope<doc::SetInstancePropertyCommand>(
+                                id, property.name, std::string(buffer)));
+                        if (ImGui::IsItemDeactivatedAfterEdit()) state.EndGesture();
+                        break;
+                    }
+                }
+            }
+        }
+
         if (node->IsInstance() && !node->overrides.empty()) {
             SectionHeader("Overrides");
             for (const auto& [target, bag] : node->overrides) {

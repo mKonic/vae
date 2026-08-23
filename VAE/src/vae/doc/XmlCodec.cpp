@@ -472,11 +472,29 @@ namespace vae::doc {
             if (node->slot)     attrs.push_back({ "slot", "true" });
 
             const bool hasChildren = !node->children.empty() || !node->overrides.empty()
-                                   || !long_.empty() || sample != nullptr;
+                                   || !long_.empty() || sample != nullptr
+                                   || !node->properties.empty();
             if (!hasChildren && multiline) { w.Leaf(tag, attrs, *multiline); return; }
             if (!hasChildren)              { w.Open(tag, attrs, true); return; }
 
             w.Open(tag, attrs, false);
+            // The knobs a component exposes, before anything else inside it: they are what the
+            // component is for, and a file reads as an outline of the app.
+            for (const ComponentProperty& property : node->properties) {
+                std::vector<Attr> pa{ { "name", property.name },
+                                      { "type", std::string(ValueTypeName(property.type)) } };
+                if (const auto text = ValueToAttr(property.defaultValue, property.type))
+                    pa.push_back({ "default", *text });
+                if (property.IsVariant()) {
+                    std::string options;
+                    for (const std::string& option : property.options) {
+                        if (!options.empty()) options += ',';
+                        options += option;
+                    }
+                    pa.push_back({ "options", options });
+                }
+                w.Open("property", pa, true);
+            }
             if (sample) w.Leaf("sample", {}, *sample);
             for (const LongProp& p : long_)
                 w.Open("prop", { { "name", p.name }, { "type", p.type }, { "value", p.value } }, true);
@@ -848,6 +866,23 @@ namespace vae::doc {
                 if (tag.empty()) continue;                  // the text body, already read
                 if (tag == "sample") {
                     node.props.Set(Prop::Sample, std::string(child.child_value()));
+                    continue;
+                }
+                if (tag == "property") {
+                    ComponentProperty property;
+                    property.name = child.attribute("name").as_string();
+                    property.type = ValueTypeFromName(child.attribute("type").as_string("text"))
+                                        .value_or(ValueType::Text);
+                    if (const auto attr = child.attribute("default"))
+                        property.defaultValue = ValueFromAttr(attr.as_string(), property.type);
+                    const std::string_view options = child.attribute("options").as_string();
+                    for (std::size_t at = 0; at < options.size(); ) {
+                        const std::size_t comma = options.find(',', at);
+                        const std::size_t end = comma == std::string_view::npos ? options.size() : comma;
+                        if (end > at) property.options.emplace_back(options.substr(at, end - at));
+                        at = end + 1;
+                    }
+                    if (!property.name.empty()) node.properties.push_back(std::move(property));
                     continue;
                 }
                 if (tag == "prop") {

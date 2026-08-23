@@ -384,11 +384,122 @@ namespace vae::doc {
         Notify(instance);
     }
 
+    const std::vector<ComponentProperty>& Document::PropertiesOf(Uuid component) const {
+        static const std::vector<ComponentProperty> kNone;
+        const Node* node = Find(component);
+        return node ? node->properties : kNone;
+    }
+
+    const ComponentProperty* Document::FindProperty(Uuid component, std::string_view name) const {
+        for (const ComponentProperty& property : PropertiesOf(component))
+            if (property.name == name) return &property;
+        return nullptr;
+    }
+
+    void Document::SetComponentProperty(Uuid component, ComponentProperty property) {
+        Node* node = Find(component);
+        if (!node || property.name.empty()) return;
+        for (ComponentProperty& existing : node->properties)
+            if (existing.name == property.name) { existing = std::move(property); Touch(component); return; }
+        node->properties.push_back(std::move(property));
+        Touch(component);
+    }
+
+    void Document::RemoveComponentProperty(Uuid component, std::string_view name) {
+        Node* node = Find(component);
+        if (!node) return;
+        std::erase_if(node->properties, [&](const ComponentProperty& p) { return p.name == name; });
+        Touch(component);
+    }
+
+    Value Document::InstanceProperty(Uuid instance, std::string_view name) const {
+        const Node* node = Find(instance);
+        if (!node || !node->IsInstance()) return {};
+        if (const Value* picked = node->props.Find(InstancePropertyKey(name))) return *picked;
+        if (const ComponentProperty* declared = FindProperty(node->componentId, name))
+            return declared->defaultValue;
+        return {};
+    }
+
+    void Document::SetInstanceProperty(Uuid instance, std::string_view name, Value value) {
+        Node* node = Find(instance);
+        if (!node || !node->IsInstance()) return;
+        node->props.Set(InstancePropertyKey(name), std::move(value));
+        Touch(instance);
+    }
+
+    void Document::ClearInstanceProperty(Uuid instance, std::string_view name) {
+        Node* node = Find(instance);
+        if (!node || !node->IsInstance()) return;
+        node->props.Unset(InstancePropertyKey(name));
+        Touch(instance);
+    }
+
+    namespace {
+
+        // Text of a value, for the variant overlays whose keys are spelled with it.
+        std::string OptionText(const Value& value) {
+            if (const auto* text = std::get_if<std::string>(&value)) return *text;
+            if (const auto* flag = std::get_if<bool>(&value)) return *flag ? "true" : "false";
+            return {};
+        }
+
+    }
+
+    // The two things a component property does to a node inside that component: it answers a
+    // binding that names it, and — when it is a variant — it switches on the overlays keyed to the
+    // option that was picked.
+    void Document::ApplyComponentProperties(Uuid component, Uuid instance, PropBag& bag) const {
+        const std::vector<ComponentProperty>& properties = PropertiesOf(component);
+        if (properties.empty()) return;
+
+        for (const ComponentProperty& property : properties) {
+            Value value = property.defaultValue;
+            if (instance.Valid()) {
+                if (const Node* node = Find(instance))
+                    if (const Value* picked = node->props.Find(InstancePropertyKey(property.name)))
+                        value = *picked;
+            }
+
+            // A binding that names this property is answered with the value. One that names
+            // anything else is a binding over the app's own state and is left alone for the
+            // runtime, which is the only thing that can evaluate it.
+            const auto answer = [&](const Value& current) {
+                const auto* binding = std::get_if<Binding>(&current);
+                return binding && binding->expression == property.name;
+            };
+            std::vector<std::pair<Prop, Value>> known;
+            for (const auto& [key, current] : bag.Known())
+                if (answer(current)) known.emplace_back(key, value);
+            for (const auto& [key, replacement] : known) bag.Set(key, replacement);
+
+            std::vector<std::pair<std::string, Value>> custom;
+            for (const auto& [key, current] : bag.Custom())
+                if (answer(current)) custom.emplace_back(key, value);
+            for (const auto& [key, replacement] : custom) bag.Set(key, replacement);
+
+            if (!property.IsVariant()) continue;
+
+            // The overlay for the option that was picked. Applied after the bindings so a variant
+            // may set a property a binding also names, and after nothing else — an instance's own
+            // override still wins, because that is applied later still.
+            const std::string prefix = VariantOverlayPrefix(property.name, OptionText(value));
+            std::vector<std::pair<std::string, Value>> apply;
+            for (const auto& [key, current] : bag.Custom())
+                if (key.starts_with(prefix)) apply.emplace_back(key.substr(prefix.size()), current);
+            for (const auto& [name, current] : apply) {
+                if (auto prop = PropFromName(name)) bag.Set(*prop, current);
+                else bag.Set(name, current);
+            }
+        }
+    }
+
     PropBag Document::ResolvedProps(Uuid instance, Uuid nodeInComponent) const {
         PropBag result;
         if (const Node* source = Find(nodeInComponent)) result = source->props;
 
         if (const Node* node = Find(instance); node && node->IsInstance()) {
+            ApplyComponentProperties(node->componentId, instance, result);
             auto it = node->overrides.find(nodeInComponent);
             if (it != node->overrides.end()) it->second.MergeInto(result);
         }
@@ -412,10 +523,18 @@ namespace vae::doc {
             if (source->IsInstance()) {
                 // An instance's own props are its component's, plus whatever it says about that root.
                 if (const Node* component = Find(source->componentId)) result = component->props;
+                ApplyComponentProperties(source->componentId, source->id, result);
                 MergeOverride(source, source->componentId, result);
             } else {
                 result = source->props;
             }
+        }
+        // The innermost instance that owns this node decides what its component's properties mean.
+        // Outer instances are containers around it and have no say in that — their own properties
+        // belong to their own subtrees.
+        if (!chain.empty()) {
+            if (const Node* inner = Find(chain.back()); inner && inner->IsInstance())
+                ApplyComponentProperties(inner->componentId, inner->id, result);
         }
         for (auto it = chain.rbegin(); it != chain.rend(); ++it)
             MergeOverride(Find(*it), node, result);

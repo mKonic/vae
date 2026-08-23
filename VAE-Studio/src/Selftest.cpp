@@ -1130,6 +1130,71 @@ namespace vae {
             std::filesystem::remove_all(folder, ec);
         }
 
+        // Component properties, through the editor rather than through the document: declaring one,
+        // an instance answering it, and undo putting both back. The model has its own tests; what
+        // this covers is that the commands the Inspector fires are the ones that do it.
+        void TestComponentProperties() {
+            Section("component properties");
+            Shortcuts driver;
+            StudioLayer& layer = driver.Layer_();
+            EditorState& state = layer.State();
+            doc::Document& d = state.Doc();
+
+            const Uuid component = d.CreateNode(doc::NodeKind::Frame, Uuid::Invalid(), "Badge");
+            d.SetProp(component, doc::Prop::Fill, Color{ 0.2f, 0.3f, 0.6f, 1.0f });
+            const Uuid label = d.CreateNode(doc::NodeKind::Text, component, "Label");
+            d.SetProp(label, doc::Prop::Text, doc::Binding{ "label" });
+            d.MakeComponent(component, "Badge");
+            const Uuid instance = d.CreateInstance(component, state.ActiveScreen());
+            state.Commands().Clear();
+
+            doc::ComponentProperty text;
+            text.name = "label";
+            text.type = doc::ValueType::Text;
+            text.defaultValue = std::string("Badge");
+            state.Execute(CreateScope<doc::SetComponentPropertyCommand>(component, text));
+            state.EndGesture();
+            Check(d.FindProperty(component, "label") != nullptr, "a component declares a property");
+            Check(d.ResolvedProps(instance, label).Text(doc::Prop::Text) == "Badge",
+                  "and an instance that says nothing draws the default");
+
+            state.Execute(CreateScope<doc::SetInstancePropertyCommand>(instance, "label",
+                                                                        std::string("Ready")));
+            state.EndGesture();
+            Check(d.ResolvedProps(instance, label).Text(doc::Prop::Text) == "Ready",
+                  "an instance answers it and the binding resolves to the answer");
+
+            doc::ComponentProperty tone;
+            tone.name = "tone";
+            tone.type = doc::ValueType::Text;
+            tone.defaultValue = std::string("plain");
+            tone.options = { "plain", "loud" };
+            state.Execute(CreateScope<doc::SetComponentPropertyCommand>(component, tone));
+            d.SetProp(component, doc::VariantOverlayPrefix("tone", "loud")
+                                 + doc::PropName(doc::Prop::Fill), Color{ 0.9f, 0.2f, 0.2f, 1.0f });
+            state.EndGesture();
+
+            state.Execute(CreateScope<doc::SetInstancePropertyCommand>(instance, "tone",
+                                                                        std::string("loud")));
+            state.EndGesture();
+            Check(d.ResolvedProps(std::vector<Uuid>{}, instance).Colour(doc::Prop::Fill).r > 0.8f,
+                  "a variant switches what it names");
+
+            state.Undo();
+            Check(d.ResolvedProps(std::vector<Uuid>{}, instance).Colour(doc::Prop::Fill).r < 0.5f,
+                  "and undo puts the option back");
+
+            // Removing the property an instance already answered: the answer stays on the instance
+            // but stops meaning anything, and undo brings the question back.
+            state.Execute(CreateScope<doc::RemoveComponentPropertyCommand>(component, "label"));
+            state.EndGesture();
+            Check(d.FindProperty(component, "label") == nullptr, "a property can be removed");
+            state.Undo();
+            Check(d.FindProperty(component, "label") != nullptr, "and undo brings it back");
+            Check(d.ResolvedProps(instance, label).Text(doc::Prop::Text) == "Ready",
+                  "with the answer the instance had given it");
+        }
+
         // Artwork takes the same route as a picture and comes out a different thing at the end of
         // it: a Vector node, sized from the file, coloured by a token rather than by whatever the
         // author had open. Parsing needs no GPU, so all of that is checkable here.
@@ -2342,6 +2407,7 @@ namespace vae {
         TestProjectFolders();
         TestAssets();
         TestArtwork();
+        TestComponentProperties();
         TestFillingWidgetMoves();
         TestDroppingIntoAContainer();
         TestAuthoringAComponent();
