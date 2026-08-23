@@ -91,6 +91,23 @@ namespace vae::svc {
         if (!Ready() && !m_Problem.empty()) return 0;
         if (!Ready() && !Open(nullptr)) return 0;
 
+        // Opened once with a plain decoder before it is handed to the engine. ma_sound_init_from_file
+        // goes through miniaudio's resource manager, and that function's failure path frees its node
+        // and then reads a field out of it — a use-after-free on every sound that cannot be loaded
+        // (miniaudio 0.11.25, and master as of this writing). A file that will not decode is refused
+        // here so that path is never reached. It costs one extra open on the sounds that do work.
+        {
+            ma_decoder probe;
+            const ma_result readable = ma_decoder_init_file(file.string().c_str(), nullptr, &probe);
+            if (readable != MA_SUCCESS) {
+                m_Problem = "cannot play " + file.filename().string() + ": "
+                          + ma_result_description(readable);
+                VAE_CORE_WARN("audio: {}", m_Problem);
+                return 0;
+            }
+            ma_decoder_uninit(&probe);
+        }
+
         auto* sound = new ma_sound{};
         // Decoded rather than streamed, and unspatialized: an interface sound is small, and a
         // click that is quieter because the listener is at the origin is a bug nobody would guess.
