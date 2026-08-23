@@ -1,3 +1,4 @@
+#include "vae/app/ImGuiLayer.h"
 #include "vae/base/Version.h"
 #include "vae/core/Application.h"
 #include "vae/core/EntryPoint.h"
@@ -293,6 +294,10 @@ namespace vae {
     };
 
     Application* CreateApplication(CommandLineArgs args) {
+        // The editor is the only thing that ships ImGui. Naming the factory here is what pulls the
+        // toolkit into this binary and leaves it out of the player and of every exported app.
+        Application::SetChromeFactory(&app::MakeImGuiLayer);
+
         AppSpec spec;
         spec.name           = "VAE Studio";
         spec.args           = args;

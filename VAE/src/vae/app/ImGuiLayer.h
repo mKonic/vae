@@ -1,6 +1,6 @@
 #pragma once
 
-#include "vae/core/Layer.h"
+#include "vae/core/Chrome.h"
 #include "vae/gpu/Resources.h"
 
 namespace vae::app {
@@ -11,7 +11,7 @@ namespace vae::app {
     // different: Begin opens the frame, Finish closes it on the CPU, and Draw records it into a
     // command list that is already inside a render pass. Everything the editor builds happens
     // between Begin and Finish.
-    class ImGuiLayer final : public Layer {
+    class ImGuiLayer final : public ChromeLayer {
     public:
         ImGuiLayer();
         ~ImGuiLayer() override;
@@ -20,14 +20,14 @@ namespace vae::app {
         void OnDetach() override;
         void OnEvent(Event& e) override;
 
-        void Begin();
-        void Finish();
-        void Draw(gpu::CommandList& cmd);
+        void Begin() override;
+        void Finish() override;
+        void Draw(gpu::CommandList& cmd) override;
 
         // While set, ImGui swallows input it wants and the layers below never see it. Off for a
         // scene that has to keep receiving the mouse while a panel is hovered.
-        void SetBlockEvents(bool block) { m_BlockEvents = block; }
-        bool Ready() const { return m_Ready; }
+        void SetBlockEvents(bool block) override { m_BlockEvents = block; }
+        bool Ready() const override { return m_Ready; }
 
         // A texture the editor can show inside an ImGui window — the canvas, an asset thumbnail.
         // The returned handle stays valid until the texture is released.
@@ -46,5 +46,13 @@ namespace vae::app {
         // renders once per event batch never gets to that second frame, and the click vanishes.
         int  m_Awake = 0;
     };
+
+}
+
+namespace vae::app {
+
+    // What an editor installs with Application::SetChromeFactory. A free function rather than the
+    // constructor so that naming it is the only thing that pulls ImGui into a binary.
+    Scope<ChromeLayer> MakeImGuiLayer();
 
 }

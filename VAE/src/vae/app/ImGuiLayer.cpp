@@ -23,7 +23,7 @@ namespace vae::app {
         }
     }
 
-    ImGuiLayer::ImGuiLayer() : Layer("ImGui") {}
+    ImGuiLayer::ImGuiLayer() : ChromeLayer("ImGui") {}
     ImGuiLayer::~ImGuiLayer() = default;
 
     void ImGuiLayer::OnAttach() {
@@ -190,5 +190,7 @@ namespace vae::app {
         if (!handle) return;
         ImGui_ImplVulkan_RemoveTexture(reinterpret_cast<VkDescriptorSet>(handle));
     }
+
+    Scope<ChromeLayer> MakeImGuiLayer() { return CreateScope<ImGuiLayer>(); }
 
 }

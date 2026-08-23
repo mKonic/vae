@@ -2,6 +2,7 @@
 
 #include "vae/base/Base.h"
 #include "vae/base/Timestep.h"
+#include "vae/core/Chrome.h"
 #include "vae/core/Layer.h"
 #include "vae/core/Window.h"
 #include "vae/gpu/Device.h"
@@ -9,7 +10,7 @@
 #include <string>
 #include <vector>
 
-namespace vae::app { class ImGuiLayer; }
+
 
 namespace vae {
 
@@ -53,7 +54,10 @@ namespace vae {
         void SetContinuousRendering(bool on) { m_Continuous = on; }
 
         Window& GetWindow() { return *m_Window; }
-        app::ImGuiLayer* ImGui() { return m_ImGui; }
+        // The editor chrome, or null in anything that ships. Installed by the editor before the
+        // application is constructed; see Chrome.h for why it is a factory and not a type.
+        ChromeLayer* Chrome() { return m_Chrome; }
+        static void SetChromeFactory(ChromeFactory factory);
         gpu::Device& GetDevice() { return *m_Device; }
         bool HasDevice() const { return m_Device != nullptr; }
         const AppSpec& Spec() const { return m_Spec; }
@@ -70,7 +74,7 @@ namespace vae {
         Scope<Window>       m_Window;
         Scope<gpu::Device>  m_Device;
         LayerStack        m_LayerStack;
-        app::ImGuiLayer*  m_ImGui = nullptr;   // owned by the layer stack
+        ChromeLayer*      m_Chrome = nullptr;  // owned by the layer stack
         bool              m_Running        = true;
         bool              m_FrameRequested = true;
         bool              m_Continuous     = false;
