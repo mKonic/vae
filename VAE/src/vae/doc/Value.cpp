@@ -37,8 +37,45 @@ namespace vae::doc {
             "columnWidth",
             "screenKind", "goTo",
             "series", "chartKind",
-            "selectable", "shown", "repeat", "resizable",
+            "selectable", "shown", "repeat", "field", "resizable",
         };
+
+        // Declared types, in enum order and checked against kPropNames' length below. `Unset` is
+        // "the shape decides" and is deliberate everywhere it appears, not a gap: Value is text on
+        // a field and a number on a slider, and Series is a list the widget parses itself.
+        using VT = ValueType;
+        constexpr std::array<ValueType, static_cast<std::size_t>(Prop::Count)> kPropTypes{
+            // paint
+            VT::Colour, VT::Number, VT::Colour, VT::Number, VT::Number, VT::Number, VT::Bool,
+            VT::Bool, VT::Colour, VT::Vector2, VT::Number, VT::Number,
+            // text
+            VT::Text, VT::Text, VT::Number, VT::Number, VT::Bool, VT::Colour, VT::Text, VT::Number,
+            VT::Number, VT::Text,
+            // image
+            VT::Asset, VT::Text,
+            // interaction
+            VT::Bool, VT::Text, VT::Text,
+            // widgets
+            VT::Text, VT::Bool, VT::Unset, VT::Number, VT::Number, VT::Number, VT::Text,
+            VT::Number, VT::Text, VT::Bool, VT::Bool, VT::Bool, VT::Number, VT::Bool,
+            VT::Text, VT::Number, VT::Number,
+            VT::Number, VT::Number, VT::Number, VT::Bool, VT::Number,
+            // screens
+            VT::Text, VT::Text,
+            // charts
+            VT::Unset, VT::Text,
+            VT::Bool,       // selectable
+            VT::Text,       // shown
+            VT::Number,     // repeat
+            VT::Text,       // field
+            VT::Bool,       // resizable
+        };
+        static_assert(kPropTypes.size() == kPropNames.size());
+    }
+
+    ValueType PropValueType(Prop prop) {
+        const auto index = static_cast<std::size_t>(prop);
+        return index < kPropTypes.size() ? kPropTypes[index] : ValueType::Unset;
     }
 
     namespace {

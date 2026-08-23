@@ -45,6 +45,15 @@ namespace vae::doc {
         // card, one chip; a script says how many there are. A property on the container that was
         // already there, rather than a second List that happens to be data-driven.
         Repeat,
+        // What a copy of a repeated container shows: the column of the row it stands for. The
+        // designer styles one row and says which part of it is the author and which is the body;
+        // the app hands over the rows. Without it a repeat is the same thing drawn N times, which
+        // is a placeholder rather than a list.
+        //
+        // "author" fills the node's natural property — text on a label, image on a picture.
+        // "fill:colour" fills a named one, which is how a row carries a state colour or a badge
+        // it only sometimes has ("visible:unread").
+        Field,
         // On a screen: whether the app it becomes may be resized. A screen's width and height are
         // its *design* size — the artboard the canvas draws and the size the window opens at — and
         // by default the running app fills whatever window it is given and lays out again. Turning
@@ -55,6 +64,17 @@ namespace vae::doc {
 
     const char* PropName(Prop prop);
     std::optional<Prop> PropFromName(std::string_view name);
+
+    // What a property holds, when that is knowable from the property alone. A format where every
+    // value is text — an XML attribute — cannot tell `text="1"` from `fontSize="1"` by shape, so the
+    // reader asks here instead: Prop::Text is Text, Prop::FontSize is Number, and neither has to be
+    // spelled with an escape.
+    //
+    // `Unset` means "the shape decides", which is the honest answer for the few properties that are
+    // genuinely polymorphic — Prop::Value is text on a field and a number on a slider — and for
+    // every custom property, whose name is a free string and whose type is nobody's to declare.
+    // Those are the only ones that ever need the '$' escape to keep a numeric-looking string.
+    ValueType PropValueType(Prop prop);
 
     // A sparse property map. Sparse on purpose: an override records only the properties that were
     // actually changed, and "unset" has to stay distinguishable from "set to the default" or an

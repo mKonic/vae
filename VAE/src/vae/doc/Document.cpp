@@ -36,6 +36,7 @@ namespace vae::doc {
     Document::Document() = default;
 
     void Document::Clear() {
+        PopIdScope();
         m_Nodes.clear();
         m_Roots.clear();
         m_Tokens.clear();
@@ -70,9 +71,21 @@ namespace vae::doc {
         return it == m_Nodes.end() ? nullptr : &it->second;
     }
 
+    void Document::PushIdScope(std::string scope) {
+        m_IdScope = std::move(scope);
+        m_IdCounter = 0;
+    }
+
+    void Document::PopIdScope() {
+        m_IdScope.clear();
+        m_IdCounter = 0;
+    }
+
     Uuid Document::CreateNode(NodeKind kind, Uuid parent, std::string name) {
         Node node;
-        node.id = Uuid{};
+        node.id = m_IdScope.empty()
+                    ? Uuid{}
+                    : Uuid::FromName(m_IdScope + "#" + std::to_string(m_IdCounter++));
         node.kind = kind;
         node.name = name.empty() ? NodeKindName(kind) : std::move(name);
         node.parent = parent;
@@ -417,9 +430,135 @@ namespace vae::doc {
         return Uuid::Invalid();
     }
 
+    // ---------------------------------------------------------------------------- rows
+
+    u32 RowTable::Count() const {
+        return columns.empty() ? 0u : static_cast<u32>(cells.size() / columns.size());
+    }
+
+    i32 RowTable::ColumnOf(std::string_view name) const {
+        for (std::size_t i = 0; i < columns.size(); ++i)
+            if (columns[i] == name) return static_cast<i32>(i);
+        return -1;
+    }
+
+    std::string_view RowTable::Cell(u32 row, u32 column) const {
+        if (column >= columns.size()) return {};
+        const std::size_t at = static_cast<std::size_t>(row) * columns.size() + column;
+        return at < cells.size() ? std::string_view(cells[at]) : std::string_view{};
+    }
+
+    std::string_view RowTable::Cell(u32 row, std::string_view column) const {
+        const i32 index = ColumnOf(column);
+        return index < 0 ? std::string_view{} : Cell(row, static_cast<u32>(index));
+    }
+
+    namespace {
+
+        // What a property holds, which is what a cell has to be read as. A cell is text on the
+        // wire — the app said "3" or "online" or "" — and the property it lands on decides whether
+        // that is a number, a token or a fact about whether the node is there at all.
+        enum class Shape { Text, Number, Bool, Colour };
+
+        Shape ShapeOf(Prop prop) {
+            switch (prop) {
+                case Prop::Fill: case Prop::Stroke: case Prop::TextColor: case Prop::ShadowColor:
+                    return Shape::Colour;
+                case Prop::Visible: case Prop::ClipContent: case Prop::Enabled: case Prop::Checked:
+                case Prop::Multiline: case Prop::Password: case Prop::ReadOnly: case Prop::Open:
+                case Prop::Selectable: case Prop::Modal: case Prop::FontItalic:
+                case Prop::Resizable:
+                    return Shape::Bool;
+                case Prop::FillOpacity: case Prop::StrokeWidth: case Prop::CornerRadius:
+                case Prop::Opacity: case Prop::ShadowBlur: case Prop::ShadowSpread:
+                case Prop::FontSize: case Prop::FontWeight: case Prop::LineHeight:
+                case Prop::LetterSpacing: case Prop::Value: case Prop::MinValue:
+                case Prop::MaxValue: case Prop::Step: case Prop::SelectedIndex:
+                case Prop::MaxLength: case Prop::ScrollX: case Prop::ScrollY:
+                case Prop::ItemHeight: case Prop::ItemCount: case Prop::Duration:
+                case Prop::ColumnWidth: case Prop::Repeat:
+                    return Shape::Number;
+                default:
+                    return Shape::Text;
+            }
+        }
+
+        bool TruthOf(std::string_view cell) {
+            return !(cell.empty() || cell == "0" || cell == "false" || cell == "no"
+                     || cell == "off");
+        }
+
+        // "#5865f2", or the name of a token. A colour written into data is nearly always the
+        // second: a row saying `online` means the theme's green, not one particular green.
+        Value ColourOf(std::string_view cell) {
+            if (cell.empty()) return {};
+            if (cell.front() != '#') return TokenRef{ std::string(cell) };
+
+            u32 packed = 0;
+            const std::string_view digits = cell.substr(1);
+            if (digits.size() != 6 && digits.size() != 8) return TokenRef{ std::string(cell) };
+            for (const char c : digits) {
+                const u32 value = c >= '0' && c <= '9' ? static_cast<u32>(c - '0')
+                                : c >= 'a' && c <= 'f' ? static_cast<u32>(c - 'a' + 10)
+                                : c >= 'A' && c <= 'F' ? static_cast<u32>(c - 'A' + 10)
+                                                       : 16u;
+                if (value == 16u) return TokenRef{ std::string(cell) };
+                packed = (packed << 4) | value;
+            }
+            const bool alpha = digits.size() == 8;
+            const u32 rgb = alpha ? (packed >> 8) : packed;
+            return Color{ static_cast<f32>((rgb >> 16) & 0xFF) / 255.0f,
+                          static_cast<f32>((rgb >> 8) & 0xFF) / 255.0f,
+                          static_cast<f32>(rgb & 0xFF) / 255.0f,
+                          alpha ? static_cast<f32>(packed & 0xFF) / 255.0f : 1.0f };
+        }
+
+        // The binding on a node inside a row template: which column it draws, and which of its own
+        // properties draws it. "author" fills the node's natural property — text on a label, the
+        // picture on an image; "fill:tint" names one outright.
+        void ApplyField(PropBag& props, NodeKind kind, const RowTable& table, u32 row) {
+            const Value* binding = props.Find(Prop::Field);
+            if (!binding) return;
+            const auto* text = std::get_if<std::string>(binding);
+            if (!text || text->empty()) return;
+
+            std::string_view column(*text);
+            Prop target = kind == NodeKind::Image || kind == NodeKind::Vector ? Prop::Image
+                                                                             : Prop::Text;
+            if (const std::size_t colon = column.find(':'); colon != std::string_view::npos) {
+                const std::optional<Prop> named = PropFromName(column.substr(0, colon));
+                if (!named) return;
+                target = *named;
+                column = column.substr(colon + 1);
+            }
+
+            const std::string_view cell = table.Cell(row, column);
+            switch (ShapeOf(target)) {
+                case Shape::Text:   props.Set(target, std::string(cell)); break;
+                case Shape::Bool:   props.Set(target, TruthOf(cell)); break;
+                case Shape::Number: {
+                    // A cell that is not a number leaves the authored value alone: a number that
+                    // silently reads as zero is a row that silently disappears.
+                    char* end = nullptr;
+                    const std::string owned(cell);
+                    const f32 value = std::strtof(owned.c_str(), &end);
+                    if (end && end != owned.c_str()) props.Set(target, value);
+                    break;
+                }
+                case Shape::Colour: {
+                    Value colour = ColourOf(cell);
+                    if (IsSet(colour)) props.Set(target, std::move(colour));
+                    break;
+                }
+            }
+        }
+
+    }
+
     void Document::FlattenInto(std::vector<FlatNode>& out, Uuid id, u32 parent,
                                std::vector<Uuid>& chain, Uuid pathContext, u32 depth,
-                               const SlotContent* slot) const {
+                               const SlotContent* slot, const RowLookup* rows,
+                               const RowBinding* row) const {
         const Node* node = Find(id);
         if (!node) return;
 
@@ -455,6 +594,7 @@ namespace vae::doc {
             flat.layout = node->layout;
             flat.name = node->name;
             flat.props = ResolvedProps(chain, id);
+            if (row && row->table) ApplyField(flat.props, flat.kind, *row->table, row->row);
             out.push_back(std::move(flat));
 
             const u32 index = static_cast<u32>(out.size() - 1);
@@ -465,7 +605,7 @@ namespace vae::doc {
             // and they stay in the page's scope, which is why the chain is not pushed here.
             if (fills && slotNode == component->id) {
                 for (Uuid child : node->children)
-                    FlattenInto(out, child, index, chain, pathContext, depth);
+                    FlattenInto(out, child, index, chain, pathContext, depth, nullptr, rows, row);
                 return;
             }
 
@@ -481,7 +621,8 @@ namespace vae::doc {
 
             chain.push_back(id);
             for (Uuid child : component->children)
-                FlattenInto(out, child, index, chain, path, depth + 1, fills ? &content : nullptr);
+                FlattenInto(out, child, index, chain, path, depth + 1, fills ? &content : nullptr,
+                            rows, row);
             chain.pop_back();
             return;
         }
@@ -499,6 +640,8 @@ namespace vae::doc {
         // Inside an instance, every descendant's props go through the same override resolution as
         // the root — that is what makes "change the label on this one card" work.
         flat.props = ResolvedProps(chain, id);
+        // Inside a copy, whatever the template said this node draws is filled in from the row.
+        if (row && row->table) ApplyField(flat.props, flat.kind, *row->table, row->row);
         out.push_back(std::move(flat));
 
         const u32 index = static_cast<u32>(out.size() - 1);
@@ -509,7 +652,7 @@ namespace vae::doc {
         if (node->slot && slot && slot->children && !slot->children->empty()) {
             std::vector<Uuid> outer = slot->chain;
             for (Uuid child : *slot->children)
-                FlattenInto(out, child, index, outer, slot->pathContext, depth);
+                FlattenInto(out, child, index, outer, slot->pathContext, depth, nullptr, rows, row);
             return;
         }
 
@@ -521,9 +664,14 @@ namespace vae::doc {
         // Each copy gets an identity of its own, or a checkbox in row three would be the same
         // widget as the one in row one and toggling either would toggle both.
         // Read from the node that was just pushed, not from `flat` — that one was moved out of.
-        const f32 repeats = out[index].props.Number(Prop::Repeat, 0.0f);
-        if (repeats >= 1.0f && !node->children.empty()) {
-            const u32 count = std::min(static_cast<u32>(repeats), kMaxRepeat);
+        // Rows, when the app handed any over, say how many copies there are; the authored number
+        // is what the designer sees before it runs. Rows win: a list of three messages is three
+        // rows long whatever the placeholder said.
+        const RowTable* table = rows && *rows ? (*rows)(id, pathContext) : nullptr;
+        const f32 authored = out[index].props.Number(Prop::Repeat, 0.0f);
+        const f32 repeats = table ? static_cast<f32>(table->Count()) : authored;
+        if ((table || repeats >= 1.0f) && !node->children.empty()) {
+            const u32 count = std::min(static_cast<u32>(std::max(repeats, 0.0f)), kMaxRepeat);
             if (static_cast<f32>(count) < repeats)
                 VAE_CORE_WARN("'{}' asked to repeat {} times; {} is the limit", node->name,
                               static_cast<u32>(repeats), kMaxRepeat);
@@ -532,26 +680,32 @@ namespace vae::doc {
             const std::string base = Find(templateId) ? Find(templateId)->name : std::string("Item");
             for (u32 i = 0; i < count; ++i) {
                 const std::size_t at = out.size();
+                const RowBinding binding{ table, i };
                 FlattenInto(out, templateId, index, chain,
                             Uuid::Derive(pathContext, Uuid(templateId.Value() + i + 1)), depth,
-                            slot);
+                            slot, rows, table ? &binding : row);
                 // Named for its place, so a script can address the third one by saying so.
                 if (out.size() > at) out[at].name = base + " " + std::to_string(i + 1);
-                for (std::size_t k = at; k < out.size(); ++k) out[k].repeated = true;
+                for (std::size_t k = at; k < out.size(); ++k) {
+                    out[k].repeated = true;
+                    out[k].row = static_cast<i32>(i);
+                }
+                if (out.size() > at) out[at].rowRoot = true;
             }
             for (std::size_t c = 1; c < node->children.size(); ++c)
-                FlattenInto(out, node->children[c], index, chain, pathContext, depth, slot);
+                FlattenInto(out, node->children[c], index, chain, pathContext, depth, slot, rows,
+                            row);
             return;
         }
 
         for (Uuid child : node->children)
-            FlattenInto(out, child, index, chain, pathContext, depth, slot);
+            FlattenInto(out, child, index, chain, pathContext, depth, slot, rows, row);
     }
 
-    std::vector<Document::FlatNode> Document::Flatten(Uuid root) const {
+    std::vector<Document::FlatNode> Document::Flatten(Uuid root, const RowLookup& rows) const {
         std::vector<FlatNode> out;
         std::vector<Uuid> chain;
-        FlattenInto(out, root, UINT32_MAX, chain, Uuid::Invalid(), 0);
+        FlattenInto(out, root, UINT32_MAX, chain, Uuid::Invalid(), 0, nullptr, &rows);
         return out;
     }
 

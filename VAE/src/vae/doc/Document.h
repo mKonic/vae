@@ -19,6 +19,29 @@ namespace vae::doc {
 
     enum class Theme : u8 { Light, Dark };
 
+    // The rows an app hands to a repeated container. A repeat on its own is one node drawn N
+    // times, which is a placeholder; with rows behind it every copy draws a row, which is what a
+    // list of messages, of channels or of people actually is.
+    //
+    // Columns are named because the template names the part of a row it draws — "author", "body".
+    // Positions would be a second thing to keep in step, and they break the moment a column moves.
+    struct RowTable {
+        std::vector<std::string> columns;
+        std::vector<std::string> cells;      // row-major, columns.size() wide
+
+        u32  Count() const;
+        i32  ColumnOf(std::string_view name) const;
+        // Empty when the row or the column is not there: a template bound to a column the data
+        // does not carry draws nothing, which is what an absent value means.
+        std::string_view Cell(u32 row, std::string_view column) const;
+        std::string_view Cell(u32 row, u32 column) const;
+        bool operator==(const RowTable&) const = default;
+    };
+
+    // Where a repeated container's rows come from. The document holds no data of its own — this is
+    // the runtime lending its rows for the length of one flatten.
+    using RowLookup = std::function<const RowTable*(Uuid node, Uuid instance)>;
+
     // The design document: a flat map of nodes addressed by Uuid, plus tokens.
     //
     // Flat and id-addressed rather than a pointer tree, because every other system needs stable
@@ -32,6 +55,15 @@ namespace vae::doc {
         Uuid CreateNode(NodeKind kind, Uuid parent = Uuid::Invalid(), std::string name = {});
         // Inserts an already-built node, preserving its id. Used by undo, paste and load.
         void InsertNode(Node node, u32 index = UINT32_MAX);
+
+        // While a scope is open, CreateNode mints ids from the scope name and a counter instead of
+        // at random. Only the standard widget catalog uses this: it is rebuilt from code on every
+        // load rather than stored in the file, so the same widget has to come back with the same
+        // ids or every override an instance recorded against it would go stale. Scoping per
+        // component rather than over the whole catalog means adding a widget cannot disturb the
+        // ids of the ones already shipped.
+        void PushIdScope(std::string scope);
+        void PopIdScope();
         void DeleteNode(Uuid id);                       // recursive
         void Reparent(Uuid id, Uuid newParent, u32 index = UINT32_MAX);
         void Reorder(Uuid id, u32 index);
@@ -137,12 +169,21 @@ namespace vae::doc {
             // node of its own to write to — every copy shares the one the designer drew — so what
             // a widget changes about it is runtime state keyed on the copy, not a document edit.
             bool repeated = false;
+            // Which copy, counting from zero, or -1 outside one. A click has to be able to say
+            // which row it was, and the name of a copy ("Channel 3") is a label, not an index.
+            i32 row = -1;
+            // The top of a copy, as opposed to something drawn inside one. A row nested in a row
+            // has a row number of its own, so "which copy is this" cannot be answered by walking
+            // up until the numbers run out.
+            bool rowRoot = false;
             NodeKind kind = NodeKind::Frame;
             layout::LayoutStyle layout{};
             PropBag props;
             std::string name;
         };
-        std::vector<FlatNode> Flatten(Uuid root) const;
+        // `rows` answers with what a repeated container was handed, if anything. Without it a
+        // repeat is still a repeat — it just draws the template's own text N times.
+        std::vector<FlatNode> Flatten(Uuid root, const RowLookup& rows = {}) const;
 
         // --- change notification ---------------------------------------------------------------
         // Studio, the renderer and hot reload all watch the same stream, so there is exactly one
@@ -171,9 +212,19 @@ namespace vae::doc {
             std::vector<Uuid> chain;
             Uuid pathContext = Uuid::Invalid();
         };
+        // Which row of which table a node is being flattened for. Null everywhere except inside
+        // a repeated copy, which is the only place a field binding means anything.
+        struct RowBinding {
+            const RowTable* table = nullptr;
+            u32 row = 0;
+        };
         void FlattenInto(std::vector<FlatNode>& out, Uuid id, u32 parent,
                          std::vector<Uuid>& chain, Uuid pathContext, u32 depth,
-                         const SlotContent* slot = nullptr) const;
+                         const SlotContent* slot = nullptr, const RowLookup* rows = nullptr,
+                         const RowBinding* row = nullptr) const;
+
+        std::string m_IdScope;      // empty except while the standard library is being built
+        u32 m_IdCounter = 0;
 
         std::unordered_map<Uuid, Node> m_Nodes;
         std::vector<Uuid> m_Roots;

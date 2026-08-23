@@ -69,6 +69,11 @@ namespace vae::doc {
         Uuid componentId = Uuid::Invalid();
         std::map<Uuid, PropBag> overrides;
 
+        // Whole-node equality, which is how "is this still the stock widget?" is answered on
+        // save: a component whose subtree matches the one the binary would build is written to the
+        // file as a reference instead of 40 nodes of copy.
+        bool operator==(const Node&) const = default;
+
         bool IsInstance() const { return kind == NodeKind::Instance; }
         bool IsComponent() const { return kind == NodeKind::Component; }
     };

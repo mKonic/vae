@@ -565,10 +565,14 @@ TEST(serializer, round_trips_components_and_overrides) {
 TEST(serializer, refuses_a_document_from_a_newer_build) {
     Document doc;
     std::string json = Serializer::ToJson(doc);
-    // Forge a future version; the reader must refuse rather than half-read it.
-    const auto pos = json.find("\"version\": 1");
+    // Forge a future version; the reader must refuse rather than half-read it. Built from the
+    // current version rather than spelled out, so bumping the format does not break the test that
+    // guards the bump.
+    const std::string written = "\"version\": " + std::to_string(Serializer::kJsonFormatVersion);
+    const auto pos = json.find(written);
     CHECK(pos != std::string::npos);
-    json.replace(pos, std::string("\"version\": 1").size(), "\"version\": 99");
+    if (pos == std::string::npos) return;
+    json.replace(pos, written.size(), "\"version\": 99");
 
     Document loaded;
     std::string error;
@@ -659,4 +663,789 @@ TEST(doc, assets_are_kept_by_id_and_survive_a_round_trip) {
     loaded.RemoveAsset(logo);
     CHECK_EQ(loaded.Assets().size(), std::size_t(1));
     CHECK(loaded.FindAsset(logo) == nullptr);
+}
+
+// ------------------------------------------------------------------ rows
+
+TEST(doc, rows_decide_how_many_copies_a_repeated_container_has) {
+    // The designer draws one row and says "repeat 2" so the canvas is not empty. The app hands
+    // over three rows; three is what there are. Data wins over the placeholder, or every list in
+    // every screen would be as long as whatever number somebody typed while drawing it.
+    Document doc;
+    const Uuid screen = doc.CreateNode(NodeKind::Screen);
+    const Uuid list = doc.CreateNode(NodeKind::Frame, screen, "Messages");
+    doc.SetProp(list, Prop::Repeat, 2.0f);
+    const Uuid row = doc.CreateNode(NodeKind::Frame, list, "Message");
+    const Uuid body = doc.CreateNode(NodeKind::Text, row, "Body");
+    doc.SetProp(body, Prop::Field, std::string("body"));
+
+    RowTable table;
+    table.columns = { "body" };
+    table.cells = { "one", "two", "three" };
+
+    const auto flat = doc.Flatten(screen, [&](Uuid node, Uuid) -> const RowTable* {
+        return node == list ? &table : nullptr;
+    });
+
+    // screen + list + three copies of (Message, Body)
+    CHECK_EQ(flat.size(), 8u);
+
+    std::vector<std::string> bodies;
+    for (const auto& node : flat)
+        if (node.kind == NodeKind::Text) bodies.push_back(node.props.Text(Prop::Text));
+    CHECK_EQ(bodies.size(), 3u);
+    CHECK_EQ(bodies[0], std::string("one"));
+    CHECK_EQ(bodies[2], std::string("three"));
+
+    // Every node inside a copy knows which copy it is, not just the copy's root: a click lands on
+    // the label, and the label has to be able to say which message it belongs to.
+    u32 tagged = 0;
+    for (const auto& node : flat)
+        if (node.repeated) {
+            CHECK(node.row >= 0 && node.row <= 2);
+            ++tagged;
+        }
+    CHECK_EQ(tagged, 6u);
+
+    // Without a table the authored count is still what it was.
+    CHECK_EQ(doc.Flatten(screen).size(), 6u);
+}
+
+TEST(doc, a_field_binding_fills_the_property_its_column_names) {
+    Document doc;
+    const Uuid screen = doc.CreateNode(NodeKind::Screen);
+    const Uuid list = doc.CreateNode(NodeKind::Frame, screen, "Members");
+    const Uuid row = doc.CreateNode(NodeKind::Frame, list, "Member");
+    doc.SetProp(row, Prop::Field, std::string("fill:tint"));
+    const Uuid name = doc.CreateNode(NodeKind::Text, row, "Name");
+    doc.SetProp(name, Prop::Field, std::string("name"));           // bare: the natural property
+    const Uuid dot = doc.CreateNode(NodeKind::Frame, row, "Dot");
+    doc.SetProp(dot, Prop::Visible, true);
+    doc.SetProp(dot, Prop::Field, std::string("visible:online"));
+    const Uuid badge = doc.CreateNode(NodeKind::Text, row, "Badge");
+    doc.SetProp(badge, Prop::Text, std::string("drawn"));
+    doc.SetProp(badge, Prop::Field, std::string("unread"));         // a column the data lacks
+
+    RowTable table;
+    table.columns = { "name", "tint", "online" };
+    table.cells = { "Ada",   "#ff8800", "true",
+                    "Grace", "accent",  "no" };
+
+    const auto flat = doc.Flatten(screen, [&](Uuid node, Uuid) -> const RowTable* {
+        return node == list ? &table : nullptr;
+    });
+
+    // Copies are named for their place — "Member 1" — and everything inside one keeps the name it
+    // was drawn with, so a part of row two is (name, row) away.
+    const auto find = [&](std::string_view what, i32 which) -> const Document::FlatNode* {
+        for (const auto& node : flat)
+            if (node.row == which && node.name.rfind(what, 0) == 0) return &node;
+        return nullptr;
+    };
+
+    const auto* firstRow = find("Member", 0);
+    CHECK(firstRow != nullptr);
+    if (firstRow) {
+        const Value* fill = firstRow->props.Find(Prop::Fill);
+        CHECK(fill && std::holds_alternative<Color>(*fill));
+        if (fill && std::holds_alternative<Color>(*fill)) {
+            CHECK_NEAR(std::get<Color>(*fill).r, 1.0f);
+            CHECK_NEAR(std::get<Color>(*fill).g, 0.53333f);
+        }
+    }
+
+    // A cell that is not a hex triple is a token name, so a row can pick a colour from the theme.
+    const auto* secondRow = find("Member", 1);
+    CHECK(secondRow != nullptr);
+    if (secondRow) {
+        const Value* fill = secondRow->props.Find(Prop::Fill);
+        CHECK(fill && std::holds_alternative<TokenRef>(*fill));
+        if (fill && std::holds_alternative<TokenRef>(*fill))
+            CHECK_EQ(std::get<TokenRef>(*fill).name, std::string("accent"));
+    }
+
+    const auto* firstName = find("Name", 0);
+    const auto* secondName = find("Name", 1);
+    CHECK(firstName && firstName->props.Text(Prop::Text) == "Ada");
+    CHECK(secondName && secondName->props.Text(Prop::Text) == "Grace");
+
+    const auto* firstDot = find("Dot", 0);
+    const auto* secondDot = find("Dot", 1);
+    CHECK(firstDot && firstDot->props.Flag(Prop::Visible, false));
+    CHECK(secondDot && !secondDot->props.Flag(Prop::Visible, true));
+
+    // Nothing in the data, nothing drawn: a template bound to a column the rows do not carry is
+    // blank, not stuck showing whatever the designer typed into it.
+    const auto* firstBadge = find("Badge", 0);
+    CHECK(firstBadge && firstBadge->props.Text(Prop::Text).empty());
+}
+
+TEST(doc, an_empty_table_empties_its_container_and_nothing_else) {
+    Document doc;
+    const Uuid screen = doc.CreateNode(NodeKind::Screen);
+    const Uuid list = doc.CreateNode(NodeKind::Frame, screen, "Messages");
+    doc.SetProp(list, Prop::Repeat, 3.0f);
+    doc.CreateNode(NodeKind::Frame, list, "Message");
+    doc.CreateNode(NodeKind::Text, list, "Empty state");   // a sibling of the template, not a copy
+    doc.CreateNode(NodeKind::Text, screen, "Composer");
+
+    RowTable table;
+    table.columns = { "body" };
+
+    const auto flat = doc.Flatten(screen, [&](Uuid node, Uuid) -> const RowTable* {
+        return node == list ? &table : nullptr;
+    });
+
+    // screen + list + the empty state + the composer; no copies at all.
+    CHECK_EQ(flat.size(), 4u);
+    for (const auto& node : flat) CHECK(!node.repeated);
+
+    bool composer = false, empty = false;
+    for (const auto& node : flat) {
+        composer = composer || node.name == "Composer";
+        empty = empty || node.name == "Empty state";
+    }
+    CHECK(composer);
+    CHECK(empty);
+}
+
+TEST(doc, a_row_table_reads_cells_by_column_name) {
+    RowTable table;
+    table.columns = { "author", "body" };
+    table.cells = { "Ada", "hello", "Grace", "hi" };
+
+    CHECK_EQ(table.Count(), 2u);
+    CHECK_EQ(table.ColumnOf("body"), 1);
+    CHECK_EQ(table.ColumnOf("missing"), -1);
+    CHECK_EQ(std::string(table.Cell(1, "author")), std::string("Grace"));
+    CHECK(table.Cell(1, "missing").empty());
+    CHECK(table.Cell(9, "author").empty());
+}
+
+TEST(doc, a_field_binding_survives_a_round_trip_through_the_serializer) {
+    // The one thing that would break silently: a row template whose bindings are dropped on save
+    // still looks right in the editor and draws blank the next time the project is opened.
+    Document doc;
+    const Uuid list = doc.CreateNode(NodeKind::Frame, Uuid::Invalid(), "Messages");
+    doc.SetProp(list, Prop::Repeat, 3.0f);
+    const Uuid body = doc.CreateNode(NodeKind::Text, list, "Body");
+    doc.SetProp(body, Prop::Field, std::string("fill:tint"));
+
+    const std::string json = Serializer::ToJson(doc);
+    Document loaded;
+    std::string error;
+    CHECK_MESSAGE(Serializer::FromJson(json, loaded, &error), error);
+    CHECK_EQ(loaded.GetProp(list, Prop::Repeat), Value{ 3.0f });
+    CHECK_EQ(loaded.GetProp(body, Prop::Field), Value{ std::string("fill:tint") });
+}
+
+// ------------------------------------------------------- format: what is not written
+
+TEST(serializer, a_layout_at_its_defaults_is_not_written_at_all) {
+    // Eleven of the nineteen layout fields are at their default on all but a percent or two of
+    // real nodes. Writing them anyway was 40% of a document.
+    Document doc;
+    const Uuid bare = doc.CreateNode(NodeKind::Frame, Uuid::Invalid(), "Bare");
+    const std::string json = Serializer::ToJson(doc);
+    CHECK(json.find("\"layout\"") == std::string::npos);
+    CHECK(json.find("aspectRatio") == std::string::npos);
+
+    // ...and what does differ is still written, on its own.
+    doc.Find(bare)->layout.gap = 12.0f;
+    doc.Touch(bare);
+    const std::string withGap = Serializer::ToJson(doc);
+    CHECK(withGap.find("\"gap\"") != std::string::npos);
+    CHECK(withGap.find("\"minColumn\"") == std::string::npos);
+
+    Document loaded;
+    std::string error;
+    CHECK_MESSAGE(Serializer::FromJson(withGap, loaded, &error), error);
+    CHECK_EQ(loaded.Find(bare)->layout.gap, 12.0f);
+    CHECK_EQ(loaded.Find(bare)->layout.minColumn, layout::LayoutStyle{}.minColumn);
+    CHECK(loaded.Find(bare)->layout.maxSize == layout::LayoutStyle{}.maxSize);
+}
+
+TEST(serializer, every_value_kind_round_trips_untagged) {
+    Document doc;
+    const Uuid node = doc.CreateNode(NodeKind::Frame);
+    doc.SetProp(node, Prop::Checked, true);
+    doc.SetProp(node, Prop::FontSize, 17.5f);
+    doc.SetProp(node, Prop::ShadowOffset, Vec2{ 3.0f, -4.0f });
+    doc.SetProp(node, Prop::ShadowColor, Color{ 0.2f, 0.4f, 0.6f, 0.8f });
+    doc.SetProp(node, Prop::Text, std::string("Send"));
+    doc.SetProp(node, Prop::Fill, TokenRef{ "accent" });
+    doc.SetProp(node, Prop::Value, Binding{ "user.name" });
+    const Uuid asset = doc.AddAsset("logo", "art/logo.png");
+    doc.SetProp(node, Prop::Image, AssetRef{ asset });
+    doc.SetProp(node, Prop::Group, node);
+
+    Document loaded;
+    std::string error;
+    CHECK_MESSAGE(Serializer::FromJson(Serializer::ToJson(doc), loaded, &error), error);
+    CHECK_EQ(loaded.GetProp(node, Prop::Checked), Value{ true });
+    CHECK_EQ(loaded.GetProp(node, Prop::FontSize), Value{ 17.5f });
+    CHECK((loaded.GetProp(node, Prop::ShadowOffset) == Value{ Vec2{ 3.0f, -4.0f } }));
+    CHECK((loaded.GetProp(node, Prop::ShadowColor) == Value{ Color{ 0.2f, 0.4f, 0.6f, 0.8f } }));
+    CHECK_EQ(loaded.GetProp(node, Prop::Text), Value{ std::string("Send") });
+    CHECK(loaded.GetProp(node, Prop::Fill) == Value{ TokenRef{ "accent" } });
+    CHECK(loaded.GetProp(node, Prop::Value) == Value{ Binding{ "user.name" } });
+    CHECK(loaded.GetProp(node, Prop::Image) == Value{ AssetRef{ asset } });
+    CHECK(loaded.GetProp(node, Prop::Group) == Value{ node });
+}
+
+TEST(serializer, numbers_are_written_as_themselves_not_as_widened_doubles) {
+    // Every number in a document is an f32 and nlohmann's only float type is a double, so 0.6f
+    // used to be written 0.6000000238418579 — nineteen characters that also fail to say what the
+    // value is. The shortest f32 spelling narrows back to the same bits.
+    Document doc;
+    const Uuid node = doc.CreateNode(NodeKind::Text);
+    doc.SetProp(node, Prop::LetterSpacing, 0.6f);
+    doc.SetProp(node, Prop::Opacity, 0.1f);
+    doc.SetProp(node, Prop::ShadowColor, Color{ 0.29f, 0.427f, 0.808f, 1.0f });
+    doc.Find(node)->layout.gap = 12.5f;
+    doc.Find(node)->layout.aspectRatio = 1.0f / 3.0f;
+
+    const std::string json = Serializer::ToJson(doc);
+    CHECK(json.find("0.6000000238418579") == std::string::npos);
+    CHECK(json.find("0.6") != std::string::npos);
+    CHECK(json.find("0.1,") != std::string::npos || json.find("0.1\n") != std::string::npos ||
+          json.find("0.1 ") != std::string::npos);
+
+    Document loaded;
+    std::string error;
+    CHECK_MESSAGE(Serializer::FromJson(json, loaded, &error), error);
+    CHECK_EQ(loaded.GetProp(node, Prop::LetterSpacing), Value{ 0.6f });
+    CHECK_EQ(loaded.GetProp(node, Prop::Opacity), Value{ 0.1f });
+    CHECK((loaded.GetProp(node, Prop::ShadowColor) == Value{ Color{ 0.29f, 0.427f, 0.808f, 1.0f } }));
+    CHECK_EQ(loaded.Find(node)->layout.gap, 12.5f);
+    CHECK_EQ(loaded.Find(node)->layout.aspectRatio, 1.0f / 3.0f);
+}
+
+TEST(serializer, a_property_declares_what_it_holds) {
+    // The table a text-only format reads with: `text="1"` is a string because Prop::Text says so,
+    // and `fontSize="1"` is a number for the same reason. Unset is the honest answer for the ones
+    // that are genuinely polymorphic, and is what puts them on the escape path instead.
+    CHECK(PropValueType(Prop::Text) == ValueType::Text);
+    CHECK(PropValueType(Prop::FontSize) == ValueType::Number);
+    CHECK(PropValueType(Prop::Fill) == ValueType::Colour);
+    CHECK(PropValueType(Prop::Enabled) == ValueType::Bool);
+    CHECK(PropValueType(Prop::ShadowOffset) == ValueType::Vector2);
+    CHECK(PropValueType(Prop::Image) == ValueType::Asset);
+    CHECK(PropValueType(Prop::Resizable) == ValueType::Bool);
+    CHECK(PropValueType(Prop::Value) == ValueType::Unset);       // text on a field, number on a slider
+    CHECK(PropValueType(Prop::Series) == ValueType::Unset);
+}
+
+TEST(serializer, a_colour_that_does_not_fit_in_hex_keeps_its_floats) {
+    // A colour from a picker is 8-bit and writes as "#rrggbbaa"; one computed in code is not, and
+    // must not be quietly rounded on the way to disk.
+    Document doc;
+    const Uuid node = doc.CreateNode(NodeKind::Frame);
+    const Color exact{ 1.0f, 0.0f, 0.5019608f, 1.0f };     // #ff0080ff
+    const Color computed{ 0.1234567f, 0.5f, 0.5f, 1.0f };
+    doc.SetProp(node, Prop::Fill, exact);
+    doc.SetProp(node, Prop::Stroke, computed);
+
+    const std::string json = Serializer::ToJson(doc);
+    CHECK(json.find("#ff0080") != std::string::npos);
+
+    Document loaded;
+    std::string error;
+    CHECK_MESSAGE(Serializer::FromJson(json, loaded, &error), error);
+    CHECK(loaded.GetProp(node, Prop::Fill) == Value{ exact });
+    CHECK(loaded.GetProp(node, Prop::Stroke) == Value{ computed });
+}
+
+TEST(serializer, a_string_that_starts_with_a_sigil_is_still_a_string) {
+    // Untagged values mean "@x" is a token reference — so a label that really does read "@mkonic"
+    // has to survive the trip, and so does a hex colour someone typed as text.
+    Document doc;
+    const Uuid node = doc.CreateNode(NodeKind::Text);
+    doc.SetProp(node, Prop::Text, std::string("@mkonic"));
+    doc.SetProp(node, Prop::Placeholder, std::string("#general"));
+    doc.SetProp(node, Prop::Tooltip, std::string("=SUM(A1:A9)"));
+    doc.SetProp(node, "custom:cost", std::string("$40"));
+
+    Document loaded;
+    std::string error;
+    CHECK_MESSAGE(Serializer::FromJson(Serializer::ToJson(doc), loaded, &error), error);
+    CHECK_EQ(loaded.GetProp(node, Prop::Text), Value{ std::string("@mkonic") });
+    CHECK_EQ(loaded.GetProp(node, Prop::Placeholder), Value{ std::string("#general") });
+    CHECK_EQ(loaded.GetProp(node, Prop::Tooltip), Value{ std::string("=SUM(A1:A9)") });
+    CHECK(*loaded.Find(node)->props.Find("custom:cost") == Value{ std::string("$40") });
+}
+
+
+// ------------------------------------------------------------------ format 3 (xml)
+
+namespace {
+    // A file writes an id only on a node something references — 6 of Vaecord's 540 — so a test that
+    // looks a node up by id afterwards is asserting something the format deliberately stopped
+    // promising. The tests below are about what survives a round trip, so they keep the ids; the id
+    // policy itself is tested at the end of this section.
+    std::string ToXmlKeepingIds(const Document& doc) {
+        return Serializer::ToXml(doc, true, nullptr, true);
+    }
+}
+
+TEST(xml, every_value_kind_round_trips_through_an_attribute) {
+    Document doc;
+    const Uuid node = doc.CreateNode(NodeKind::Frame, Uuid::Invalid(), "Box");
+    doc.SetProp(node, Prop::Checked, true);
+    doc.SetProp(node, Prop::FontSize, 17.5f);
+    doc.SetProp(node, Prop::ShadowOffset, Vec2{ 3.0f, -4.0f });
+    doc.SetProp(node, Prop::ShadowColor, Color{ 0.2f, 0.4f, 0.6f, 0.8f });
+    doc.SetProp(node, Prop::Text, std::string("Send"));
+    doc.SetProp(node, Prop::Fill, TokenRef{ "accent" });
+    doc.SetProp(node, Prop::Value, Binding{ "user.name" });
+    const Uuid asset = doc.AddAsset("logo", "art/logo.png");
+    doc.SetProp(node, Prop::Image, AssetRef{ asset });
+    doc.SetProp(node, Prop::Group, node);
+
+    Document loaded;
+    std::string error;
+    CHECK_MESSAGE(Serializer::FromXml(ToXmlKeepingIds(doc), loaded, &error), error);
+    CHECK_EQ(loaded.GetProp(node, Prop::Checked), Value{ true });
+    CHECK_EQ(loaded.GetProp(node, Prop::FontSize), Value{ 17.5f });
+    CHECK((loaded.GetProp(node, Prop::ShadowOffset) == Value{ Vec2{ 3.0f, -4.0f } }));
+    CHECK((loaded.GetProp(node, Prop::ShadowColor) == Value{ Color{ 0.2f, 0.4f, 0.6f, 0.8f } }));
+    CHECK_EQ(loaded.GetProp(node, Prop::Text), Value{ std::string("Send") });
+    CHECK(loaded.GetProp(node, Prop::Fill) == Value{ TokenRef{ "accent" } });
+    CHECK(loaded.GetProp(node, Prop::Value) == Value{ Binding{ "user.name" } });
+    CHECK(loaded.GetProp(node, Prop::Image) == Value{ AssetRef{ asset } });
+    CHECK(loaded.GetProp(node, Prop::Group) == Value{ node });
+}
+
+TEST(xml, a_declared_type_is_what_tells_a_label_from_a_number) {
+    // The one real ambiguity an attribute-only format introduces: every value is text, so `text="1"`
+    // and `fontSize="1"` look identical. The property says which it is.
+    Document doc;
+    const Uuid node = doc.CreateNode(NodeKind::Text);
+    doc.SetProp(node, Prop::Text, std::string("1"));
+    doc.SetProp(node, Prop::FontSize, 1.0f);
+    doc.SetProp(node, Prop::Placeholder, std::string("12 8"));      // would read as a vector
+    doc.SetProp(node, Prop::Tooltip, std::string("true"));          // would read as a bool
+
+    const std::string xml = ToXmlKeepingIds(doc);
+    CHECK(xml.find("text=\"1\"") != std::string::npos);             // no escape needed
+    CHECK(xml.find("fontSize=\"1\"") != std::string::npos);
+
+    Document loaded;
+    std::string error;
+    CHECK_MESSAGE(Serializer::FromXml(xml, loaded, &error), error);
+    CHECK_EQ(loaded.GetProp(node, Prop::Text), Value{ std::string("1") });
+    CHECK_EQ(loaded.GetProp(node, Prop::FontSize), Value{ 1.0f });
+    CHECK_EQ(loaded.GetProp(node, Prop::Placeholder), Value{ std::string("12 8") });
+    CHECK_EQ(loaded.GetProp(node, Prop::Tooltip), Value{ std::string("true") });
+}
+
+TEST(xml, a_custom_property_has_no_declared_type_so_it_escapes_instead) {
+    // Nobody declares what "hovered:badge" holds, so shape decides — and a string that would read
+    // as something else takes the '$' escape, exactly as in format 2.
+    Document doc;
+    const Uuid node = doc.CreateNode(NodeKind::Frame);
+    doc.SetProp(node, "hovered:fill", TokenRef{ "accent" });
+    doc.SetProp(node, "meta:count", std::string("7"));
+    doc.SetProp(node, "meta:flag", std::string("false"));
+    doc.SetProp(node, "meta:size", 12.0f);
+
+    const std::string xml = ToXmlKeepingIds(doc);
+    CHECK(xml.find("hovered.fill=\"@accent\"") != std::string::npos);
+    CHECK(xml.find("meta.count=\"$7\"") != std::string::npos);
+
+    Document loaded;
+    std::string error;
+    CHECK_MESSAGE(Serializer::FromXml(xml, loaded, &error), error);
+    const PropBag& props = loaded.Find(node)->props;
+    CHECK(*props.Find("hovered:fill") == Value{ TokenRef{ "accent" } });
+    CHECK(*props.Find("meta:count") == Value{ std::string("7") });
+    CHECK(*props.Find("meta:flag") == Value{ std::string("false") });
+    CHECK(*props.Find("meta:size") == Value{ 12.0f });
+}
+
+TEST(xml, a_property_no_attribute_could_carry_goes_out_long_hand) {
+    // A number stored on a property declared to hold text: the attribute would read back as a
+    // string, so it takes the <prop> element, which says its own type. Pathological, and the point
+    // is that it round-trips rather than being silently changed.
+    Document doc;
+    const Uuid node = doc.CreateNode(NodeKind::Text);
+    doc.SetProp(node, Prop::Text, 42.0f);
+
+    const std::string xml = ToXmlKeepingIds(doc);
+    CHECK(xml.find("<prop name=\"text\" type=\"number\" value=\"42\"/>") != std::string::npos);
+
+    Document loaded;
+    std::string error;
+    CHECK_MESSAGE(Serializer::FromXml(xml, loaded, &error), error);
+    CHECK_EQ(loaded.GetProp(node, Prop::Text), Value{ 42.0f });
+}
+
+TEST(xml, a_colour_that_does_not_fit_in_hex_keeps_its_floats) {
+    Document doc;
+    const Uuid node = doc.CreateNode(NodeKind::Frame);
+    const Color exact{ 1.0f, 0.0f, 0.5019608f, 1.0f };
+    const Color computed{ 0.1234567f, 0.5f, 0.5f, 1.0f };
+    doc.SetProp(node, Prop::Fill, exact);
+    doc.SetProp(node, Prop::Stroke, computed);
+
+    const std::string xml = ToXmlKeepingIds(doc);
+    CHECK(xml.find("fill=\"#ff0080\"") != std::string::npos);
+
+    Document loaded;
+    std::string error;
+    CHECK_MESSAGE(Serializer::FromXml(xml, loaded, &error), error);
+    CHECK(loaded.GetProp(node, Prop::Fill) == Value{ exact });
+    CHECK(loaded.GetProp(node, Prop::Stroke) == Value{ computed });
+}
+
+TEST(xml, a_size_says_its_mode_in_its_spelling) {
+    Document doc;
+    const Uuid a = doc.CreateNode(NodeKind::Frame, Uuid::Invalid(), "A");
+    const Uuid b = doc.CreateNode(NodeKind::Frame, a, "B");
+    const Uuid c = doc.CreateNode(NodeKind::Frame, a, "C");
+    const Uuid d = doc.CreateNode(NodeKind::Frame, a, "D");
+    doc.Find(a)->layout.width = layout::Size::Px(72.0f);
+    doc.Find(b)->layout.width = layout::Size::Hug();
+    doc.Find(b)->layout.height = layout::Size::Fill();
+    doc.Find(c)->layout.width = layout::Size::Fill(2.0f);
+    doc.Find(d)->layout.width = layout::Size::Percent(0.5f);
+
+    const std::string xml = ToXmlKeepingIds(doc);
+    CHECK(xml.find("width=\"72\"") != std::string::npos);
+    CHECK(xml.find("height=\"fill\"") != std::string::npos);
+    CHECK(xml.find("width=\"fill 2\"") != std::string::npos);
+    CHECK(xml.find("width=\"50%\"") != std::string::npos);
+
+    Document loaded;
+    std::string error;
+    CHECK_MESSAGE(Serializer::FromXml(xml, loaded, &error), error);
+    CHECK(loaded.Find(a)->layout.width == layout::Size::Px(72.0f));
+    CHECK(loaded.Find(b)->layout.width == layout::Size::Hug());
+    CHECK(loaded.Find(b)->layout.height == layout::Size::Fill());
+    CHECK(loaded.Find(c)->layout.width == layout::Size::Fill(2.0f));
+    CHECK(loaded.Find(d)->layout.width == layout::Size::Percent(0.5f));
+}
+
+TEST(xml, padding_collapses_to_the_shortest_form_that_says_it) {
+    Document doc;
+    const Uuid all = doc.CreateNode(NodeKind::Frame, Uuid::Invalid(), "All");
+    const Uuid hv = doc.CreateNode(NodeKind::Frame, all, "HV");
+    const Uuid four = doc.CreateNode(NodeKind::Frame, all, "Four");
+    doc.Find(all)->layout.padding = Edges{ 12.0f };
+    doc.Find(hv)->layout.padding = Edges{ 16.0f, 8.0f };
+    doc.Find(four)->layout.padding = Edges{ 1.0f, 2.0f, 3.0f, 4.0f };
+
+    const std::string xml = ToXmlKeepingIds(doc);
+    CHECK(xml.find("padding=\"12\"") != std::string::npos);
+    CHECK(xml.find("padding=\"16 8\"") != std::string::npos);
+    CHECK(xml.find("padding=\"1 2 3 4\"") != std::string::npos);
+
+    Document loaded;
+    std::string error;
+    CHECK_MESSAGE(Serializer::FromXml(xml, loaded, &error), error);
+    CHECK(loaded.Find(all)->layout.padding == Edges{ 12.0f });
+    CHECK((loaded.Find(hv)->layout.padding == Edges{ 16.0f, 8.0f }));
+    CHECK((loaded.Find(four)->layout.padding == Edges{ 1.0f, 2.0f, 3.0f, 4.0f }));
+}
+
+TEST(xml, every_enum_is_a_name_rather_than_a_number) {
+    // JSON was writing align, justify and the two constraints as raw u8, which is unreadable and
+    // one enumerator insertion away from silently remapping every file that exists.
+    Document doc;
+    const Uuid node = doc.CreateNode(NodeKind::Frame);
+    layout::LayoutStyle& s = doc.Find(node)->layout;
+    s.mode = layout::LayoutMode::Grid;
+    s.axis = layout::Axis::Row;
+    s.align = layout::Align::Stretch;
+    s.justify = layout::Justify::SpaceBetween;
+    s.constraintX = layout::Constraint::StartEnd;
+    s.constraintY = layout::Constraint::Scale;
+
+    const std::string xml = ToXmlKeepingIds(doc);
+    CHECK(xml.find("mode=\"grid\"") != std::string::npos);
+    CHECK(xml.find("axis=\"row\"") != std::string::npos);
+    CHECK(xml.find("align=\"stretch\"") != std::string::npos);
+    CHECK(xml.find("justify=\"spaceBetween\"") != std::string::npos);
+    CHECK(xml.find("constraintX=\"startEnd\"") != std::string::npos);
+    CHECK(xml.find("constraintY=\"scale\"") != std::string::npos);
+
+    Document loaded;
+    std::string error;
+    CHECK_MESSAGE(Serializer::FromXml(xml, loaded, &error), error);
+    CHECK(loaded.Find(node)->layout == s);
+}
+
+TEST(xml, a_label_with_a_newline_goes_in_the_element_body) {
+    Document doc;
+    const Uuid node = doc.CreateNode(NodeKind::Text, Uuid::Invalid(), "Blurb");
+    doc.SetProp(node, Prop::Text, std::string("line one\nline two"));
+
+    const std::string xml = ToXmlKeepingIds(doc);
+    CHECK(xml.find("&#10;") == std::string::npos);
+    CHECK(xml.find(">line one\nline two</text>") != std::string::npos);
+
+    Document loaded;
+    std::string error;
+    CHECK_MESSAGE(Serializer::FromXml(xml, loaded, &error), error);
+    CHECK_EQ(loaded.GetProp(node, Prop::Text), Value{ std::string("line one\nline two") });
+}
+
+TEST(xml, markup_characters_in_a_label_survive) {
+    Document doc;
+    const Uuid node = doc.CreateNode(NodeKind::Text);
+    doc.SetProp(node, Prop::Text, std::string("Tom & Jerry <3 \"quoted\""));
+    doc.SetProp(node, Prop::Placeholder, std::string("a > b"));
+
+    Document loaded;
+    std::string error;
+    CHECK_MESSAGE(Serializer::FromXml(ToXmlKeepingIds(doc), loaded, &error), error);
+    CHECK_EQ(loaded.GetProp(node, Prop::Text), Value{ std::string("Tom & Jerry <3 \"quoted\"") });
+    CHECK_EQ(loaded.GetProp(node, Prop::Placeholder), Value{ std::string("a > b") });
+}
+
+TEST(xml, a_string_that_starts_with_a_sigil_is_still_a_string) {
+    Document doc;
+    const Uuid node = doc.CreateNode(NodeKind::Text);
+    doc.SetProp(node, Prop::Text, std::string("@mkonic"));
+    doc.SetProp(node, Prop::Placeholder, std::string("#general"));
+    doc.SetProp(node, Prop::Tooltip, std::string("=SUM(A1:A9)"));
+    doc.SetProp(node, Prop::Group, std::string("&anded"));
+    doc.SetProp(node, Prop::Route, std::string("*starred"));
+    doc.SetProp(node, "custom:cost", std::string("$40"));
+
+    Document loaded;
+    std::string error;
+    CHECK_MESSAGE(Serializer::FromXml(ToXmlKeepingIds(doc), loaded, &error), error);
+    CHECK_EQ(loaded.GetProp(node, Prop::Text), Value{ std::string("@mkonic") });
+    CHECK_EQ(loaded.GetProp(node, Prop::Placeholder), Value{ std::string("#general") });
+    CHECK_EQ(loaded.GetProp(node, Prop::Tooltip), Value{ std::string("=SUM(A1:A9)") });
+    CHECK_EQ(loaded.GetProp(node, Prop::Group), Value{ std::string("&anded") });
+    CHECK_EQ(loaded.GetProp(node, Prop::Route), Value{ std::string("*starred") });
+    CHECK(*loaded.Find(node)->props.Find("custom:cost") == Value{ std::string("$40") });
+}
+
+TEST(xml, the_tree_is_the_nesting_and_flags_are_written_only_when_set) {
+    Document doc;
+    const Uuid screen = doc.CreateNode(NodeKind::Screen, Uuid::Invalid(), "Home");
+    const Uuid frame = doc.CreateNode(NodeKind::Frame, screen, "Card");
+    const Uuid label = doc.CreateNode(NodeKind::Text, frame, "Title");
+    doc.Find(frame)->visible = false;
+    doc.Find(frame)->slot = true;
+    doc.Find(label)->locked = true;
+    doc.SetStartScreen(screen);
+
+    const std::string xml = ToXmlKeepingIds(doc);
+    CHECK(xml.find("hidden=\"true\"") != std::string::npos);
+    CHECK(xml.find("visible=") == std::string::npos);          // the node flag is spelled 'hidden'
+    CHECK(xml.find("parent=") == std::string::npos);
+    CHECK(xml.find("children=") == std::string::npos);
+
+    Document loaded;
+    std::string error;
+    CHECK_MESSAGE(Serializer::FromXml(xml, loaded, &error), error);
+    CHECK_EQ(loaded.Find(screen)->children.size(), 1u);
+    CHECK_EQ(loaded.Find(frame)->children.size(), 1u);
+    CHECK_EQ(loaded.Find(frame)->parent, screen);
+    CHECK_EQ(loaded.Find(label)->parent, frame);
+    CHECK(!loaded.Find(frame)->visible);
+    CHECK(loaded.Find(frame)->slot);
+    CHECK(loaded.Find(label)->locked);
+    CHECK(loaded.Find(screen)->visible);
+    CHECK_EQ(loaded.StartScreen(), screen);
+}
+
+TEST(xml, tokens_and_assets_travel_with_the_document) {
+    Document doc;
+    doc.CreateNode(NodeKind::Screen);
+    doc.SetToken("accent", Token{ Color{ 0.1f, 0.2f, 0.3f, 1.0f }, Color{ 0.1f, 0.2f, 0.3f, 1.0f } });
+    doc.SetToken("bg", Token{ Color{ 1, 1, 1, 1 }, Color{ 0, 0, 0, 1 }, "page background" });
+    const Uuid asset = doc.AddAsset("logo", "art/logo.png");
+
+    const std::string xml = ToXmlKeepingIds(doc);
+    // A token whose two themes agree says its value once.
+    CHECK(xml.find("<token name=\"accent\" value=") != std::string::npos);
+    CHECK(xml.find("desc=\"page background\"") != std::string::npos);
+
+    Document loaded;
+    std::string error;
+    CHECK_MESSAGE(Serializer::FromXml(xml, loaded, &error), error);
+    CHECK(loaded.Tokens() == doc.Tokens());
+    CHECK_EQ(loaded.Assets().size(), 1u);
+    CHECK_EQ(loaded.Assets()[0].id, asset);
+    CHECK_EQ(loaded.Assets()[0].path, std::string("art/logo.png"));
+}
+
+TEST(xml, an_override_keeps_the_id_it_keys_on) {
+    Document doc;
+    const Uuid screen = doc.CreateNode(NodeKind::Screen, Uuid::Invalid(), "Home");
+    const Uuid master = doc.CreateNode(NodeKind::Frame, Uuid::Invalid(), "Card");
+    const Uuid inner = doc.CreateNode(NodeKind::Text, master, "Label");
+    const Uuid component = doc.MakeComponent(master, "Card");
+    const Uuid instance = doc.CreateInstance(component, screen);
+    doc.SetOverride(instance, inner, Prop::Text, std::string("Hello"));
+    doc.SetOverride(instance, inner, "hovered:fill", TokenRef{ "accent" });
+
+    Document loaded;
+    std::string error;
+    CHECK_MESSAGE(Serializer::FromXml(ToXmlKeepingIds(doc), loaded, &error), error);
+    const Node* back = loaded.Find(instance);
+    CHECK(back != nullptr);
+    CHECK_EQ(back->componentId, component);
+    CHECK_EQ(back->overrides.size(), 1u);
+    CHECK(back->overrides.contains(inner));
+    CHECK(*back->overrides.at(inner).Find(Prop::Text) == Value{ std::string("Hello") });
+    CHECK(*back->overrides.at(inner).Find("hovered:fill") == Value{ TokenRef{ "accent" } });
+}
+
+TEST(xml, a_malformed_document_says_which_line_and_loads_nothing) {
+    Document loaded;
+    loaded.CreateNode(NodeKind::Screen);
+    std::string error;
+    const std::string broken =
+        "<vae version=\"3\" theme=\"dark\">\n"
+        "  <screen name=\"Home\">\n"
+        "    <frame name=\"Unclosed\">\n"
+        "  </screen>\n"
+        "</vae>\n";
+    CHECK(!Serializer::FromXml(broken, loaded, &error));
+    CHECK(error.find("line ") != std::string::npos);
+
+    // An element the format does not have is refused rather than dropped: silently losing a node
+    // is worse than not opening the file.
+    std::string error2;
+    Document other;
+    CHECK(!Serializer::FromXml("<vae version=\"3\"><widget name=\"x\"/></vae>", other, &error2));
+    CHECK(error2.find("widget") != std::string::npos);
+
+    // The same for an attribute nobody declared.
+    std::string error3;
+    Document third;
+    CHECK(!Serializer::FromXml("<vae version=\"3\"><frame witdh=\"12\"/></vae>", third, &error3));
+    CHECK(error3.find("witdh") != std::string::npos);
+}
+
+TEST(xml, a_document_from_a_newer_build_is_refused_rather_than_half_read) {
+    Document loaded;
+    std::string error;
+    CHECK(!Serializer::FromXml("<vae version=\"99\"><screen name=\"Home\"/></vae>", loaded, &error));
+    CHECK(error.find("newer") != std::string::npos);
+}
+
+TEST(xml, the_loader_reads_either_format_by_looking_at_the_first_character) {
+    Document doc;
+    const Uuid screen = doc.CreateNode(NodeKind::Screen, Uuid::Invalid(), "Home");
+    doc.SetProp(screen, Prop::Fill, TokenRef{ "bg" });
+
+    Document fromXml;
+    Document fromJson;
+    std::string error;
+    CHECK_MESSAGE(Serializer::FromText(ToXmlKeepingIds(doc), fromXml, &error), error);
+    CHECK_MESSAGE(Serializer::FromText(Serializer::ToJson(doc), fromJson, &error), error);
+    CHECK(fromXml.GetProp(screen, Prop::Fill) == Value{ TokenRef{ "bg" } });
+    CHECK(fromJson.GetProp(screen, Prop::Fill) == Value{ TokenRef{ "bg" } });
+
+    // Leading whitespace does not confuse it, and neither format is guessed at from the extension.
+    Document spaced;
+    CHECK_MESSAGE(Serializer::FromText("\n  " + ToXmlKeepingIds(doc), spaced, &error), error);
+    CHECK_EQ(spaced.NodeCount(), 1u);
+}
+
+TEST(xml, a_json_file_claiming_format_3_is_refused) {
+    // Format 3 is markup by definition, so a JSON document that says it is one is either corrupt or
+    // hand-edited, and either way is not something to guess at.
+    Document loaded;
+    std::string error;
+    const std::string text = R"({"format":"vae.document","version":3,"nodes":[],"roots":[]})";
+    CHECK(!Serializer::FromText(text, loaded, &error));
+    CHECK(error.find("format 3 is XML") != std::string::npos);
+}
+
+
+TEST(xml, an_id_is_written_only_when_something_refers_to_it) {
+    Document doc;
+    const Uuid screen = doc.CreateNode(NodeKind::Screen, Uuid::Invalid(), "Home");
+    const Uuid plain = doc.CreateNode(NodeKind::Frame, screen, "Card");
+    doc.CreateNode(NodeKind::Text, plain, "Title");
+    const Uuid master = doc.CreateNode(NodeKind::Frame, Uuid::Invalid(), "Chip");
+    const Uuid inner = doc.CreateNode(NodeKind::Text, master, "Label");
+    const Uuid component = doc.MakeComponent(master, "Chip");
+    const Uuid instance = doc.CreateInstance(component, screen);
+    doc.SetOverride(instance, inner, Prop::Text, std::string("Hello"));
+    doc.SetStartScreen(screen);
+
+    const std::string xml = Serializer::ToXml(doc);
+    // Referenced: the start screen, the component an instance points at, and the node an override
+    // keys on — plus everything inside a component master, which is what overrides key on.
+    CHECK(xml.find(screen.ToString()) != std::string::npos);
+    CHECK(xml.find(component.ToString()) != std::string::npos);
+    CHECK(xml.find(inner.ToString()) != std::string::npos);
+    // Not referenced: a plain frame, its label, and the instance itself.
+    CHECK(xml.find(plain.ToString()) == std::string::npos);
+    CHECK(xml.find(instance.ToString()) == std::string::npos);
+
+    // And the document still comes back whole — the tree is the nesting, not the ids.
+    Document loaded;
+    std::string error;
+    CHECK_MESSAGE(Serializer::FromXml(xml, loaded, &error), error);
+    CHECK_EQ(loaded.NodeCount(), doc.NodeCount());
+    const Node* back = loaded.Find(screen);
+    CHECK(back != nullptr);
+    CHECK_EQ(back->children.size(), 2u);
+    CHECK_EQ(loaded.Find(back->children[0])->name, std::string("Card"));
+    CHECK_EQ(loaded.Find(loaded.Find(back->children[0])->children[0])->name, std::string("Title"));
+    // The instance got a fresh id, and still points at the same component and keys on the same node.
+    const Node* copy = loaded.Find(back->children[1]);
+    CHECK(copy != nullptr);
+    CHECK_EQ(copy->componentId, component);
+    CHECK(copy->overrides.contains(inner));
+}
+
+TEST(xml, keeping_ids_is_what_an_in_memory_snapshot_asks_for) {
+    // The Play/Stop snapshot restores the document in place so observers keep their subscriptions,
+    // and an observer that survives that is holding an id. A file drops them; this cannot.
+    Document doc;
+    const Uuid screen = doc.CreateNode(NodeKind::Screen, Uuid::Invalid(), "Home");
+    const Uuid card = doc.CreateNode(NodeKind::Frame, screen, "Card");
+    const Uuid label = doc.CreateNode(NodeKind::Text, card, "Title");
+
+    Document loaded;
+    std::string error;
+    CHECK_MESSAGE(Serializer::FromXml(ToXmlKeepingIds(doc), loaded, &error), error);
+    CHECK(loaded.Find(screen) != nullptr);
+    CHECK(loaded.Find(card) != nullptr);
+    CHECK(loaded.Find(label) != nullptr);
+    CHECK_EQ(loaded.Find(label)->parent, card);
+}
+
+TEST(serializer, a_format_1_document_still_opens) {
+    // Tagged values and a fully-written layout block: what every file on disk looks like today.
+    const std::string json = R"({
+        "format": "vae.document",
+        "version": 1,
+        "roots": ["0000000000000007"],
+        "nodes": [{
+            "id": "0000000000000007", "kind": "frame", "name": "Old",
+            "layout": { "mode": "stack", "axis": "row", "gap": 8.0, "wrap": false,
+                        "minColumn": 160.0, "maxSize": [null, null],
+                        "width": { "mode": "fill", "value": 1.0 } },
+            "props": {
+                "fill": { "type": "token", "value": "accent" },
+                "cornerRadius": { "type": "number", "value": 6.0 },
+                "shadowColor": { "type": "color", "value": [0.0, 0.0, 0.0, 0.25] }
+            }
+        }]
+    })";
+
+    Document loaded;
+    std::string error;
+    CHECK_MESSAGE(Serializer::FromJson(json, loaded, &error), error);
+    const Node* node = loaded.Find(Uuid(7));
+    CHECK(node != nullptr);
+    if (!node) return;
+    CHECK(node->layout.mode == layout::LayoutMode::Stack);
+    CHECK_EQ(node->layout.gap, 8.0f);
+    CHECK(node->layout.width == layout::Size::Fill());
+    CHECK(node->props.Find(Prop::Fill) && *node->props.Find(Prop::Fill) == Value{ TokenRef{ "accent" } });
+    CHECK((node->props.Find(Prop::ShadowColor)
+           && *node->props.Find(Prop::ShadowColor) == Value{ Color{ 0.0f, 0.0f, 0.0f, 0.25f } }));
 }
