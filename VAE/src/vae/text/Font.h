@@ -46,11 +46,23 @@ namespace vae::text {
         const std::string& StyleName()  const { return m_Style; }
 
         FontMetrics  Metrics(f32 pixelSize) const;
-        GlyphMetrics Glyph(u32 codepoint, f32 pixelSize) const;
-        f32          Kerning(u32 left, u32 right, f32 pixelSize) const;
-        bool         HasGlyph(u32 codepoint) const;
 
-        GlyphBitmap Rasterize(u32 codepoint, f32 pixelSize) const;
+        // Everything below the mapping takes a *glyph index*, not a codepoint. A shaper's output is
+        // glyph indices — one glyph can come from several codepoints (a ligature) and one codepoint
+        // from several glyphs (a decomposed mark) — so a codepoint-keyed metric or atlas entry has
+        // nothing to key on once shaping is real.
+        u32 GlyphIndex(u32 codepoint) const;
+        bool HasGlyph(u32 codepoint) const { return GlyphIndex(codepoint) != 0; }
+
+        GlyphMetrics Glyph(u32 glyph, f32 pixelSize) const;
+        f32          Kerning(u32 leftGlyph, u32 rightGlyph, f32 pixelSize) const;
+        GlyphBitmap  Rasterize(u32 glyph, f32 pixelSize) const;
+
+        // The bytes the face was loaded from, for a shaper that wants its own view of the file.
+        const std::vector<u8>& Data() const { return m_Data; }
+        // Opaque `hb_font_t*`, created on first use and owned by the font. Null when HarfBuzz is
+        // not compiled in.
+        void* ShaperFont(f32 pixelSize) const;
 
     private:
         bool Init();
@@ -66,6 +78,8 @@ namespace vae::text {
         Scope<struct FontImpl> m_Impl;
 
         mutable std::unordered_map<u64, GlyphMetrics> m_MetricsCache;
+        mutable std::unordered_map<u32, u32>          m_IndexCache;
+        mutable Scope<struct ShaperFace>              m_Shaper;
     };
 
 }

@@ -478,7 +478,7 @@ namespace vae::gen {
                    // so a shipped app does not reference it and must not link it either. That is
                    // 1.4 MB of toolkit an exported app used to carry and could never open.
                    "   links { \"VAE\", \"VAE-Core\", \"spdlog\", \"GLFW\", \"VulkanDeps\",\n"
-                   "           \"Lua\", \"miniaudio\", \"pugixml\" }\n"
+                   "           \"Lua\", \"miniaudio\", \"pugixml\", \"harfbuzz\" }\n"
                    "\n"
                    "   filter \"system:linux\"\n"
                    "      defines { \"VAE_PLATFORM_LINUX\" }\n"

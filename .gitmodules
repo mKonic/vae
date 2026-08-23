@@ -44,3 +44,6 @@
 [submodule "VAE/vendor/pugixml"]
 	path = VAE/vendor/pugixml
 	url = https://github.com/zeux/pugixml.git
+[submodule "VAE/vendor/harfbuzz"]
+	path = VAE/vendor/harfbuzz
+	url = https://github.com/harfbuzz/harfbuzz.git

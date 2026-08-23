@@ -144,6 +144,15 @@ locale on the canvas. The Player takes `--locale pt-BR`, or reads `LC_ALL`/`LC_M
 falls back from `pt-BR` to `pt`. A key with no translation draws the text the designer wrote, so a
 missing string is never a blank label.
 
+Text is shaped with HarfBuzz, so a translation is not limited to the scripts that map one character
+to one glyph: Arabic and Hebrew read right to left and take their joined forms, Devanagari reorders,
+marks attach to their letters, and a font's ligatures are drawn. Mixed-direction text resolves at a
+paragraph level with the neutrals between runs handled per UAX #9. When neither the chosen face nor
+the fallback chain has a character, VAE searches every installed family for one that does, so a
+script nobody listed still draws. Colour emoji are the exception: `stb_truetype` reads outlines, not
+the bitmap and layered-colour formats emoji faces use, so they draw in whatever monochrome form a
+text face has.
+
 ## Scripting
 
 A script registers classes by component name. Every instance of that component runs one, with its own
@@ -198,5 +207,5 @@ your app can replace the copy of VAE inside it — which, for the static linking
 means shipping your object files or a build that links VAE dynamically alongside it.
 
 Vendored dependencies keep their own licences, all permissive: GLFW (zlib), Dear ImGui, Lua, sol2,
-spdlog, pugixml, nlohmann/json, GLM, miniaudio, cpp-httplib, vk-bootstrap, VulkanMemoryAllocator and
-ImGuiColorTextEdit (MIT), stb (public domain).
+spdlog, pugixml, nlohmann/json, GLM, miniaudio, cpp-httplib, vk-bootstrap, VulkanMemoryAllocator,
+HarfBuzz and ImGuiColorTextEdit (MIT), stb (public domain).

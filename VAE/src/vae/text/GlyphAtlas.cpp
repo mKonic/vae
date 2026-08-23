@@ -8,10 +8,10 @@ namespace vae::text {
         // neighbouring glyph's coverage.
         constexpr u32 kPadding = 1;
 
-        u64 KeyFor(const Font& font, u32 codepoint, f32 pixelSize) {
+        u64 KeyFor(const Font& font, u32 glyph, f32 pixelSize) {
             const u64 face = reinterpret_cast<u64>(&font) >> 4;
             const u64 size = static_cast<u64>(pixelSize * 4.0f);   // quarter-pixel buckets
-            return (face << 40) ^ (size << 24) ^ codepoint;
+            return (face << 40) ^ (size << 24) ^ glyph;
         }
     }
 
@@ -71,11 +71,11 @@ namespace vae::text {
         return Place(width, height, outPage, outX, outY);
     }
 
-    const GlyphAtlas::Entry* GlyphAtlas::Get(const Font& font, u32 codepoint, f32 pixelSize) {
-        const u64 key = KeyFor(font, codepoint, pixelSize);
+    const GlyphAtlas::Entry* GlyphAtlas::Get(const Font& font, u32 glyph, f32 pixelSize) {
+        const u64 key = KeyFor(font, glyph, pixelSize);
         if (auto it = m_Entries.find(key); it != m_Entries.end()) return &it->second;
 
-        const GlyphMetrics metrics = font.Glyph(codepoint, pixelSize);
+        const GlyphMetrics metrics = font.Glyph(glyph, pixelSize);
         Entry entry;
         entry.bearing = metrics.bearing;
         entry.size = metrics.size;
@@ -83,7 +83,7 @@ namespace vae::text {
 
         if (metrics.blank) return &m_Entries.emplace(key, entry).first->second;
 
-        const GlyphBitmap bitmap = font.Rasterize(codepoint, pixelSize);
+        const GlyphBitmap bitmap = font.Rasterize(glyph, pixelSize);
         if (bitmap.width == 0 || bitmap.height == 0) {
             entry.blank = true;
             return &m_Entries.emplace(key, entry).first->second;

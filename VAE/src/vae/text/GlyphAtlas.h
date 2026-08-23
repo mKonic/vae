@@ -9,7 +9,7 @@ namespace vae::text {
 
     // Rasterized glyphs packed into GPU textures, rasterized on demand.
     //
-    // Keyed by (face, codepoint, quantized pixel size) rather than pre-baking a glyph range: a
+    // Keyed by (face, glyph index, quantized pixel size) rather than pre-baking a glyph range: a
     // design tool has no fixed set of sizes, and a Nerd Font's PUA icons live far outside any range
     // worth pre-baking. This is the model ImGui 1.92 moved to, and why icon glyphs "just work".
     class GlyphAtlas {
@@ -28,8 +28,9 @@ namespace vae::text {
         bool Init(gpu::Device& device);
         void Shutdown();
 
+        // `glyph` is a glyph index in `font`, as a shaper produces — not a codepoint.
         // Null only when the atlas is genuinely out of room, which is logged once.
-        const Entry* Get(const Font& font, u32 codepoint, f32 pixelSize);
+        const Entry* Get(const Font& font, u32 glyph, f32 pixelSize);
 
         const Ref<gpu::Texture>& PageTexture(u32 index) const { return m_Pages[index].texture; }
         u32 PageCount() const { return static_cast<u32>(m_Pages.size()); }

@@ -153,21 +153,29 @@ TEST(font, metrics_scale_with_pixel_size) {
     CHECK_NEAR(large / small, 2.0);
 }
 
+// Metrics and rasterization are keyed on glyph index, not codepoint — a shaper's output has no
+// codepoint to key on. Everything below goes through the cmap first, on purpose.
 TEST(font, monospace_advances_are_equal) {
-    const f32 i = TestFont()->Glyph('i', 16.0f).advance;
-    const f32 m = TestFont()->Glyph('M', 16.0f).advance;
+    const f32 i = TestFont()->Glyph(TestFont()->GlyphIndex('i'), 16.0f).advance;
+    const f32 m = TestFont()->Glyph(TestFont()->GlyphIndex('M'), 16.0f).advance;
     CHECK(i > 0.0f);
     CHECK_NEAR(i, m);
 }
 
+TEST(font, a_codepoint_maps_to_a_glyph_index) {
+    CHECK(TestFont()->GlyphIndex('A') != 0u);
+    CHECK(TestFont()->GlyphIndex('A') != 'A');          // indices are not codepoints
+    CHECK_EQ(TestFont()->GlyphIndex(0x10FFFD), 0u);     // unmapped is index zero, not a crash
+}
+
 TEST(font, space_is_blank_but_advances) {
-    const GlyphMetrics space = TestFont()->Glyph(' ', 16.0f);
+    const GlyphMetrics space = TestFont()->Glyph(TestFont()->GlyphIndex(' '), 16.0f);
     CHECK(space.blank);
     CHECK(space.advance > 0.0f);
 }
 
 TEST(font, rasterizes_coverage) {
-    const GlyphBitmap bitmap = TestFont()->Rasterize('M', 32.0f);
+    const GlyphBitmap bitmap = TestFont()->Rasterize(TestFont()->GlyphIndex('M'), 32.0f);
     CHECK(bitmap.width > 0u);
     CHECK(bitmap.height > 0u);
     CHECK_EQ(bitmap.pixels.size(), std::size_t(bitmap.width) * bitmap.height);
@@ -385,4 +393,44 @@ TEST(fontdb, family_lookup_ignores_spacing_and_case) {
     CHECK(db.Resolve("jetbrainsmononerdfont") == canonical);
     CHECK(db.Resolve("JETBRAINS MONO NERD FONT") == canonical);
     CHECK(db.Resolve("JetBrains-Mono-Nerd-Font") == canonical);
+}
+
+TEST(fontdb, an_unlisted_script_still_finds_a_face) {
+    // The named fallback chain is a list of the scripts somebody thought of. Devanagari is not on
+    // this one, and the text still has to draw: the database is asked for any registered face that
+    // covers the character, which is the difference between a fixed list and actual coverage.
+    FontDB db;
+    db.RegisterDirectory(FileSystem::Asset("VAE/assets/fonts"), false, true);
+    db.RegisterDirectory(FileSystem::Asset("VAE-Tests/assets/fonts"), false, true);
+    db.SetDefaultFamily("JetBrains Mono Nerd Font");
+    db.SetFallbackFamilies({});
+
+    const TextStyle& style = db.Style({ "", FontWeight::Regular, FontSlant::Normal, 16.0f });
+    CHECK(style.font != nullptr);
+    CHECK(!style.font->HasGlyph(0x0915));       // ka: not in the primary, and nothing else is listed
+
+    const Ref<Font>& face = style.FaceFor(0x0915);
+    CHECK(face != nullptr);
+    CHECK(face != style.font);
+    CHECK(face->HasGlyph(0x0915));
+
+    // A character no installed face has resolves to the primary rather than to nothing, so the
+    // worst case is a box and never a crash.
+    CHECK(style.FaceFor(0x10FFFD) == style.font);
+}
+
+TEST(fontdb, the_coverage_answer_is_remembered) {
+    FontDB db;
+    db.RegisterDirectory(FileSystem::Asset("VAE/assets/fonts"), false, true);
+    db.RegisterDirectory(FileSystem::Asset("VAE-Tests/assets/fonts"), false, true);
+    db.SetDefaultFamily("JetBrains Mono Nerd Font");
+    db.SetFallbackFamilies({});
+
+    // The search reads font files off disk, so asking twice must not scan twice — and the second
+    // answer has to be the same face, not a second copy of it.
+    const Ref<Font>& first  = db.FaceCovering(0x0915, FontWeight::Regular, FontSlant::Normal);
+    const Ref<Font>& second = db.FaceCovering(0x0915, FontWeight::Regular, FontSlant::Normal);
+    CHECK(first != nullptr);
+    CHECK(first == second);
+    CHECK(&first == &second);
 }

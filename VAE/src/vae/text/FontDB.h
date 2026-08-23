@@ -83,6 +83,16 @@ namespace vae::text {
         void SetFallbackFamilies(std::vector<std::string> families);
         const std::vector<std::string>& FallbackFamilies() const { return m_FallbackFamilies; }
 
+        // The last resort, when neither the primary face nor the fallback chain has a codepoint:
+        // any registered family that does. Null when nothing installed on this machine covers it,
+        // which is the only honest reason to draw a box.
+        //
+        // A named fallback list is a list of the scripts somebody thought of. This is not — it can
+        // answer for Devanagari, Thai, Cherokee or a script that did not exist when this was
+        // written, as long as a face for it is installed. The search reads font files, so its
+        // answer is remembered per codepoint and the scan happens once.
+        const Ref<Font>& FaceCovering(u32 codepoint, FontWeight weight, FontSlant slant);
+
         std::vector<std::string> Families() const;
         std::vector<FontFaceInfo> Faces(std::string_view family) const;
         bool HasFamily(std::string_view family) const;
@@ -111,6 +121,19 @@ namespace vae::text {
             }
         };
 
+        struct CoverageKey {
+            u32        codepoint = 0;
+            FontWeight weight = FontWeight::Regular;
+            FontSlant  slant  = FontSlant::Normal;
+            bool operator==(const CoverageKey&) const = default;
+        };
+        struct CoverageKeyHash {
+            std::size_t operator()(const CoverageKey& key) const {
+                return key.codepoint ^ (static_cast<std::size_t>(key.weight) << 21)
+                                     ^ (static_cast<std::size_t>(key.slant) << 31);
+            }
+        };
+
         struct Face {
             FontFaceInfo info;
             Ref<Font> font;                 // null until first resolved
@@ -136,6 +159,8 @@ namespace vae::text {
         std::string m_DefaultFamily = "JetBrains Mono";
         std::vector<std::string> m_FallbackFamilies;
         std::vector<std::string> m_Warned;
+        // Answers to "which installed face has this character", including the negative ones.
+        std::unordered_map<CoverageKey, Ref<Font>, CoverageKeyHash> m_Coverage;
     };
 
 }

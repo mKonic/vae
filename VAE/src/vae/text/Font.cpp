@@ -5,10 +5,25 @@
 
 #include <stb_truetype.h>
 
+#include <hb.h>
+
 namespace vae::text {
 
     struct FontImpl {
         stbtt_fontinfo info{};
+    };
+
+    // HarfBuzz's view of the same bytes. The face is size-independent and built once; a font is a
+    // face at a size, and shaping asks for one every call, so they are kept per size rather than
+    // rebuilt. Both are reference-counted C objects, hence the explicit destroys.
+    struct ShaperFace {
+        hb_face_t* face = nullptr;
+        std::unordered_map<u32, hb_font_t*> fonts;   // keyed by size in quarter-pixels
+
+        ~ShaperFace() {
+            for (auto& [size, font] : fonts) hb_font_destroy(font);
+            if (face) hb_face_destroy(face);
+        }
     };
 
     Font::~Font() = default;
@@ -84,6 +99,33 @@ namespace vae::text {
         return true;
     }
 
+    void* Font::ShaperFont(f32 pixelSize) const {
+        if (!m_Shaper) {
+            m_Shaper = CreateScope<ShaperFace>();
+            // Blob over our own buffer, not a copy: the Font outlives every hb object it hands out,
+            // so HB_MEMORY_MODE_READONLY is exactly true and saves a second copy of every face.
+            hb_blob_t* blob = hb_blob_create(reinterpret_cast<const char*>(m_Data.data()),
+                                             static_cast<unsigned>(m_Data.size()),
+                                             HB_MEMORY_MODE_READONLY, nullptr, nullptr);
+            m_Shaper->face = hb_face_create(blob, 0);
+            hb_blob_destroy(blob);
+        }
+
+        const u32 key = static_cast<u32>(pixelSize * 4.0f);
+        if (const auto it = m_Shaper->fonts.find(key); it != m_Shaper->fonts.end()) return it->second;
+
+        hb_font_t* font = hb_font_create(m_Shaper->face);
+        // Advances come back in 26.6-style fixed point at this scale; matching the em scale to
+        // upem * pixelSize / upem keeps HarfBuzz's numbers in the same units stb_truetype gives us.
+        const unsigned upem = hb_face_get_upem(m_Shaper->face);
+        const auto scale = static_cast<int>(pixelSize * 64.0f);
+        hb_font_set_scale(font, scale, scale);
+        hb_font_set_ppem(font, static_cast<unsigned>(pixelSize), static_cast<unsigned>(pixelSize));
+        VAE_CORE_ASSERT(upem > 0, "font has no units-per-em");
+        m_Shaper->fonts.emplace(key, font);
+        return font;
+    }
+
     f32 Font::Scale(f32 pixelSize) const {
         // Em-based, not ascent+descent-based. A "16px" font means a 16px em in CSS, in Figma and
         // in every design tool, so stbtt_ScaleForPixelHeight (which normalises ascent-to-descent)
@@ -105,17 +147,23 @@ namespace vae::text {
         return m;
     }
 
-    bool Font::HasGlyph(u32 codepoint) const {
-        return stbtt_FindGlyphIndex(&m_Impl->info, static_cast<int>(codepoint)) != 0;
+    // cmap lookups are not free and the same handful of characters is measured every frame, so the
+    // mapping is memoized alongside the metrics it feeds.
+    u32 Font::GlyphIndex(u32 codepoint) const {
+        if (const auto it = m_IndexCache.find(codepoint); it != m_IndexCache.end()) return it->second;
+        const auto index = static_cast<u32>(
+            stbtt_FindGlyphIndex(&m_Impl->info, static_cast<int>(codepoint)));
+        m_IndexCache.emplace(codepoint, index);
+        return index;
     }
 
-    GlyphMetrics Font::Glyph(u32 codepoint, f32 pixelSize) const {
-        const u64 key = (static_cast<u64>(codepoint) << 20)
+    GlyphMetrics Font::Glyph(u32 glyph, f32 pixelSize) const {
+        const u64 key = (static_cast<u64>(glyph) << 20)
                       | static_cast<u64>(static_cast<u32>(pixelSize * 16.0f) & 0xFFFFFu);
         if (auto it = m_MetricsCache.find(key); it != m_MetricsCache.end()) return it->second;
 
         const f32 scale = Scale(pixelSize);
-        const int index = stbtt_FindGlyphIndex(&m_Impl->info, static_cast<int>(codepoint));
+        const auto index = static_cast<int>(glyph);
 
         int advance = 0, bearing = 0;
         stbtt_GetGlyphHMetrics(&m_Impl->info, index, &advance, &bearing);
@@ -133,16 +181,16 @@ namespace vae::text {
         return m;
     }
 
-    f32 Font::Kerning(u32 left, u32 right, f32 pixelSize) const {
-        const int a = stbtt_FindGlyphIndex(&m_Impl->info, static_cast<int>(left));
-        const int b = stbtt_FindGlyphIndex(&m_Impl->info, static_cast<int>(right));
-        if (!a || !b) return 0.0f;
+    f32 Font::Kerning(u32 leftGlyph, u32 rightGlyph, f32 pixelSize) const {
+        if (!leftGlyph || !rightGlyph) return 0.0f;
+        const auto a = static_cast<int>(leftGlyph);
+        const auto b = static_cast<int>(rightGlyph);
         return static_cast<f32>(stbtt_GetGlyphKernAdvance(&m_Impl->info, a, b)) * Scale(pixelSize);
     }
 
-    GlyphBitmap Font::Rasterize(u32 codepoint, f32 pixelSize) const {
+    GlyphBitmap Font::Rasterize(u32 glyph, f32 pixelSize) const {
         const f32 scale = Scale(pixelSize);
-        const int index = stbtt_FindGlyphIndex(&m_Impl->info, static_cast<int>(codepoint));
+        const auto index = static_cast<int>(glyph);
 
         int width = 0, height = 0, xoff = 0, yoff = 0;
         u8* pixels = stbtt_GetGlyphBitmap(&m_Impl->info, scale, scale, index,

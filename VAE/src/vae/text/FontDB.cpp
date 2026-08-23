@@ -5,6 +5,8 @@
 #include "vae/base/FileSystem.h"
 #include "vae/base/Platform.h"
 
+#include <hb.h>
+
 #include <algorithm>
 #include <cctype>
 
@@ -198,6 +200,28 @@ namespace vae::text {
                       bundled, system, m_Families.size(), m_DefaultFamily);
     }
 
+    namespace {
+        // The first letters of the Unicode script tag for a character, normalized the way family
+        // names are: "Deva" for Devanagari, "Arab" for Arabic, "Thai" for Thai. Only three are
+        // taken because the tag is an abbreviation and the script's name is not — "Arab" against
+        // "Arabic" matches on three, "Taml" against "Tamil" on three, and a tag that abbreviates
+        // more aggressively than that simply does not match and costs nothing but its turn.
+        std::string ScriptHint(u32 codepoint) {
+            const hb_script_t script = hb_unicode_script(hb_unicode_funcs_get_default(), codepoint);
+            if (script == HB_SCRIPT_COMMON || script == HB_SCRIPT_INHERITED
+                || script == HB_SCRIPT_UNKNOWN || script == HB_SCRIPT_LATIN) return {};
+
+            const hb_tag_t tag = hb_script_to_iso15924_tag(script);
+            char letters[4] = { static_cast<char>((tag >> 24) & 0xFF), static_cast<char>((tag >> 16) & 0xFF),
+                                static_cast<char>((tag >> 8) & 0xFF), static_cast<char>(tag & 0xFF) };
+            std::string hint;
+            for (int i = 0; i < 3; ++i)
+                if (std::isalpha(static_cast<unsigned char>(letters[i])))
+                    hint.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(letters[i]))));
+            return hint.size() == 3 ? hint : std::string{};
+        }
+    }
+
     FontDB::Face* FontDB::FindBest(std::string_view family, FontWeight weight, FontSlant slant) {
         auto it = m_Families.find(std::string(family));
         if (it == m_Families.end() || it->second.empty()) return nullptr;
@@ -275,12 +299,51 @@ namespace vae::text {
         TextStyle style;
         style.font = Resolve(request);
         style.size = request.size;
+        style.weight = request.weight;
+        style.slant  = request.slant;
+        style.db     = this;
         for (const auto& fallback : m_FallbackFamilies) {
             if (Face* face = FindBest(fallback, request.weight, request.slant))
                 if (auto font = Load(*face); font && font != style.font)
                     style.fallbacks.push_back(font);
         }
         return m_Styles.emplace(key, std::move(style)).first->second;
+    }
+
+    const Ref<Font>& FontDB::FaceCovering(u32 codepoint, FontWeight weight, FontSlant slant) {
+        const CoverageKey key{ codepoint, weight, slant };
+        if (const auto it = m_Coverage.find(key); it != m_Coverage.end()) return it->second;
+
+        // Loaded faces first: they cost nothing to ask, and on a machine whose fonts have already
+        // been touched this is usually where the answer is.
+        for (auto& [family, faces] : m_Families)
+            for (Face& face : faces)
+                if (face.font && face.font->HasGlyph(codepoint))
+                    return m_Coverage.emplace(key, face.font).first->second;
+
+        // Then everything else, best guess first. The tag Unicode gives a character's script is
+        // four letters — "Deva", "Arab", "Thai" — and the families that cover a script are very
+        // often named after it, so a name that starts the same way is tried before the rest. It is
+        // only an ordering: if the guess is wrong the scan still reaches every family.
+        const std::string hint = ScriptHint(codepoint);
+        std::vector<std::string> order;
+        order.reserve(m_Families.size());
+        for (const auto& [family, faces] : m_Families) order.push_back(family);
+        std::stable_partition(order.begin(), order.end(), [&](const std::string& family) {
+            return !hint.empty() && NormalizeFamily(family).find(hint) != std::string::npos;
+        });
+
+        for (const std::string& family : order) {
+            if (Face* face = FindBest(family, weight, slant)) {
+                if (face->font) continue;              // already asked above
+                if (auto font = Load(*face); font && font->HasGlyph(codepoint))
+                    return m_Coverage.emplace(key, font).first->second;
+            }
+        }
+
+        // Nothing installed has it. Remembered as a miss so the scan is not repeated for every
+        // frame of a label full of characters this machine cannot draw.
+        return m_Coverage.emplace(key, nullptr).first->second;
     }
 
     void FontDB::SetDefaultFamily(std::string family) {

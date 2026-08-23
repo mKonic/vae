@@ -16,15 +16,17 @@ namespace vae::text {
             if (!glyph.face) continue;
 
             // Rasterized at device resolution, placed and sized in logical units.
-            const GlyphAtlas::Entry* entry = atlas.Get(*glyph.face, glyph.codepoint,
-                                                       pixelSize * ratio);
+            const GlyphAtlas::Entry* entry = atlas.Get(*glyph.face, glyph.glyph, pixelSize * ratio);
             if (!entry || entry->blank) continue;
 
             // Snapped on the device grid, not the logical one. Text at a fractional device offset
             // resamples through the atlas and goes soft, which is the single most visible quality
             // difference in small UI type — and at 1.5x scaling every logical half-pixel is one.
-            const Vec2 device{ std::round((origin.x + glyph.pen.x) * ratio + entry->bearing.x),
-                               std::round((origin.y + glyph.pen.y) * ratio + entry->bearing.y) };
+            // The shaper's offset is part of the position, not of the pen: it is how a mark lands
+            // on the letter it belongs to, so it is scaled with everything else and snapped once.
+            const Vec2 pen{ glyph.pen.x + glyph.offset.x, glyph.pen.y + glyph.offset.y };
+            const Vec2 device{ std::round((origin.x + pen.x) * ratio + entry->bearing.x),
+                               std::round((origin.y + pen.y) * ratio + entry->bearing.y) };
 
             list.AddGlyph(Rect{ device * inverse, entry->size * inverse }, entry->uv, color,
                           atlas.PageTexture(entry->page));

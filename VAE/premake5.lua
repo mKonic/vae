@@ -77,6 +77,7 @@ project "VAE-Core"
       "%{IncludeDir.stb}",
       "%{IncludeDir.json}",
       "%{IncludeDir.pugixml}",
+      "%{IncludeDir.harfbuzz}",
       "%{IncludeDir.httplib}",
       "%{IncludeDir.miniaudio}",
       "%{IncludeDir.luashim}",
@@ -87,7 +88,7 @@ project "VAE-Core"
    -- https when the host has OpenSSL; plain http and a clear error when not.
    VaeHttpTls()
 
-   links { "spdlog", "Lua", "miniaudio", "pugixml" }
+   links { "spdlog", "Lua", "miniaudio", "pugixml", "harfbuzz" }
 
    filter "system:linux"
       pic "On"
@@ -152,6 +153,7 @@ project "VAE"
       "%{IncludeDir.stb}",
       "%{IncludeDir.json}",
       "%{IncludeDir.pugixml}",
+      "%{IncludeDir.harfbuzz}",
       "%{IncludeDir.httplib}",
       "%{IncludeDir.miniaudio}",
       "%{IncludeDir.GLFW}",
@@ -164,7 +166,7 @@ project "VAE"
    -- https when the host has OpenSSL; plain http and a clear error when not.
    VaeHttpTls()
 
-   links { "VAE-Core", "spdlog", "GLFW", "VulkanDeps", "ImGui", "miniaudio", "pugixml" }
+   links { "VAE-Core", "spdlog", "GLFW", "VulkanDeps", "ImGui", "miniaudio", "pugixml", "harfbuzz" }
 
    filter "system:linux"
       pic "On"
