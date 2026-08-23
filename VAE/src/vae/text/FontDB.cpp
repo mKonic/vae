@@ -223,8 +223,10 @@ namespace vae::text {
         face.font = Font::LoadFromFile(face.info.path);
         face.info.loaded = face.font != nullptr;
         if (!face.font) {
+            // Font::Init already said which kind of "cannot read" this was — an unsupported colour
+            // format or a broken file — so this is the where, at the level that matches.
             face.failed = true;
-            VAE_CORE_WARN("font face '{}' is unreadable, skipping it: {}",
+            VAE_CORE_INFO("font face '{}' skipped: {}",
                           face.info.family, face.info.path.string());
         }
         return face.font;

@@ -25,6 +25,8 @@ namespace vae {
     private:
         static std::shared_ptr<spdlog::logger> s_CoreLogger;
         static std::shared_ptr<spdlog::logger> s_AppLogger;
+        // The rotating file sink, kept so its pattern can be set after the loggers set theirs.
+        static std::shared_ptr<spdlog::sinks::sink> s_File;
     };
 
 }

@@ -30,11 +30,33 @@ namespace vae::text {
         return font;
     }
 
+    // Is this tag one of the face's tables? Walked by hand because stb_truetype has already
+    // refused the file, so none of its helpers are available on it.
+    bool Font::HasTable(const char* tag) const {
+        if (m_Data.size() < 12) return false;
+        const auto u16 = [this](std::size_t at) -> u32 {
+            return (static_cast<u32>(m_Data[at]) << 8) | m_Data[at + 1];
+        };
+        const u32 tables = u16(4);
+        if (m_Data.size() < 12 + tables * 16u) return false;
+        for (u32 i = 0; i < tables; ++i) {
+            const std::size_t entry = 12 + static_cast<std::size_t>(i) * 16;
+            if (std::memcmp(m_Data.data() + entry, tag, 4) == 0) return true;
+        }
+        return false;
+    }
+
     bool Font::Init() {
         m_Impl = CreateScope<FontImpl>();
         const int offset = stbtt_GetFontOffsetForIndex(m_Data.data(), 0);
         if (offset < 0 || !stbtt_InitFont(&m_Impl->info, m_Data.data(), offset)) {
-            VAE_CORE_ERROR("'{}' is not a font stb_truetype can read", m_Name);
+            // A colour-bitmap face (CBDT/CBLC, sbix) is not a broken font, it is a font this
+            // rasterizer does not read — every Linux box has Noto Color Emoji, and shouting about
+            // it in red on every single launch is how a log stops being read at all.
+            const bool colourBitmap = HasTable("CBDT") || HasTable("sbix") || HasTable("SVG ");
+            if (colourBitmap) VAE_CORE_INFO("'{}' is a colour-bitmap font, which this rasterizer "
+                                            "does not draw — skipping it", m_Name);
+            else              VAE_CORE_ERROR("'{}' is not a font stb_truetype can read", m_Name);
             return false;
         }
         // Read the real family and style out of the `name` table. Deriving them from the filename

@@ -54,6 +54,7 @@ namespace vae::text {
 
     private:
         bool Init();
+        bool HasTable(const char* tag) const;
         f32  Scale(f32 pixelSize) const;
 
         std::vector<u8> m_Data;
