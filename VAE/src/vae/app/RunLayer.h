@@ -2,6 +2,7 @@
 
 #include "vae/core/Layer.h"
 #include "vae/doc/Serializer.h"
+#include "vae/doc/Strings.h"
 #include "vae/draw/Renderer.h"
 #include "vae/script/Runtime.h"
 #include "vae/svc/Services.h"
@@ -40,6 +41,12 @@ namespace vae::app {
 
         // Which screen to show. Empty means the first one in the document.
         void SetStartScreen(std::string name) { m_StartScreen = std::move(name); }
+
+        // The language the app runs in. Named explicitly (--locale), or taken from the environment
+        // the way every other program on the machine takes it. An app with no translation for it
+        // draws what the designer authored, which is the whole point of the fallback.
+        void SetLocale(std::string locale) { m_Locale = std::move(locale); }
+        const std::string& Locale() const { return m_Locale; }
         // The size the window should open at: the screen's authored width and height, which are a
         // design size when the app is fluid and a hard resolution when it is not.
         Vec2 DesignSize() const { return m_DesignSize; }
@@ -87,9 +94,14 @@ namespace vae::app {
         gpu::Device* m_Device = nullptr;
 
         std::filesystem::path m_ScriptPath;
+        // The document this run was loaded from, or empty for an exported app that built its
+        // document in code. Translations sit beside one and beside the binary for the other.
+        std::filesystem::path m_ProjectPath;
         std::string m_Language = "lua";
         std::string m_ScriptError;
         std::string m_StartScreen;
+        std::string m_Locale;
+        doc::StringTable m_Strings;
 
         Uuid m_Screen = Uuid::Invalid();
         Vec2 m_DesignSize{ 1280.0f, 800.0f };

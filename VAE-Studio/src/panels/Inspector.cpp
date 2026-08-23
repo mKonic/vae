@@ -163,6 +163,14 @@ namespace vae {
             // is: a hex triple is a colour, anything else is a token, an empty cell is false.
             fields::Text(state, id, "Field", doc::Prop::Field, "column, or prop:column");
 
+            // What this label says in another language. The text above stays as the authored
+            // wording — it is what the canvas draws while designing and what an untranslated
+            // locale falls back to, so a missing translation is never a blank label.
+            if (const doc::Node* node = state.Doc().Find(id);
+                node && node->kind == doc::NodeKind::Text) {
+                fields::Text(state, id, "Text key", doc::Prop::TextKey, "greeting.title");
+            }
+
             // What it looks like while the pointer is on it. Without this a button recoloured red
             // still hovers whatever colour the library authored, because "hovered:fill" is a
             // property of its own and nothing was re-deriving it.

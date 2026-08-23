@@ -1,7 +1,9 @@
 #include "Test.h"
 
+#include "vae/base/FileSystem.h"
 #include "vae/doc/Command.h"
 #include "vae/doc/Serializer.h"
+#include "vae/doc/Strings.h"
 
 #include <string>
 #include <vector>
@@ -777,6 +779,65 @@ TEST(doc, assets_are_kept_by_id_and_survive_a_round_trip) {
 }
 
 // ------------------------------------------------------------------ rows
+
+TEST(doc, a_string_table_is_what_a_translator_is_handed) {
+    Document doc;
+    const Uuid screen = doc.CreateNode(NodeKind::Screen);
+    const Uuid title = doc.CreateNode(NodeKind::Text, screen, "Title");
+    doc.SetProp(title, Prop::Text, std::string("Good morning"));
+    doc.SetProp(title, Prop::TextKey, std::string("home.greeting"));
+    const Uuid plain = doc.CreateNode(NodeKind::Text, screen, "Plain");
+    doc.SetProp(plain, Prop::Text, std::string("not translated"));
+
+    StringTable table;
+    table.CollectFrom(doc);
+    // Only what opted in, and the authored text is the starting point a translator edits.
+    CHECK_EQ(table.Count(), 1u);
+    CHECK_EQ(std::string(table.Find("home.greeting")), std::string("Good morning"));
+    CHECK(table.Find("nothing.here").empty());
+
+    // Re-collecting keeps the work: adding a screen must not overwrite what was translated.
+    table.Set("home.greeting", "Bom dia");
+    doc.SetProp(doc.CreateNode(NodeKind::Text, screen, "Second"), Prop::TextKey,
+                std::string("home.subtitle"));
+    table.CollectFrom(doc);
+    CHECK_EQ(table.Count(), 2u);
+    CHECK_EQ(std::string(table.Find("home.greeting")), std::string("Bom dia"));
+}
+
+TEST(doc, a_translation_round_trips_through_a_file) {
+    const std::filesystem::path dir = std::filesystem::temp_directory_path() / "vae-strings-test";
+    std::error_code ec;
+    std::filesystem::remove_all(dir, ec);
+
+    StringTable written;
+    written.SetLocale("pt-BR");
+    written.Set("home.greeting", "Bom dia");
+    written.Set("home.quote", "aspas \"dentro\" do texto");
+    CHECK(written.Save(dir / "pt-BR.json"));
+
+    StringTable read;
+    std::string error;
+    CHECK_MESSAGE(read.Load(dir / "pt-BR.json", &error), error);
+    CHECK_EQ(read.Count(), 2u);
+    CHECK_EQ(std::string(read.Find("home.greeting")), std::string("Bom dia"));
+    CHECK_EQ(std::string(read.Find("home.quote")), std::string("aspas \"dentro\" do texto"));
+    // The name of the file is the locale, so a translator can drop one in without editing it.
+    CHECK_EQ(read.Locale(), std::string("pt-BR"));
+
+    const std::vector<std::string> found = LocalesIn(dir);
+    CHECK_EQ(found.size(), 1u);
+    CHECK_MESSAGE(!found.empty() && found.front() == "pt-BR",
+                  "locales found: " + (found.empty() ? std::string("(none)") : found.front()));
+
+    // Something that is not a table says so rather than loading as an empty one.
+    FileSystem::WriteText(dir / "broken.json", "[\"not an object\"]");
+    StringTable broken;
+    CHECK(!broken.Load(dir / "broken.json", &error));
+    CHECK(!error.empty());
+
+    std::filesystem::remove_all(dir, ec);
+}
 
 TEST(doc, sample_rows_are_a_table_typed_as_text) {
     const RowTable table = ParseRowText("author | body | tint\n"

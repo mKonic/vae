@@ -129,6 +129,21 @@ Attribute sigils: `@token`, `=binding`, `#hex`, `&node`, `*asset`, `$literal`. S
 Files written in the earlier JSON formats still open — `VAE-Studio --convert [--check] [--bench N]`
 rewrites one in format 3, verifies the round trip node for node, or times the load.
 
+## Languages
+
+A text node can carry a key (`textKey`) beside the text it was authored with. `strings/<locale>.json`
+in the project is a flat object of key to text — the one file a translator opens:
+
+```json
+{ "home.greeting": "Bom dia" }
+```
+
+Studio writes that file for you (View → Language → Write) with every key the document uses and the
+authored text as the starting point, keeps whatever translations are already in it, and previews any
+locale on the canvas. The Player takes `--locale pt-BR`, or reads `LC_ALL`/`LC_MESSAGES`/`LANG`, and
+falls back from `pt-BR` to `pt`. A key with no translation draws the text the designer wrote, so a
+missing string is never a blank label.
+
 ## Scripting
 
 A script registers classes by component name. Every instance of that component runs one, with its own

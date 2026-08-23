@@ -579,6 +579,26 @@ namespace vae::gen {
             }
         }
 
+        // Translations travel with it too, and the runtime looks for them beside the binary when
+        // the document was built in code rather than loaded from a file.
+        u32 locales = 0;
+        if (!options.assetRoot.empty()) {
+            const std::filesystem::path from = options.assetRoot / "strings";
+            if (std::filesystem::is_directory(from, ec)) {
+                for (const auto& entry : std::filesystem::directory_iterator(from, ec)) {
+                    if (entry.path().extension() != ".json") continue;
+                    const std::filesystem::path to = directory / "strings" / entry.path().filename();
+                    std::filesystem::create_directories(to.parent_path(), ec);
+                    std::filesystem::copy_file(entry.path(), to,
+                                               std::filesystem::copy_options::overwrite_existing, ec);
+                    if (!ec) ++locales;
+                    ec.clear();
+                }
+            }
+            ec.clear();
+        }
+        if (locales) VAE_INFO("export: {} translation file(s)", locales);
+
         VAE_INFO("export: wrote {} to {}{}{}", options.appName, directory.string(),
                  copied ? " (" + std::to_string(copied) + " assets)" : "",
                  fonts ? " (" + std::to_string(fonts) + " font files — check their licences before "

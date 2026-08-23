@@ -200,8 +200,22 @@ namespace vae::ui {
         return style;
     }
 
+    // What a label actually says: its translation when there is one, and the text the designer
+    // typed otherwise. Measuring and painting both come through here, because a caption that is
+    // measured in one language and drawn in another is a layout that does not fit.
+    std::string ViewTree::TextOf(u32 view) const {
+        if (m_Strings) {
+            const std::string key = Str(view, doc::Prop::TextKey);
+            if (!key.empty()) {
+                const std::string_view translated = m_Strings->Find(key);
+                if (!translated.empty()) return std::string(translated);
+            }
+        }
+        return Str(view, doc::Prop::Text);
+    }
+
     Vec2 ViewTree::MeasureText(u32 view, Vec2 available) const {
-        const std::string content = Str(view, doc::Prop::Text);
+        const std::string content = TextOf(view);
         if (content.empty()) {
             // An empty label still occupies a line: a field that collapses to nothing the moment it
             // is cleared makes the whole form jump.
@@ -558,6 +572,13 @@ namespace vae::ui {
 
     void ViewTree::ClearRows(WidgetId widget) { m_Rows.erase(widget); }
 
+    void ViewTree::SetStrings(const doc::StringTable* strings) {
+        if (m_Strings == strings) return;
+        m_Strings = strings;
+        // Every label with a key says something different now, and text decides layout.
+        m_LayoutDirty = true;
+    }
+
     void ViewTree::ShowSampleRows(bool on) {
         if (m_ShowSampleRows == on) return;
         m_ShowSampleRows = on;
@@ -762,7 +783,7 @@ namespace vae::ui {
     void ViewTree::PaintText(u32 index, const doc::PropBag& props, const Rect& rect,
                              PaintContext& context) const {
         if (!context.atlas) return;
-        const std::string content = props.Text(doc::Prop::Text);
+        const std::string content = TextOf(index);
         if (content.empty()) return;
 
         const text::TextStyle style = StyleFor(index);

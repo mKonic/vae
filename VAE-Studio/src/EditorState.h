@@ -2,6 +2,7 @@
 
 #include "vae/doc/Command.h"
 #include "vae/doc/Serializer.h"
+#include "vae/doc/Strings.h"
 #include "vae/svc/Audio.h"
 #include "vae/ui/Library.h"
 
@@ -126,6 +127,17 @@ namespace vae {
         // A recovery copy beside the project, written while there is unsaved work and deleted the
         // moment there is not. Not a save: it never becomes the file the designer opens, it is
         // what is offered back after a crash or a power cut.
+        // --- languages ---------------------------------------------------------------------
+        // Which locale the canvas is previewing, "" for the authored text. Purely an editor view:
+        // it changes what is drawn, never what is saved.
+        const std::string& Locale() const { return m_Locale; }
+        void SetLocale(std::string locale);
+        const doc::StringTable* Strings() const;
+        std::vector<std::string> Locales() const;
+        // Writes strings/<locale>.json with every key the document uses, keeping the translations
+        // that are already in it. This is the file a translator is handed.
+        bool WriteStrings(const std::string& locale);
+
         void Autosave();
         // The recovery file for a project, and whether one is worth offering — it exists and is
         // newer than the project itself.
@@ -151,6 +163,8 @@ namespace vae {
         Uuid m_ActiveScreen = Uuid::Invalid();
         Uuid m_ScreenBehind = Uuid::Invalid();   // where CloseComponent goes back to
         std::string m_AssetError;
+        std::string m_Locale;
+        doc::StringTable m_Strings;
         svc::Audio m_Preview;
         std::filesystem::path m_Path;
         u64 m_SavedRevision = 0;

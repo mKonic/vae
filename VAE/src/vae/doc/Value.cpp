@@ -38,6 +38,7 @@ namespace vae::doc {
             "screenKind", "goTo",
             "series", "chartKind",
             "selectable", "shown", "repeat", "field", "resizable", "sample", "stickToEnd",
+            "textKey",
         };
 
         // Declared types, in enum order and checked against kPropNames' length below. `Unset` is
@@ -71,6 +72,7 @@ namespace vae::doc {
             VT::Bool,       // resizable
             VT::Text,       // sample
             VT::Bool,       // stickToEnd
+            VT::Text,       // textKey
         };
         static_assert(kPropTypes.size() == kPropNames.size());
     }

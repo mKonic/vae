@@ -70,6 +70,11 @@ namespace vae::doc {
         // conversation is long enough to overflow — at which point a justification pushes the
         // newest message out of the top of the box instead of scrolling to it.
         StickToEnd,
+        // What this label says in the language the app is running in. `Prop::Text` stays as the
+        // authored text and is what the canvas draws and what an untranslated locale falls back
+        // to, so a screen never goes blank because a translation is missing — the key is an
+        // addition to the design, not a replacement for it.
+        TextKey,
         Count
     };
 

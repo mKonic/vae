@@ -8,6 +8,7 @@
 #include "StudioLayer.h"
 
 #include "vae/app/RunLayer.h"
+#include "vae/doc/Strings.h"
 #include "vae/base/Log.h"
 #include "vae/core/Application.h"
 #include "vae/core/Input.h"
@@ -1485,6 +1486,70 @@ namespace vae {
             std::filesystem::remove(scripts.SourcePath(), ec);
         }
 
+        // Translations: the file a translator is handed, and the canvas previewing one.
+        void TestLanguages() {
+            Section("languages");
+            Shortcuts driver;
+            StudioLayer& layer = driver.Layer_();
+            layer.OpenExample();
+            driver.Frame();
+
+            EditorState& state = layer.State();
+            doc::Document& d = state.Doc();
+            const std::filesystem::path project =
+                FileSystem::ProjectsRoot() / "Selftest languages" / "Selftest languages.vaescreen";
+            std::error_code ec;
+            std::filesystem::remove_all(project.parent_path(), ec);
+            std::filesystem::create_directories(project.parent_path(), ec);
+
+            const Uuid label = d.CreateNode(doc::NodeKind::Text, state.ActiveScreen(), "Greeting");
+            d.SetProp(label, doc::Prop::Text, std::string("Good morning"));
+            d.SetProp(label, doc::Prop::TextKey, std::string("home.greeting"));
+            if (!Check(state.Save(project), "the project saves")) return;
+
+            // The extraction: every key the document uses, with the authored text to translate.
+            Check(state.WriteStrings("pt-BR"), "writing a translation file");
+            const std::filesystem::path file =
+                doc::StringsDirFor(project) / "pt-BR.json";
+            Check(std::filesystem::exists(file), "strings/pt-BR.json is there");
+
+            doc::StringTable table;
+            std::string error;
+            Check(table.Load(file, &error), "and it loads: " + error);
+            Check(std::string(table.Find("home.greeting")) == "Good morning",
+                  "with the authored text as the starting point");
+
+            // Translate it, and preview it: the canvas draws the translation, the document keeps
+            // what was authored.
+            table.Set("home.greeting", "Bom dia");
+            Check(table.Save(file), "the translation saves");
+            state.SetLocale("pt-BR");
+            driver.Frame();
+
+            const ui::ViewTree& tree = layer.Surface().Host().Tree();
+            const auto drawn = [&] {
+                for (u32 i = 0; i < tree.ViewCount(); ++i)
+                    if (tree.At(i).name == "Greeting") return tree.Str(i, doc::Prop::Text);
+                return std::string{};
+            };
+            Check(tree.Strings() != nullptr, "the canvas is previewing a language");
+            Check(d.GetProp(label, doc::Prop::Text) == doc::Value{ std::string("Good morning") },
+                  "and the document still says what the designer wrote");
+
+            // Back to the authored text.
+            state.SetLocale({});
+            driver.Frame();
+            Check(layer.Surface().Host().Tree().Strings() == nullptr, "and back to as authored");
+            Check(drawn() == "Good morning", "which is what it draws again");
+
+            // A locale with no file is not an error: the app draws what was authored.
+            state.SetLocale("xx-YY");
+            driver.Frame();
+            Check(state.Locale() == "xx-YY", "a missing locale is still selected");
+
+            std::filesystem::remove_all(project.parent_path(), ec);
+        }
+
         // The recovery copy: written while there is unsaved work, offered back afterwards, and
         // gone the moment the project is saved.
         void TestAutosave() {
@@ -2257,6 +2322,7 @@ namespace vae {
         TestDebugger();
         TestScreens();
         TestGrouping();
+        TestLanguages();
         TestAutosave();
         TestInlineTextEdit();
         TestClipboard();

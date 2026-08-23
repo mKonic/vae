@@ -155,6 +155,10 @@ namespace vae {
             m_Assets.Rebind(state.Doc());
         }
 
+        // Whatever language the editor is previewing, every frame: the table lives in the editor
+        // state and is swapped there, and the tree redraws from it.
+        m_Host.Tree().SetStrings(state.Strings());
+
         const Vec2 available = DesignSize(state);
         m_Host.Update(available, dt);
         // What it came out as, not what it was offered: a hugging component is framed around

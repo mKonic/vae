@@ -2,6 +2,8 @@
 #include "vae/app/RunLayer.h"
 
 #include "vae/base/FileSystem.h"
+
+#include <cstdlib>
 #include "vae/base/Platform.h"
 #include "vae/base/Log.h"
 #include "vae/core/Application.h"
@@ -18,6 +20,7 @@ namespace vae::app {
         // The standard widgets are compiled in, not carried by the file: the player rebuilds them
         // from the same catalog the Studio drew against.
         if (!doc::Serializer::Load(path, m_Document, error, &ui::StandardLibrary())) return false;
+        m_ProjectPath = path;
 
         // The script sits beside the document and is named after it, exactly as the Studio writes
         // it. A native module wins when both are present: a project that ships a compiled module
@@ -74,6 +77,38 @@ namespace vae::app {
         // has already pointed the store at the project folder, so this only fills the other case.
         if (m_Assets.Root().empty()) m_Assets.SetRoot(FileSystem::ExecutableDir());
         m_Assets.Rebind(m_Document);
+
+        // The language this run is in. Asked for explicitly, or taken from the environment the way
+        // every other program on the machine takes it; a locale with no file is not an error, it
+        // is an app that draws what the designer wrote.
+        if (m_Locale.empty()) {
+            const char* env = std::getenv("LC_ALL");
+            if (!env || !*env) env = std::getenv("LC_MESSAGES");
+            if (!env || !*env) env = std::getenv("LANG");
+            if (env && *env) {
+                std::string_view value(env);
+                // "pt_BR.UTF-8" is the locale "pt-BR" as far as a filename is concerned.
+                value = value.substr(0, value.find('.'));
+                std::string name(value);
+                std::replace(name.begin(), name.end(), '_', '-');
+                if (name != "C" && name != "POSIX") m_Locale = std::move(name);
+            }
+        }
+        if (!m_Locale.empty()) {
+            const std::filesystem::path dir = doc::StringsDirFor(m_ProjectPath).empty()
+                                            ? FileSystem::ExecutableDir() / "strings"
+                                            : doc::StringsDirFor(m_ProjectPath);
+            std::string error;
+            m_Strings.SetLocale(m_Locale);
+            // The exact locale, then the language on its own: a machine set to pt-BR should still
+            // find a project that only ships pt.
+            const std::string language = m_Locale.substr(0, m_Locale.find('-'));
+            if (m_Strings.Load(dir / (m_Locale + ".json"), &error)
+                || (language != m_Locale && m_Strings.Load(dir / (language + ".json"), &error))) {
+                m_Host.Tree().SetStrings(&m_Strings);
+                VAE_CORE_INFO("locale {}: {} strings", m_Locale, m_Strings.Count());
+            }
+        }
 
         if (const doc::Node* screen = m_Document.Find(m_Screen))
             m_DesignSize = { screen->layout.width.value, screen->layout.height.value };

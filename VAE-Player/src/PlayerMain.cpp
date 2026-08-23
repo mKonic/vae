@@ -21,6 +21,7 @@ namespace vae {
             int  frames = 1;
             bool help = false;
             bool version = false;
+            std::string locale;
         };
 
         Options Parse(CommandLineArgs args) {
@@ -35,13 +36,15 @@ namespace vae {
                 else if (arg == "--frames")   options.frames = std::max(1, std::atoi(next().c_str()));
                 else if (arg == "--help" || arg == "-h") options.help = true;
                 else if (arg == "--version") options.version = true;
+                else if (arg == "--locale") options.locale = next();
                 else if (!arg.starts_with("-")) options.project = arg;
             }
             return options;
         }
 
         void Usage() {
-            std::cout << "usage: VAE-Player <project.vaescreen> [--screen NAME] [--headless [--frames N]]\n"
+            std::cout << "usage: VAE-Player <project.vaescreen> [--screen NAME] [--locale NAME]\n"
+                         "                  [--headless [--frames N]]\n"
                          "       VAE-Player --version\n"
                          "\n"
                          "  Runs a project. The script beside it — <project>.so or <project>.lua —\n"
@@ -92,6 +95,8 @@ namespace vae {
 
         auto layer = CreateScope<app::RunLayer>();
         layer->SetStartScreen(options.screen);
+        // Explicit beats the environment; empty means "whatever this machine is set to".
+        layer->SetLocale(options.locale);
 
         std::string error;
         const bool loaded = layer->Load(options.project, &error);

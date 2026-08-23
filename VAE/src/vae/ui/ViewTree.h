@@ -2,6 +2,7 @@
 
 #include "vae/base/Assert.h"
 #include "vae/doc/Document.h"
+#include "vae/doc/Strings.h"
 #include "vae/draw/DrawList.h"
 #include "vae/layout/LayoutTree.h"
 #include "vae/text/TextLayout.h"
@@ -162,6 +163,13 @@ namespace vae::ui {
         // a designer needs to see the template they are styling, and a running app showing
         // invented people would be a bug rather than a convenience.
         void ShowSampleRows(bool on);
+
+        // The language this tree draws in, or null for the authored text. Installed by whatever is
+        // hosting the tree: the Studio canvas for the locale being previewed, the player for the
+        // one the app is running in. A node opts in with Prop::TextKey and keeps its authored text
+        // as the fallback, so a missing translation is never a blank label.
+        void SetStrings(const doc::StringTable* strings);
+        const doc::StringTable* Strings() const { return m_Strings; }
         bool ShowingSampleRows() const { return m_ShowSampleRows; }
         // The copy a view is part of, or kInvalid. The innermost one: a click on a label inside
         // the third message of the second channel happened in the third message, and that is what
@@ -253,10 +261,12 @@ namespace vae::ui {
         // Parsed once per rebuild rather than once per copy: a repeated container asks for its
         // rows as many times as it has copies, and the text behind them does not change between.
         const doc::RowTable* SampleRowsFor(Uuid node) const;
+        std::string TextOf(u32 view) const;
         void ApplyStickToEnd();
         const Frame& FrameOf(u32 view) const;
         mutable std::unordered_map<Uuid, doc::RowTable> m_SampleRows;
         bool m_ShowSampleRows = false;
+        const doc::StringTable* m_Strings = nullptr;
         // Scrollers asked to sit at the end once the layout that decides where that is has run.
         std::set<WidgetId> m_ScrollToEnd;
         // What the end WAS, per stick-to-end container. A scroller sitting at the end stays there

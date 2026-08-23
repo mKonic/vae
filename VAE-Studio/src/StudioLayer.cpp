@@ -775,6 +775,32 @@ namespace vae {
             bool rulers = m_Canvas.Rulers();
             if (ImGui::MenuItem("Rulers", "Ctrl+R", &rulers)) { m_Canvas.SetRulers(rulers); SaveSettings(); }
             ImGui::Separator();
+            // Previewing a language is an editor view, not a document change: it swaps what the
+            // canvas draws for labels that carry a key and leaves the document alone.
+            if (ImGui::BeginMenu("Language")) {
+                const std::string& current = m_State.Locale();
+                if (ImGui::MenuItem("As authored", nullptr, current.empty()))
+                    m_State.SetLocale({});
+                const std::vector<std::string> locales = m_State.Locales();
+                if (!locales.empty()) ImGui::Separator();
+                for (const std::string& locale : locales)
+                    if (ImGui::MenuItem(locale.c_str(), nullptr, locale == current))
+                        m_State.SetLocale(locale);
+
+                ImGui::Separator();
+                ImGui::TextDisabled("Write a translation file");
+                static char locale[16] = "en";
+                ImGui::SetNextItemWidth(120.0f);
+                ImGui::InputTextWithHint("##locale", "en, pt-BR…", locale, sizeof locale);
+                ImGui::SameLine();
+                ImGui::BeginDisabled(m_State.Path().empty() || locale[0] == '\0');
+                if (ImGui::Button("Write")) m_State.WriteStrings(locale);
+                ImGui::EndDisabled();
+                if (m_State.Path().empty()) ImGui::TextDisabled("save the project first");
+                ImGui::EndMenu();
+            }
+
+            ImGui::Separator();
             // The theme is a document fact, so switching it here is switching it for the app —
             // every token resolves through it and every widget repaints from the tokens.
             const bool dark = m_State.Doc().ActiveTheme() == doc::Theme::Dark;

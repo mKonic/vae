@@ -592,6 +592,53 @@ namespace vae {
         if (!recovery.empty()) std::filesystem::remove(recovery, ec);
     }
 
+    std::vector<std::string> EditorState::Locales() const {
+        return doc::LocalesIn(doc::StringsDirFor(m_Path));
+    }
+
+    const doc::StringTable* EditorState::Strings() const {
+        return m_Locale.empty() ? nullptr : &m_Strings;
+    }
+
+    void EditorState::SetLocale(std::string locale) {
+        if (locale == m_Locale) return;
+        m_Locale = std::move(locale);
+        m_Strings.Clear();
+        if (m_Locale.empty()) return;
+
+        std::string error;
+        const std::filesystem::path file = doc::StringsDirFor(m_Path) / (m_Locale + ".json");
+        m_Strings.SetLocale(m_Locale);
+        if (!m_Strings.Load(file, &error))
+            VAE_WARN("locale {}: {} — showing the authored text", m_Locale, error);
+        else
+            VAE_INFO("previewing {} ({} strings)", m_Locale, m_Strings.Count());
+    }
+
+    bool EditorState::WriteStrings(const std::string& locale) {
+        if (locale.empty() || m_Path.empty()) return false;
+
+        // Load what is there first, so re-running after adding a screen adds the new keys and
+        // leaves every translation already in the file alone.
+        doc::StringTable table;
+        table.SetLocale(locale);
+        const std::filesystem::path file = doc::StringsDirFor(m_Path) / (locale + ".json");
+        std::string ignored;
+        table.Load(file, &ignored);
+
+        const std::size_t before = table.Count();
+        table.CollectFrom(m_Document);
+        if (!table.Save(file)) {
+            VAE_ERROR("could not write {}", file.string());
+            return false;
+        }
+        VAE_INFO("wrote {} ({} strings, {} new)", file.string(), table.Count(),
+                 table.Count() - before);
+        // Previewing what was just written is what anyone wants next.
+        if (locale == m_Locale) { m_Locale.clear(); SetLocale(locale); }
+        return true;
+    }
+
     void EditorState::Autosave() {
         if (m_Path.empty() || !Dirty()) return;
         const std::filesystem::path recovery = RecoveryPathFor(m_Path);
