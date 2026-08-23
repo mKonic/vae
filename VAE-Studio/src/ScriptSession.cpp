@@ -6,6 +6,7 @@
 #include "vae/doc/Serializer.h"
 #include "vae/script/LuaHost.h"
 #include "vae/script/NativeHost.h"
+#include "vae/ui/Library.h"
 
 #include <charconv>
 #include <filesystem>
@@ -281,7 +282,10 @@ namespace vae {
         if (!Build()) return false;
 
         // The document as it stands, before a single script has touched it.
-        m_Snapshot = doc::Serializer::ToJson(m_State->Doc(), false);
+        // keepIds: this is restored in place so that every observer keeps its subscription, and an
+        // observer that survives is holding an id. A file drops the ids nothing references; this
+        // cannot.
+        m_Snapshot = doc::Serializer::ToXml(m_State->Doc(), false, &ui::StandardLibrary(), true);
 
         // The app gets the same services here it would get in the player: its own folder as a
         // sandbox and a store beside the project. Play is meant to be the app, not a rehearsal of it.
@@ -335,7 +339,7 @@ namespace vae {
         // Put the design back. Restored in place so every observer — the view tree above all —
         // keeps its subscription; replacing the Document object would silently unhook them.
         std::string error;
-        if (!doc::Serializer::FromJson(m_Snapshot, m_State->Doc(), &error))
+        if (!doc::Serializer::FromXml(m_Snapshot, m_State->Doc(), &error, &ui::StandardLibrary()))
             VAE_ERROR("play: could not restore the document: {}", error);
         m_Canvas->Host().MarkDirty();
         m_Snapshot.clear();

@@ -467,7 +467,7 @@ namespace vae {
     }
 
     bool EditorState::Save(const std::filesystem::path& path) {
-        if (!doc::Serializer::Save(m_Document, path)) return false;
+        if (!doc::Serializer::Save(m_Document, path, &ui::StandardLibrary())) return false;
         m_Path = path;
         m_SavedRevision = m_Document.Revision();
         VAE_INFO("saved {}", path.string());
@@ -477,7 +477,7 @@ namespace vae {
     bool EditorState::Load(const std::filesystem::path& path) {
         doc::Document loaded;
         std::string error;
-        if (!doc::Serializer::Load(path, loaded, &error)) {
+        if (!doc::Serializer::Load(path, loaded, &error, &ui::StandardLibrary())) {
             VAE_ERROR("could not open {}: {}", path.string(), error);
             return false;
         }

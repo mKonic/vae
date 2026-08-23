@@ -8,13 +8,16 @@
 #include "vae/script/LuaHost.h"
 #include "vae/script/NativeHost.h"
 #include "vae/text/FontDB.h"
+#include "vae/ui/Library.h"
 
 #include <algorithm>
 
 namespace vae::app {
 
     bool RunLayer::Load(const std::filesystem::path& path, std::string* error) {
-        if (!doc::Serializer::Load(path, m_Document, error)) return false;
+        // The standard widgets are compiled in, not carried by the file: the player rebuilds them
+        // from the same catalog the Studio drew against.
+        if (!doc::Serializer::Load(path, m_Document, error, &ui::StandardLibrary())) return false;
 
         // The script sits beside the document and is named after it, exactly as the Studio writes
         // it. A native module wins when both are present: a project that ships a compiled module

@@ -145,6 +145,17 @@ namespace vae {
             return id;
         }
 
+        // A file writes an id only on a node something refers to, so anything looked up after a
+        // save and a load is found the way a script finds it: by name. What has to survive a round
+        // trip is the node, not the number.
+        const doc::Node* FindByName(const doc::Document& doc, std::string_view name) {
+            for (Uuid root : doc.Roots())
+                for (Uuid id : doc.Subtree(root))
+                    if (const doc::Node* node = doc.Find(id); node && node->name == name)
+                        return node;
+            return nullptr;
+        }
+
         // ---------------------------------------------------------------------------- the checks
 
         void TestHitTest() {
@@ -509,15 +520,25 @@ namespace vae {
             Check(state.Load(path), "the project loads back");
             Check(state.Doc().NodeCount() == nodes, "the node count survives the round trip");
 
-            const doc::Node* node = state.Doc().Find(a);
-            Check(node != nullptr, "ids are stable across a save and load");
+            // Looked up by where it is rather than by id: a file writes an id only on a node
+            // something refers to, and nothing refers to a placed instance. Its component and the
+            // screen it sits on are found by id, because those ARE referenced.
+            const doc::Node* node = nullptr;
+            if (const doc::Node* screen = state.Doc().Find(state.ActiveScreen()))
+                for (Uuid child : screen->children)
+                    if (const doc::Node* n = state.Doc().Find(child); n && n->IsInstance()) node = n;
+            Check(node != nullptr, "the placed widget survives a save and a load");
             if (node) {
                 Check(Near(node->layout.offsetStart.x, 137.0f)
                    && Near(node->layout.offsetStart.y, 219.0f), "position survives");
                 Check(Near(node->layout.width.value, 210.0f), "size survives");
-                const doc::Value text = state.GetProp(a, doc::Prop::Text);
+                const doc::Value text = state.GetProp(node->id, doc::Prop::Text);
                 Check(std::holds_alternative<std::string>(text)
                       && std::get<std::string>(text) == "Persisted", "the override survives");
+                // The instance still points at the component it is an instance of: that id IS
+                // written, because something refers to it.
+                Check(node->componentId.Valid() && state.Doc().Find(node->componentId) != nullptr,
+                      "and still points at its component");
             }
             std::error_code ec;
             std::filesystem::remove(path, ec);
@@ -1096,7 +1117,10 @@ namespace vae {
             EditorState reopened;
             Check(reopened.Load(folder / (name + ".vaescreen")), "the project reopens");
             Check(reopened.Doc().FindAsset(asset) != nullptr, "with its assets");
-            const doc::Value ref = reopened.Doc().GetProp(picture, doc::Prop::Image);
+            const doc::Node* back = FindByName(reopened.Doc(), "Picture");
+            Check(back != nullptr, "and the picture that used it");
+            const doc::Value ref = back ? reopened.Doc().GetProp(back->id, doc::Prop::Image)
+                                        : doc::Value{};
             Check(std::holds_alternative<doc::AssetRef>(ref)
                   && std::get<doc::AssetRef>(ref).id == asset,
                   "and the node still points at the one it was given");
