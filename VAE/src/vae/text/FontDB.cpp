@@ -334,11 +334,16 @@ namespace vae::text {
         });
 
         for (const std::string& family : order) {
-            if (Face* face = FindBest(family, weight, slant)) {
-                if (face->font) continue;              // already asked above
-                if (auto font = Load(*face); font && font->HasGlyph(codepoint))
-                    return m_Coverage.emplace(key, font).first->second;
-            }
+            Face* face = FindBest(family, weight, slant);
+            if (!face || face->font) continue;          // no such face, or already asked above
+            auto font = Load(*face);
+            if (font && font->HasGlyph(codepoint))
+                return m_Coverage.emplace(key, font).first->second;
+            // It was opened only to be asked a question, and the answer was no. Holding it would
+            // mean that one character nobody can draw pulls every font on the machine into memory
+            // — and a CJK face is tens of megabytes.
+            face->font = nullptr;
+            face->info.loaded = false;
         }
 
         // Nothing installed has it. Remembered as a miss so the scan is not repeated for every

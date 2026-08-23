@@ -434,3 +434,30 @@ TEST(fontdb, the_coverage_answer_is_remembered) {
     CHECK(first == second);
     CHECK(&first == &second);
 }
+
+TEST(fontdb, a_character_nothing_covers_does_not_keep_every_font_it_opened) {
+    FontDB db;
+    db.RegisterDirectory(FileSystem::Asset("VAE/assets/fonts"), false, true);
+    // Registered without reading their metadata, which is how a system scan registers hundreds of
+    // files: the name is inferred and nothing is opened until something needs the face.
+    db.RegisterDirectory(FileSystem::Asset("VAE-Tests/assets/fonts"), false, false);
+    db.SetDefaultFamily("JetBrains Mono Nerd Font");
+    db.SetFallbackFamilies({});
+
+    const auto loadedFaces = [&] {
+        std::size_t loaded = 0;
+        for (const auto& family : db.Families())
+            for (const auto& face : db.Faces(family)) if (face.loaded) ++loaded;
+        return loaded;
+    };
+
+    const std::size_t before = loadedFaces();
+    // Searching for a character nothing has opens every face there is. Keeping them would mean one
+    // undrawable character pulls the machine's whole font collection into memory.
+    CHECK(db.FaceCovering(0x10FFFD, FontWeight::Regular, FontSlant::Normal) == nullptr);
+    CHECK_EQ(loadedFaces(), before);
+
+    // A face that does answer is kept, because it is about to be drawn from.
+    CHECK(db.FaceCovering(0x0915, FontWeight::Regular, FontSlant::Normal) != nullptr);
+    CHECK(loadedFaces() > before);
+}
