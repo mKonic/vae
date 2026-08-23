@@ -61,12 +61,16 @@ namespace vae::ui {
     }
 
     void ViewTree::BuildViews() {
+        m_SampleRows.clear();
         // The rows an app handed over travel into the flatten, because they decide how many copies
-        // a repeated container has and what each one draws.
+        // a repeated container has and what each one draws. Real rows first, then the sample ones
+        // the designer typed: a list that has been handed data shows the data, on the canvas as
+        // much as anywhere else.
         const auto flat = m_Document->Flatten(m_RootId,
             [this](Uuid node, Uuid instance) -> const doc::RowTable* {
                 const auto it = m_Rows.find(WidgetId{ node, instance });
-                return it == m_Rows.end() ? nullptr : &it->second;
+                if (it != m_Rows.end()) return &it->second;
+                return SampleRowsFor(node);
             });
         m_Views.reserve(flat.size());
 
@@ -227,8 +231,11 @@ namespace vae::ui {
         m_LayoutDirty = false;
         ComputeFrames();
 
-        // Now that the boxes are real, the scrollers that were told to stay at the end can be:
-        // a chat that has just been handed a new message ends up showing it.
+        // Now that the boxes are real, so is "fills from the bottom".
+        ApplyStickToEnd();
+
+        // And the scrollers that were told to stay at the end can be: a chat that has just been
+        // handed a new message ends up showing it.
         if (m_ScrollToEnd.empty()) return;
         for (u32 i = 0; i < m_Views.size(); ++i) {
             const WidgetId id{ m_Views[i].sourceId, m_Views[i].instanceId };
@@ -281,13 +288,15 @@ namespace vae::ui {
         }
 
         // Scroll moves the children, never the scroller.
-        const Vec2 childOrigin = frame.rect.pos - view.scroll;
+        const Vec2 childOrigin = frame.rect.pos - ScrollOffset(index);
         for (u32 child : view.children) ComputeFrame(child, childOrigin, forChildren);
     }
 
     Vec2 ViewTree::ContentSize(u32 view) const {
         if (!Valid(view) || m_Views[view].children.empty()) return { 0.0f, 0.0f };
-        const Vec2 origin = m_Frames[view].rect.pos - m_Views[view].scroll;
+        // The same offset the frames were built with, so the answer is how tall the content is
+        // and not how far down something pushed it.
+        const Vec2 origin = m_Frames[view].rect.pos - ScrollOffset(view);
         Vec2 extent{ 0.0f, 0.0f };
         for (u32 child : m_Views[view].children) {
             // A scrollbar is chrome, not content. Counting the bar — which spans the whole
@@ -548,7 +557,66 @@ namespace vae::ui {
 
     void ViewTree::ClearRows(WidgetId widget) { m_Rows.erase(widget); }
 
+    void ViewTree::ShowSampleRows(bool on) {
+        if (m_ShowSampleRows == on) return;
+        m_ShowSampleRows = on;
+        Rebuild();
+    }
+
+    // Only a container that already repeats: sample rows are what the repeat draws, and a frame
+    // that someone left a table on should not silently start copying itself.
+    const doc::RowTable* ViewTree::SampleRowsFor(Uuid node) const {
+        if (!m_ShowSampleRows || !m_Document) return nullptr;
+        const auto cached = m_SampleRows.find(node);
+        if (cached != m_SampleRows.end())
+            return cached->second.columns.empty() ? nullptr : &cached->second;
+
+        const doc::Node* source = m_Document->Find(node);
+        if (!source || !source->props.Find(doc::Prop::Repeat)) return nullptr;
+        doc::RowTable table = doc::ParseRowText(source->props.Text(doc::Prop::Sample));
+        const bool empty = table.columns.empty();
+        const doc::RowTable& stored = m_SampleRows.emplace(node, std::move(table)).first->second;
+        return empty ? nullptr : &stored;
+    }
+
     void ViewTree::KeepAtEnd(WidgetId widget) { m_ScrollToEnd.insert(widget); }
+
+    // A container that fills from its far edge, in the two states it is ever in: short content
+    // held against the bottom of the box, and long content scrolled to the end of itself. Doing
+    // both here rather than in a justification is the whole point — a justification cannot know
+    // that the content has outgrown the box, and pushes it out of the top when it does.
+    void ViewTree::ApplyStickToEnd() {
+        bool moved = false;
+        std::map<WidgetId, f32> ends;
+        for (u32 i = 0; i < m_Views.size(); ++i) {
+            View& view = m_Views[i];
+            if (!view.props.Flag(doc::Prop::StickToEnd, false)) continue;
+
+            const f32 box = m_Frames[i].rect.size.y;
+            const f32 content = ContentSize(i).y;
+            const WidgetId id{ view.sourceId, view.instanceId };
+
+            const f32 slack = std::max(box - content, 0.0f);
+            if (std::abs(view.stickSlack - slack) > 0.01f) { view.stickSlack = slack; moved = true; }
+
+            // Pinned unless the reader has scrolled away from where the end used to be. A
+            // container being laid out for the first time is pinned: a conversation opens on the
+            // newest message.
+            const f32 end = std::max(content - box, 0.0f);
+            const auto previous = m_StickEnd.find(id);
+            const bool pinned = previous == m_StickEnd.end()
+                             || view.scroll.y >= previous->second - 0.5f;
+            ends.emplace(id, end);
+            if (pinned && std::abs(view.scroll.y - end) > 0.01f) {
+                view.scroll.y = end;
+                view.props.Set(doc::Prop::ScrollY, end);
+                m_ScrollState[id] = view.scroll;
+                moved = true;
+            }
+        }
+        m_StickEnd.swap(ends);
+        if (moved) ComputeFrames();
+    }
 
     const doc::RowTable* ViewTree::RowsOf(WidgetId widget) const {
         const auto it = m_Rows.find(widget);
@@ -559,6 +627,23 @@ namespace vae::ui {
         for (u32 at = view; at != kInvalid; at = m_Views[at].parent)
             if (m_Views[at].rowRoot) return at;
         return kInvalid;
+    }
+
+    // Frames lag the views by a layout pass, and a caller can ask about a node it created a
+    // moment ago — kInvalid is UINT32_MAX, and indexing with it is how a missing box became a
+    // crash rather than an empty rect.
+    const ViewTree::Frame& ViewTree::FrameOf(u32 view) const {
+        static const Frame kNowhere{};
+        return view < m_Frames.size() ? m_Frames[view] : kNowhere;
+    }
+
+    const Rect& ViewTree::Bounds(u32 view) const { return FrameOf(view).rect; }
+    const Rect& ViewTree::ClipBounds(u32 view) const { return FrameOf(view).clip; }
+
+    Vec2 ViewTree::ScrollOffset(u32 view) const {
+        if (!Valid(view)) return { 0.0f, 0.0f };
+        const View& node = m_Views[view];
+        return { node.scroll.x, node.scroll.y - node.stickSlack };
     }
 
     void ViewTree::SetScroll(u32 view, Vec2 scroll) {

@@ -71,6 +71,10 @@ namespace vae::ui {
             StateMask state = 0;
 
             Vec2 scroll{ 0.0f, 0.0f };
+            // How far short of filling the box its content falls, for a container that fills from
+            // the far edge (Prop::StickToEnd). Content moves down by this much, which is what puts
+            // a three-message conversation above the composer instead of under the title.
+            f32  stickSlack = 0.0f;
             // One of a repeated container's copies. What a widget changes about it is kept here
             // rather than written to the document, because every copy is the same document node.
             bool repeated = false;
@@ -110,11 +114,12 @@ namespace vae::ui {
         const View& At(u32 view) const { return m_Views[view]; }
         View& At(u32 view) { return m_Views[view]; }
         bool Valid(u32 view) const { return view < m_Views.size(); }
-
         // Absolute, scroll-adjusted. Painting and hit-testing read exactly the same numbers, so a
         // control can never be drawn somewhere it cannot be clicked.
-        const Rect& Bounds(u32 view) const { return m_Frames[view].rect; }
-        const Rect& ClipBounds(u32 view) const { return m_Frames[view].clip; }
+        // A view that is not there has no box, rather than whatever is at that index. Callers ask
+        // about nodes that have just been created and not laid out yet, and kInvalid is UINT32_MAX.
+        const Rect& Bounds(u32 view) const;
+        const Rect& ClipBounds(u32 view) const;
         Vec2 ContentSize(u32 view) const;
 
         // First view under `root` (inclusive) with this role, in painter order.
@@ -148,6 +153,12 @@ namespace vae::ui {
         void SetRows(WidgetId widget, doc::RowTable rows);
         void ClearRows(WidgetId widget);
         const doc::RowTable* RowsOf(WidgetId widget) const;
+        // Draw repeated containers with the sample rows their Prop::Sample carries, for the ones
+        // no app has handed real rows to. The Studio canvas turns this on and nothing else does:
+        // a designer needs to see the template they are styling, and a running app showing
+        // invented people would be a bug rather than a convenience.
+        void ShowSampleRows(bool on);
+        bool ShowingSampleRows() const { return m_ShowSampleRows; }
         // The copy a view is part of, or kInvalid. The innermost one: a click on a label inside
         // the third message of the second channel happened in the third message, and that is what
         // it should be able to say.
@@ -188,6 +199,10 @@ namespace vae::ui {
         // Scrolling is runtime state, not a document edit. A wheel tick that dirtied the document
         // would rebuild the tree and land on the undo stack, which is not what scrolling is.
         void SetScroll(u32 view, Vec2 scroll);
+        // Where this view's children actually sit: the scroll offset, less the slack a
+        // stick-to-end container is holding them down by. Everything that turns layout rects into
+        // screen rects has to agree on this or the content measures itself.
+        Vec2 ScrollOffset(u32 view) const;
         // True once since the last layout: a behavior moved something. Lets the host re-solve only
         // when a knob or a thumb actually moved rather than laying out twice every frame.
         bool ConsumeLayoutDirty();
@@ -231,8 +246,19 @@ namespace vae::ui {
         std::map<WidgetId, doc::PropBag> m_RuntimeProps;
         // The rows behind each repeated container, by the container's identity.
         std::map<WidgetId, doc::RowTable> m_Rows;
+        // Parsed once per rebuild rather than once per copy: a repeated container asks for its
+        // rows as many times as it has copies, and the text behind them does not change between.
+        const doc::RowTable* SampleRowsFor(Uuid node) const;
+        void ApplyStickToEnd();
+        const Frame& FrameOf(u32 view) const;
+        mutable std::unordered_map<Uuid, doc::RowTable> m_SampleRows;
+        bool m_ShowSampleRows = false;
         // Scrollers asked to sit at the end once the layout that decides where that is has run.
         std::set<WidgetId> m_ScrollToEnd;
+        // What the end WAS, per stick-to-end container. A scroller sitting at the end stays there
+        // when new content arrives; one the reader has scrolled up from stays where they left it,
+        // which is the difference between following a conversation and being yanked out of one.
+        std::map<WidgetId, f32> m_StickEnd;
         // Which properties are worth easing: the ones a state overlay can change, that have
         // something to interpolate. A token resolves to a colour before it gets here.
         static const std::vector<doc::Prop>& Animatable();

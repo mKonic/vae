@@ -2219,6 +2219,90 @@ TEST(ui, rows_handed_to_a_container_become_the_rows_it_draws) {
     CHECK(named("Message") != ui::ViewTree::kInvalid);
 }
 
+TEST(ui, sample_rows_draw_on_the_canvas_and_nowhere_else) {
+    Ui ui;
+    // The gap this closes: a designer styling a row template used to be looking at the same row
+    // N times, with every column they had bound showing nothing at all.
+    const Uuid list = ui.document.CreateNode(doc::NodeKind::Frame, ui.screen, "Messages");
+    {
+        doc::Node* node = ui.document.Find(list);
+        node->layout.mode = layout::LayoutMode::Stack;
+        node->layout.axis = layout::Axis::Column;
+        node->layout.offsetStart = { 20.0f, 20.0f };
+        node->layout.width = layout::Size::Px(300.0f);
+        node->layout.height = layout::Size::Hug();
+    }
+    ui.document.SetProp(list, doc::Prop::Repeat, 2.0f);
+    ui.document.SetProp(list, doc::Prop::Sample,
+                        std::string("author | body\nAda | Hello there\nGrace | Hi\nAlan | Morning\n"));
+    const Uuid row = ui.document.CreateNode(doc::NodeKind::Frame, list, "Message");
+    {
+        doc::Node* node = ui.document.Find(row);
+        node->layout.mode = layout::LayoutMode::Stack;
+        node->layout.width = layout::Size::Fill();
+        node->layout.height = layout::Size::Px(24.0f);
+    }
+    const Uuid author = ui.document.CreateNode(doc::NodeKind::Text, row, "Author");
+    ui.document.SetProp(author, doc::Prop::Field, std::string("author"));
+    ui.Frame();
+
+    const ui::ViewTree& tree = ui.host.Tree();
+    const auto named = [&](std::string_view name) {
+        for (u32 i = 0; i < tree.ViewCount(); ++i)
+            if (tree.At(i).name == name) return i;
+        return ui::ViewTree::kInvalid;
+    };
+    const auto part = [&](std::string_view name, i32 which) {
+        for (u32 i = 0; i < tree.ViewCount(); ++i)
+            if (tree.At(i).name == name && tree.At(i).row == which) return i;
+        return ui::ViewTree::kInvalid;
+    };
+
+    // Off unless asked: this is what the player and an exported app do, and neither should ever
+    // put invented names on screen.
+    CHECK(!tree.ShowingSampleRows());
+    CHECK(named("Message 2") != ui::ViewTree::kInvalid);
+    CHECK(named("Message 3") == ui::ViewTree::kInvalid);          // the authored count, not the table
+    CHECK(tree.Str(part("Author", 0), doc::Prop::Text).empty());  // and no data behind it
+
+    ui.host.Tree().ShowSampleRows(true);
+    ui.Frame();
+    // Three sample rows, and each copy drew its own.
+    CHECK(named("Message 3") != ui::ViewTree::kInvalid);
+    CHECK(named("Message 4") == ui::ViewTree::kInvalid);
+    CHECK(ui.host.Tree().Str(part("Author", 0), doc::Prop::Text) == std::string("Ada"));
+    CHECK(ui.host.Tree().Str(part("Author", 2), doc::Prop::Text) == std::string("Alan"));
+
+    // Real rows still win, on the canvas as much as anywhere: pressing Play does not leave a
+    // designer's placeholder people in a running app.
+    doc::RowTable real;
+    real.columns = { "author" };
+    real.cells = { "you" };
+    ui.host.Tree().SetRows(WidgetId{ list, Uuid::Invalid() }, real);
+    ui.host.MarkDirty();
+    ui.Frame();
+    CHECK(named("Message 1") != ui::ViewTree::kInvalid);
+    CHECK(named("Message 2") == ui::ViewTree::kInvalid);
+    CHECK(ui.host.Tree().Str(part("Author", 0), doc::Prop::Text) == std::string("you"));
+}
+
+TEST(ui, a_table_left_on_a_container_that_does_not_repeat_changes_nothing) {
+    Ui ui;
+    // Sample rows are what a repeat draws. A frame that someone typed a table onto and then
+    // turned the repeat off must not quietly start copying itself.
+    const Uuid card = ui.document.CreateNode(doc::NodeKind::Frame, ui.screen, "Card");
+    ui.document.SetProp(card, doc::Prop::Sample, std::string("body\none\ntwo\n"));
+    ui.document.CreateNode(doc::NodeKind::Text, card, "Label");
+    ui.host.Tree().ShowSampleRows(true);
+    ui.Frame();
+
+    const ui::ViewTree& tree = ui.host.Tree();
+    u32 labels = 0;
+    for (u32 i = 0; i < tree.ViewCount(); ++i)
+        if (tree.At(i).name.rfind("Label", 0) == 0) ++labels;
+    CHECK_EQ(labels, 1u);
+}
+
 TEST(ui, the_selected_row_is_the_copy_that_lights_up) {
     Ui ui;
     const Uuid list = ui.document.CreateNode(doc::NodeKind::Frame, ui.screen, "Channels");
@@ -2272,6 +2356,105 @@ TEST(ui, the_selected_row_is_the_copy_that_lights_up) {
     ui.Settle();
     CHECK(HasState(ui.host.Tree().At(named("Channel 3")).state, StateBit::Selected));
     CHECK(!HasState(ui.host.Tree().At(named("Channel 2")).state, StateBit::Selected));
+}
+
+TEST(ui, a_container_that_fills_from_the_end_holds_short_content_against_the_bottom) {
+    Ui ui;
+    // A chat log: three messages should sit above the composer, not float under the title. This
+    // used to be `justify: end`, which is the same picture right up until the conversation is
+    // longer than the box.
+    const Uuid log = ui.document.CreateNode(doc::NodeKind::Frame, ui.screen, "Log");
+    {
+        doc::Node* node = ui.document.Find(log);
+        node->layout.mode = layout::LayoutMode::Stack;
+        node->layout.axis = layout::Axis::Column;
+        node->layout.offsetStart = { 20.0f, 20.0f };
+        node->layout.width = layout::Size::Px(300.0f);
+        node->layout.height = layout::Size::Px(200.0f);
+        ui.document.SetProp(log, doc::Prop::ClipContent, true);
+        ui.document.SetProp(log, doc::Prop::Role, std::string("scroll"));
+        ui.document.SetProp(log, doc::Prop::StickToEnd, true);
+    }
+    const auto message = [&](const char* name) {
+        const Uuid id = ui.document.CreateNode(doc::NodeKind::Frame, log, name);
+        doc::Node* node = ui.document.Find(id);
+        node->layout.width = layout::Size::Fill();
+        node->layout.height = layout::Size::Px(40.0f);
+        return id;
+    };
+    const Uuid first = message("One");
+    message("Two");
+    const Uuid third = message("Three");
+    ui.Frame();
+
+    const auto view = [&](Uuid node) {
+        return ui.host.Tree().ViewOf(WidgetId{ node, Uuid::Invalid() });
+    };
+    const ui::ViewTree& tree = ui.host.Tree();
+    const Rect box = tree.Bounds(view(log));
+
+    // 120 of content in a 200 box: the last message ends on the bottom edge, not 80 above it.
+    CHECK(std::abs(tree.Bounds(view(third)).Bottom() - box.Bottom()) < 0.5f);
+    CHECK(tree.Bounds(view(first)).pos.y > box.pos.y);
+    // And the content is still 120 tall — the offset that moved it must not measure as content,
+    // or it would report itself as scrollable and the bar would appear out of nowhere.
+    CHECK(std::abs(tree.ContentSize(view(log)).y - 120.0f) < 0.5f);
+    CHECK_EQ(tree.At(view(log)).scroll.y, 0.0f);
+}
+
+TEST(ui, filling_from_the_end_becomes_scrolling_once_the_content_outgrows_the_box) {
+    Ui ui;
+    const Uuid log = ui.document.CreateNode(doc::NodeKind::Frame, ui.screen, "Log");
+    {
+        doc::Node* node = ui.document.Find(log);
+        node->layout.mode = layout::LayoutMode::Stack;
+        node->layout.axis = layout::Axis::Column;
+        node->layout.offsetStart = { 20.0f, 20.0f };
+        node->layout.width = layout::Size::Px(300.0f);
+        node->layout.height = layout::Size::Px(100.0f);
+        ui.document.SetProp(log, doc::Prop::ClipContent, true);
+        ui.document.SetProp(log, doc::Prop::Role, std::string("scroll"));
+        ui.document.SetProp(log, doc::Prop::StickToEnd, true);
+    }
+    const auto message = [&](const std::string& name) {
+        const Uuid id = ui.document.CreateNode(doc::NodeKind::Frame, log, name);
+        doc::Node* node = ui.document.Find(id);
+        node->layout.width = layout::Size::Fill();
+        node->layout.height = layout::Size::Px(40.0f);
+        ui.document.Touch(id);
+        return id;
+    };
+    for (int i = 1; i <= 4; ++i) message("Message " + std::to_string(i));
+    ui.Frame();
+
+    const auto view = [&](Uuid node) {
+        return ui.host.Tree().ViewOf(WidgetId{ node, Uuid::Invalid() });
+    };
+    // 160 of content in a 100 box: scrolled to the end of itself, showing the newest.
+    CHECK(std::abs(ui.host.Tree().At(view(log)).scroll.y - 60.0f) < 0.5f);
+    CHECK(std::abs(ui.host.Tree().Bounds(view(log)).Bottom()
+                   - ui.host.Tree().Bounds(view(ui.document.Find(log)->children.back())).Bottom()) < 0.5f);
+
+    // A message arrives while the reader is at the bottom: they follow it.
+    message("Message 5");
+    ui.host.MarkDirty();
+    ui.Frame();
+    CHECK(std::abs(ui.host.Tree().At(view(log)).scroll.y - 100.0f) < 0.5f);
+
+    // A reader who has scrolled up stays where they are when the next one lands. Being yanked to
+    // the bottom mid-sentence is the bug every chat client has had at least once.
+    ui.host.Tree().SetScroll(view(log), { 0.0f, 20.0f });
+    message("Message 6");
+    ui.host.MarkDirty();
+    ui.Frame();
+    CHECK(std::abs(ui.host.Tree().At(view(log)).scroll.y - 20.0f) < 0.5f);
+
+    // Back to the bottom, and it follows again.
+    ui.host.Tree().SetScroll(view(log), { 0.0f, 140.0f });
+    message("Message 7");
+    ui.host.MarkDirty();
+    ui.Frame();
+    CHECK(std::abs(ui.host.Tree().At(view(log)).scroll.y - 180.0f) < 0.5f);
 }
 
 TEST(ui, a_scroller_told_to_stay_at_the_end_waits_for_the_rows_that_move_it) {
@@ -2802,6 +2985,51 @@ TEST(library, format_3_names_the_catalog_too) {
     std::string orphanError;
     CHECK(!doc::Serializer::FromXml(named, orphan, &orphanError));
     CHECK(orphanError.find("vae.std") != std::string::npos);
+}
+
+TEST(library, the_librarys_own_tokens_are_not_written_either) {
+    // Same rule as the catalog, applied to the theme: a project that left the tokens alone gets
+    // them back from the library, so an untouched document has no <tokens> block at all.
+    doc::Document document;
+    const Library library = BuildStandardLibrary(document);
+    const Uuid screen = document.CreateNode(doc::NodeKind::Screen, Uuid::Invalid(), "Home");
+    document.CreateInstance(library.Find("Button"), screen);
+
+    const std::string untouched = doc::Serializer::ToXml(document, true, &StandardLibrary());
+    CHECK(untouched.find("<tokens>") == std::string::npos);
+    CHECK(doc::Serializer::ToXml(document).find("<token name=\"accent\"") != std::string::npos);
+
+    // Recolour one and the file carries that one, and only that one.
+    document.SetToken("accent", doc::Token{ Color{ 0.9f, 0.2f, 0.1f, 1.0f },
+                                            Color{ 0.9f, 0.2f, 0.1f, 1.0f } });
+    const std::string recoloured = doc::Serializer::ToXml(document, true, &StandardLibrary());
+    CHECK(recoloured.find("<token name=\"accent\"") != std::string::npos);
+    CHECK(recoloured.find("<token name=\"surface\"") == std::string::npos);
+
+    doc::Document loaded;
+    std::string error;
+    CHECK_MESSAGE(doc::Serializer::FromXml(recoloured, loaded, &error, &StandardLibrary()), error);
+    // The changed one is what the file said; the other twelve came back from the library.
+    CHECK(loaded.Tokens() == document.Tokens());
+}
+
+TEST(library, a_deleted_default_token_stays_deleted) {
+    // The one case silence cannot cover: not writing a token means "unchanged", and Install would
+    // hand a deleted one straight back. So a deletion is written as one.
+    doc::Document document;
+    BuildStandardLibrary(document);
+    document.CreateNode(doc::NodeKind::Screen, Uuid::Invalid(), "Home");
+    document.RemoveToken("danger");
+
+    const std::string xml = doc::Serializer::ToXml(document, true, &StandardLibrary());
+    CHECK(xml.find("name=\"danger\" removed=\"true\"") != std::string::npos);
+
+    doc::Document loaded;
+    std::string error;
+    CHECK_MESSAGE(doc::Serializer::FromXml(xml, loaded, &error, &StandardLibrary()), error);
+    CHECK(loaded.FindToken("danger") == nullptr);
+    CHECK(loaded.FindToken("accent") != nullptr);
+    CHECK(loaded.Tokens() == document.Tokens());
 }
 
 TEST(library, a_format_3_document_that_inlines_the_catalog_is_folded_on_load) {
