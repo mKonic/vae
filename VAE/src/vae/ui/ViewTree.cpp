@@ -678,6 +678,22 @@ namespace vae::ui {
         const Frame& frame = m_Frames[index];
         if (!frame.visible || frame.opacity <= 0.001f) return;
 
+        // Nothing that lands entirely outside the box it is clipped to is worth recording. Only
+        // for a subtree that is actually clipped — a child of a non-clipping parent is allowed to
+        // draw outside it, so its own clip is what decides, one node at a time.
+        //
+        // This is what makes a long list cheap: a thousand rows in a scroller that shows thirty
+        // used to be a thousand rows of quads and glyphs submitted every frame, clipped in the
+        // fragment shader after the fact.
+        if (frame.clip.Intersect(frame.rect).Empty()) {
+            // A node that clips its children to a box which is itself off-screen takes the whole
+            // subtree with it. One that does not clip only skips its own drawing: a child of it is
+            // allowed to sit outside its box, and its own test below is what decides.
+            if (view.clip) return;
+            for (u32 child : view.children) PaintView(child, context);
+            return;
+        }
+
         const doc::PropBag props = Resolved(index);
         const f32 radius = props.Number(doc::Prop::CornerRadius, 0.0f);
         const Corners corners{ radius };

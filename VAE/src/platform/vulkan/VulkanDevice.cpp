@@ -277,6 +277,8 @@ namespace vae::gpu {
         if (m_Swapchain && !m_Swapchain->Valid()) return nullptr;   // minimized
 
         Frame& frame = m_Frames[m_FrameIndex];
+        if (m_DeviceLost) return nullptr;
+
         VK_CHECK(vkWaitForFences(m_Device, 1, &frame.inFlight, VK_TRUE, UINT64_MAX));
 
         if (m_Swapchain) {
@@ -287,6 +289,7 @@ namespace vae::gpu {
                 m_Swapchain->Resize(m_Window->Width(), m_Window->Height());
                 return nullptr;                     // skip this frame; the next one uses the new chain
             }
+            if (acquired == VK_ERROR_DEVICE_LOST) { OnDeviceLost("vkAcquireNextImageKHR"); return nullptr; }
             if (acquired != VK_SUCCESS && acquired != VK_SUBOPTIMAL_KHR) {
                 VAE_CORE_ERROR("vkAcquireNextImageKHR: {}", VkResultName(acquired));
                 return nullptr;
@@ -370,11 +373,29 @@ namespace vae::gpu {
             const VkResult presented = vkQueuePresentKHR(m_GraphicsQueue, &present);
             if (presented == VK_ERROR_OUT_OF_DATE_KHR || presented == VK_SUBOPTIMAL_KHR)
                 m_Swapchain->Resize(m_Window->Width(), m_Window->Height());
+            else if (presented == VK_ERROR_DEVICE_LOST)
+                OnDeviceLost("vkQueuePresentKHR");
             else if (presented != VK_SUCCESS)
                 VAE_CORE_ERROR("vkQueuePresentKHR: {}", VkResultName(presented));
         }
 
         m_FrameIndex = (m_FrameIndex + 1) % static_cast<u32>(m_Frames.size());
+    }
+
+    // A driver reset, a GPU hang, a suspend that did not survive: every handle this device ever
+    // handed out is now invalid, and every call from here on returns the same error. Say it once,
+    // in terms someone can act on, and stop — a window that keeps spinning on a dead device looks
+    // like a hang, and an assert in the middle of a frame says nothing about why.
+    //
+    // Recreating the device and every resource on it is the next step and is not done: it means a
+    // rebuild pass across every gpu:: object, and doing half of it would hide the failure without
+    // fixing it.
+    void VulkanDevice::OnDeviceLost(const char* where) {
+        if (m_DeviceLost) return;
+        m_DeviceLost = true;
+        VAE_CORE_ERROR("the graphics device was lost ({}). This is a driver reset, a GPU hang or a "
+                       "suspend the driver did not survive — the window cannot draw again until "
+                       "the app is restarted.", where);
     }
 
     void VulkanDevice::WaitIdle() { if (m_Device) vkDeviceWaitIdle(m_Device); }

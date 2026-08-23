@@ -32,6 +32,10 @@ namespace vae::gpu {
         CommandList* BeginFrame() override;
         void EndFrame() override;
         void WaitIdle() override;
+        // True once the driver has told us the device is gone. Nothing recovers it in-process yet;
+        // what this buys is one clear message instead of a frozen window and a wall of errors.
+        bool DeviceLost() const { return m_DeviceLost; }
+        void OnDeviceLost(const char* where);
         void OnWindowResize(u32 width, u32 height) override;
 
         // --- internals used by the other Vulkan objects -----------------------------------------
@@ -71,6 +75,7 @@ namespace vae::gpu {
         VkSurfaceKHR             m_Surface    = VK_NULL_HANDLE;
         VkPhysicalDevice         m_Physical   = VK_NULL_HANDLE;
         VkDevice                 m_Device     = VK_NULL_HANDLE;
+        bool m_DeviceLost = false;
         VkQueue                  m_GraphicsQueue = VK_NULL_HANDLE;
         u32                      m_GraphicsFamily = 0;
         VmaAllocator             m_Allocator  = nullptr;
