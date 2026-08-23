@@ -63,8 +63,15 @@ project "VAE-Core"
       "GLM_ENABLE_EXPERIMENTAL",
    }
 
+   -- The build number and the version name, out of git, before anything compiles. Idempotent: the
+   -- header is only rewritten when it changed, so this does not recompile the world every build.
+   prebuildcommands {
+      "@%{wks.location}/scripts/version.sh header %{wks.location}/VAE/vendor-generated/vae/Version.gen.h"
+   }
+
    includedirs {
       "src",
+      "vendor-generated",
       "%{IncludeDir.spdlog}",
       "%{IncludeDir.glm}",
       "%{IncludeDir.stb}",
@@ -139,6 +146,7 @@ project "VAE"
 
    includedirs {
       "src",
+      "vendor-generated",
       "%{IncludeDir.spdlog}",
       "%{IncludeDir.glm}",
       "%{IncludeDir.stb}",

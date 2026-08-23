@@ -13,6 +13,7 @@ project "VAE-Tests"
    defines { "SPDLOG_COMPILED_LIB", "GLM_ENABLE_EXPERIMENTAL" }
 
    includedirs {
+      "%{wks.location}/VAE/vendor-generated",
       "src",
       "%{wks.location}/VAE/src",
       "%{IncludeDir.spdlog}",

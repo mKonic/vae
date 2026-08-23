@@ -17,6 +17,7 @@ project "VAE-Studio"
    }
 
    includedirs {
+      "%{wks.location}/VAE/vendor-generated",
       "src",
       "%{wks.location}/VAE/src",
       "%{IncludeDir.spdlog}",

@@ -17,6 +17,7 @@ project "VAE-Player"
    }
 
    includedirs {
+      "%{wks.location}/VAE/vendor-generated",
       "src",
       "%{wks.location}/VAE/src",
       "%{IncludeDir.spdlog}",
