@@ -172,3 +172,16 @@ VAE-Studio --selftest    # editor logic, no window and no device; exit code is t
 
 A chat client: one `.vaescreen`, one Lua file, rows fed to repeating containers, WebSockets for the
 transport.
+
+## Licence
+
+LGPL-3.0-or-later. `COPYING.LESSER` is the licence; `COPYING` is the GPLv3 it is written against.
+
+The engine is a library, and that is the point of the choice: an app you build with VAE is your own
+work and stays yours, whatever licence you put on it. What LGPL asks in return is that whoever has
+your app can replace the copy of VAE inside it — which, for the static linking VAE does by default,
+means shipping your object files or a build that links VAE dynamically alongside it.
+
+Vendored dependencies keep their own licences, all permissive: GLFW (zlib), Dear ImGui, Lua, sol2,
+spdlog, pugixml, nlohmann/json, GLM, miniaudio, cpp-httplib, vk-bootstrap, VulkanMemoryAllocator and
+ImGuiColorTextEdit (MIT), stb (public domain).
