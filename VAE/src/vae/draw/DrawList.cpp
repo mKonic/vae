@@ -174,7 +174,7 @@ namespace vae::draw {
     }
 
     void DrawList::AddGlyph(const Rect& rect, const Rect& uv, Color color,
-                            const Ref<gpu::Texture>& atlasPage) {
+                            const Ref<gpu::Texture>& atlasPage, bool colourGlyph) {
         const Rect r = Apply(rect);
         if (r.Empty() || !atlasPage) return;
 
@@ -187,7 +187,9 @@ namespace vae::draw {
         q.color0    = color;
         q.clipRect  = ToVec4(clip.rect);
         q.clipRadii = clip.corners.AsVec4();
-        q.params    = { 0.0f, static_cast<f32>(Paint::Kind::Glyph), static_cast<f32>(slot), 0.0f };
+        q.params    = { 0.0f, static_cast<f32>(colourGlyph ? Paint::Kind::ColourGlyph
+                                                           : Paint::Kind::Glyph),
+                        static_cast<f32>(slot), 0.0f };
         q.uv        = { uv.pos.x, uv.pos.y, uv.pos.x + uv.size.x, uv.pos.y + uv.size.y };
 
         m_Quads.push_back(q);

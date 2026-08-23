@@ -22,3 +22,11 @@
 #define STBI_NO_STDIO
 #define STBI_NO_SIMD
 #include <stb_image.h>
+
+// Resampling, for the one thing that needs it: a colour emoji ships as a single large bitmap and
+// is drawn at whatever size the text around it is, so every emoji on screen is a downscale.
+// STBIR_NO_SIMD for the same reason as STBI_NO_SIMD above, and it is not on a hot path either —
+// an emoji is resampled once per size and then lives in the atlas.
+#define STB_IMAGE_RESIZE_IMPLEMENTATION
+#define STBIR_NO_SIMD
+#include <stb_image_resize2.h>

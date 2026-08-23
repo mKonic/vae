@@ -29,7 +29,7 @@ namespace vae::text {
                                std::round((origin.y + pen.y) * ratio + entry->bearing.y) };
 
             list.AddGlyph(Rect{ device * inverse, entry->size * inverse }, entry->uv, color,
-                          atlas.PageTexture(entry->page));
+                          atlas.PageTexture(entry->page), entry->colour);
         }
     }
 

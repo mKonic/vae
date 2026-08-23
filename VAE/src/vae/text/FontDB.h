@@ -91,7 +91,11 @@ namespace vae::text {
         // answer for Devanagari, Thai, Cherokee or a script that did not exist when this was
         // written, as long as a face for it is installed. The search reads font files, so its
         // answer is remembered per codepoint and the scan happens once.
-        const Ref<Font>& FaceCovering(u32 codepoint, FontWeight weight, FontSlant slant);
+        // `preferColour` asks for a colour face when one covers the character and settles for a
+        // monochrome one when none does. That is what an emoji wants: a text face having some
+        // outline for U+1F600 must not beat the font that has the picture.
+        const Ref<Font>& FaceCovering(u32 codepoint, FontWeight weight, FontSlant slant,
+                                      bool preferColour = false);
 
         std::vector<std::string> Families() const;
         std::vector<FontFaceInfo> Faces(std::string_view family) const;
@@ -125,12 +129,14 @@ namespace vae::text {
             u32        codepoint = 0;
             FontWeight weight = FontWeight::Regular;
             FontSlant  slant  = FontSlant::Normal;
+            bool       preferColour = false;
             bool operator==(const CoverageKey&) const = default;
         };
         struct CoverageKeyHash {
             std::size_t operator()(const CoverageKey& key) const {
                 return key.codepoint ^ (static_cast<std::size_t>(key.weight) << 21)
-                                     ^ (static_cast<std::size_t>(key.slant) << 31);
+                                     ^ (static_cast<std::size_t>(key.slant) << 31)
+                                     ^ (key.preferColour ? 0x9E3779B9u : 0u);
             }
         };
 

@@ -20,6 +20,8 @@ namespace vae::text {
             Vec2 bearing{ 0.0f, 0.0f };
             u32  page = 0;
             bool blank = true;
+            // A colour glyph carries its own colour and must not be tinted by the text colour.
+            bool colour = false;
         };
 
         static constexpr u32 kPageSize = 1024;
@@ -39,6 +41,7 @@ namespace vae::text {
     private:
         struct Page {
             Ref<gpu::Texture> texture;
+            bool colour = false;              // RGBA rather than coverage
             // Shelf packing: glyphs at one size have near-identical heights, so shelves waste very
             // little and cost none of stb_rect_pack's bookkeeping.
             u32 shelfY = 0;
@@ -46,8 +49,8 @@ namespace vae::text {
             u32 penX = 0;
         };
 
-        bool Place(u32 width, u32 height, u32& outPage, u32& outX, u32& outY);
-        bool AddPage();
+        bool Place(u32 width, u32 height, bool colour, u32& outPage, u32& outX, u32& outY);
+        bool AddPage(bool colour);
 
         gpu::Device* m_Device = nullptr;
         std::vector<Page> m_Pages;

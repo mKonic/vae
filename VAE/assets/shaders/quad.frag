@@ -28,6 +28,7 @@ const uint kLinear = 1u;
 const uint kRadial = 2u;
 const uint kImage  = 3u;
 const uint kGlyph  = 4u;
+const uint kColourGlyph = 5u;
 
 // Signed distance to a rounded box with independent per-corner radii. p is relative to the centre,
 // b is the half-size. Radii arrive in CSS order (tl, tr, br, bl); y grows downward.
@@ -80,6 +81,14 @@ void main() {
         vec2 uv = mix(q.uv.xy, q.uv.zw, t);
         float coverage = texture(uTextures[nonuniformEXT(uint(q.params.z + 0.5))], uv).r;
         fill = vec4(q.color0.rgb, q.color0.a * coverage);
+    } else if (kind == kColourGlyph) {
+        // An emoji brings its own colours. The instance contributes opacity and nothing else —
+        // tinting it would make text colour apply to a picture, which is never what was meant.
+        // The atlas holds it premultiplied, so the colour is unmultiplied back out here rather
+        // than at the blend, which the rest of the pipeline expects to be straight alpha.
+        vec2 uv = mix(q.uv.xy, q.uv.zw, t);
+        vec4 texel = texture(uTextures[nonuniformEXT(uint(q.params.z + 0.5))], uv);
+        fill = vec4(texel.a > 0.0 ? texel.rgb / texel.a : texel.rgb, texel.a * q.color0.a);
     } else {
         fill = q.color0;
     }

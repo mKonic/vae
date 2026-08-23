@@ -166,9 +166,10 @@ to one glyph: Arabic and Hebrew read right to left and take their joined forms, 
 marks attach to their letters, and a font's ligatures are drawn. Mixed-direction text resolves at a
 paragraph level with the neutrals between runs handled per UAX #9. When neither the chosen face nor
 the fallback chain has a character, VAE searches every installed family for one that does, so a
-script nobody listed still draws. Colour emoji are the exception: `stb_truetype` reads outlines, not
-the bitmap and layered-colour formats emoji faces use, so they draw in whatever monochrome form a
-text face has.
+script nobody listed still draws. Colour emoji draw as emoji: a `CBDT`/`CBLC` face — Noto Color
+Emoji, and so every Linux desktop — is read for its pictures, scaled to the size of the text around
+it, and drawn from an RGBA atlas page that the text colour does not tint. Apple's `sbix` and layered
+`COLR` faces are not read.
 
 ## Scripting
 

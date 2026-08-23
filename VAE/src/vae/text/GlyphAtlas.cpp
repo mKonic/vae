@@ -17,7 +17,9 @@ namespace vae::text {
 
     bool GlyphAtlas::Init(gpu::Device& device) {
         m_Device = &device;
-        return AddPage();
+        // Only the coverage page up front. A colour page is 4 MB and most apps have no emoji in
+        // them, so the first one is made when the first colour glyph asks for it.
+        return AddPage(false);
     }
 
     void GlyphAtlas::Shutdown() {
@@ -26,32 +28,37 @@ namespace vae::text {
         m_Device = nullptr;
     }
 
-    bool GlyphAtlas::AddPage() {
+    bool GlyphAtlas::AddPage(bool colour) {
         if (m_Pages.size() >= kMaxPages) return false;
 
         gpu::TextureDesc desc;
         desc.width = desc.height = kPageSize;
-        desc.format = gpu::Format::R8_UNORM;      // coverage only; colour comes from the instance
-        desc.debugName = "glyph-atlas";
+        // Coverage for outlines, where the colour comes from the instance; RGBA for a colour font,
+        // where the glyph is a picture and the instance has no say in what colour it is.
+        desc.format = colour ? gpu::Format::RGBA8_UNORM : gpu::Format::R8_UNORM;
+        desc.debugName = colour ? "glyph-atlas-colour" : "glyph-atlas";
         Page page;
+        page.colour = colour;
         page.texture = m_Device->CreateTexture(desc);
         if (!page.texture) return false;
 
         // Zero the page: an unwritten region sampled through padding would otherwise be garbage.
-        const std::vector<u8> blank(static_cast<std::size_t>(kPageSize) * kPageSize, 0);
+        const std::vector<u8> blank(static_cast<std::size_t>(kPageSize) * kPageSize
+                                    * (colour ? 4u : 1u), 0);
         page.texture->Upload(blank.data(), blank.size());
 
         m_Pages.push_back(std::move(page));
         return true;
     }
 
-    bool GlyphAtlas::Place(u32 width, u32 height, u32& outPage, u32& outX, u32& outY) {
+    bool GlyphAtlas::Place(u32 width, u32 height, bool colour, u32& outPage, u32& outX, u32& outY) {
         const u32 w = width + kPadding * 2;
         const u32 h = height + kPadding * 2;
         if (w > kPageSize || h > kPageSize) return false;
 
         for (u32 i = 0; i < m_Pages.size(); ++i) {
             Page& page = m_Pages[i];
+            if (page.colour != colour) continue;    // a picture cannot go on a coverage page
             if (page.penX + w > kPageSize) {          // shelf full: start a new one
                 page.shelfY += page.shelfHeight;
                 page.shelfHeight = 0;
@@ -67,8 +74,8 @@ namespace vae::text {
             return true;
         }
 
-        if (!AddPage()) return false;
-        return Place(width, height, outPage, outX, outY);
+        if (!AddPage(colour)) return false;
+        return Place(width, height, colour, outPage, outX, outY);
     }
 
     const GlyphAtlas::Entry* GlyphAtlas::Get(const Font& font, u32 glyph, f32 pixelSize) {
@@ -89,8 +96,9 @@ namespace vae::text {
             return &m_Entries.emplace(key, entry).first->second;
         }
 
+        entry.colour = bitmap.Colour();
         u32 page = 0, x = 0, y = 0;
-        if (!Place(bitmap.width, bitmap.height, page, x, y)) {
+        if (!Place(bitmap.width, bitmap.height, entry.colour, page, x, y)) {
             if (!m_WarnedFull) {
                 VAE_CORE_ERROR("glyph atlas full ({} pages of {}px, {} glyphs) — text will be missing",
                                m_Pages.size(), kPageSize, m_Entries.size());

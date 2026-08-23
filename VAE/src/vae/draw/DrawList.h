@@ -68,10 +68,11 @@ namespace vae::draw {
         void AddShadow(const Rect& rect, const ShadowSpec& shadow, Corners corners = {});
         void AddLine(Vec2 a, Vec2 b, f32 width, Color color);
 
-        // One glyph from an atlas page. `uv` is normalized within that page. The atlas is R8, so
-        // the sampled value is coverage and the colour comes entirely from `color`.
+        // One glyph from an atlas page. `uv` is normalized within that page. A coverage glyph
+        // samples R8 and takes its colour entirely from `color`; a colour glyph is a picture and
+        // takes only its opacity, because "red text" cannot mean a red emoji.
         void AddGlyph(const Rect& rect, const Rect& uv, Color color,
-                      const Ref<gpu::Texture>& atlasPage);
+                      const Ref<gpu::Texture>& atlasPage, bool colourGlyph = false);
 
         const std::vector<QuadInstance>&   Quads()    const { return m_Quads; }
         const std::vector<ShadowInstance>& Shadows()  const { return m_Shadows; }

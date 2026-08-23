@@ -190,6 +190,8 @@ namespace vae::text {
         }
 
         if (m_FallbackFamilies.empty()) {
+            // Not a list of every script — that is what the coverage search is for. These are the
+            // faces worth reaching for before opening font files to ask.
             for (const char* candidate : { "JetBrains Mono Nerd Font", "Noto Sans", "DejaVu Sans",
                                            "Noto Sans CJK", "Noto Color Emoji" })
                 if (HasFamily(candidate) && candidate != m_DefaultFamily)
@@ -310,15 +312,20 @@ namespace vae::text {
         return m_Styles.emplace(key, std::move(style)).first->second;
     }
 
-    const Ref<Font>& FontDB::FaceCovering(u32 codepoint, FontWeight weight, FontSlant slant) {
-        const CoverageKey key{ codepoint, weight, slant };
+    const Ref<Font>& FontDB::FaceCovering(u32 codepoint, FontWeight weight, FontSlant slant,
+                                          bool preferColour) {
+        const CoverageKey key{ codepoint, weight, slant, preferColour };
         if (const auto it = m_Coverage.find(key); it != m_Coverage.end()) return it->second;
+
+        const auto acceptable = [&](const Ref<Font>& font) {
+            return font && font->HasGlyph(codepoint) && (!preferColour || font->Colour());
+        };
 
         // Loaded faces first: they cost nothing to ask, and on a machine whose fonts have already
         // been touched this is usually where the answer is.
         for (auto& [family, faces] : m_Families)
             for (Face& face : faces)
-                if (face.font && face.font->HasGlyph(codepoint))
+                if (face.font && acceptable(face.font))
                     return m_Coverage.emplace(key, face.font).first->second;
 
         // Then everything else, best guess first. The tag Unicode gives a character's script is
@@ -337,13 +344,19 @@ namespace vae::text {
             Face* face = FindBest(family, weight, slant);
             if (!face || face->font) continue;          // no such face, or already asked above
             auto font = Load(*face);
-            if (font && font->HasGlyph(codepoint))
+            if (acceptable(font))
                 return m_Coverage.emplace(key, font).first->second;
             // It was opened only to be asked a question, and the answer was no. Holding it would
             // mean that one character nobody can draw pulls every font on the machine into memory
             // — and a CJK face is tens of megabytes.
             face->font = nullptr;
             face->info.loaded = false;
+        }
+
+        // Asked for colour and there is none: any face that has the character beats a box.
+        if (preferColour) {
+            const Ref<Font>& any = FaceCovering(codepoint, weight, slant, false);
+            return m_Coverage.emplace(key, any).first->second;
         }
 
         // Nothing installed has it. Remembered as a miss so the scan is not repeated for every

@@ -11,8 +11,11 @@ namespace vae::draw {
     struct Paint {
         // Glyph is a fill kind rather than a separate pipeline, so text batches together with
         // the boxes around it instead of forcing a pipeline switch per label.
+        // ColourGlyph is a glyph that is a picture rather than a coverage mask — an emoji. It
+        // samples RGBA and takes only its opacity from the instance, because "red text" cannot
+        // mean a red emoji.
         enum class Kind : u32 { Solid = 0, LinearGradient = 1, RadialGradient = 2, Image = 3,
-                                Glyph = 4 };
+                                Glyph = 4, ColourGlyph = 5 };
 
         Kind  kind = Kind::Solid;
         Color color{ 1.0f, 1.0f, 1.0f, 1.0f };    // solid fill, gradient stop 0, or image tint

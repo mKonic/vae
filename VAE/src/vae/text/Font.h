@@ -27,8 +27,10 @@ namespace vae::text {
     };
 
     struct GlyphBitmap {
-        std::vector<u8> pixels;       // 8-bit coverage
+        std::vector<u8> pixels;       // 8-bit coverage, or RGBA when channels is 4
         u32 width = 0, height = 0;
+        u32 channels = 1;
+        bool Colour() const { return channels == 4; }
     };
 
     // A single face at arbitrary sizes. Rasterization is CPU-only with no GPU dependency, which is
@@ -39,6 +41,11 @@ namespace vae::text {
         static Ref<Font> LoadFromFile(const std::filesystem::path& path);
         static Ref<Font> LoadFromMemory(std::vector<u8> data, std::string name);
         ~Font();
+
+        // A face whose glyphs are pictures rather than outlines — a colour emoji font. It has no
+        // `glyf` table at all, so nothing that reads outlines can read it; its metrics come from
+        // HarfBuzz and its glyphs come out of the embedded bitmaps as colour.
+        bool Colour() const { return m_Colour; }
 
         const std::string& Name() const { return m_Name; }
         // From the font's own `name` table, not from the filename.
@@ -66,8 +73,12 @@ namespace vae::text {
 
     private:
         bool Init();
+        bool InitColour();
         bool HasTable(const char* tag) const;
+        std::pair<u32, u32> TableRange(const char* tag) const;
         f32  Scale(f32 pixelSize) const;
+        GlyphMetrics ColourGlyph(u32 glyph, f32 pixelSize) const;
+        GlyphBitmap  RasterizeColour(u32 glyph, f32 pixelSize) const;
 
         std::vector<u8> m_Data;
         std::string     m_Name;
@@ -80,6 +91,8 @@ namespace vae::text {
         mutable std::unordered_map<u64, GlyphMetrics> m_MetricsCache;
         mutable std::unordered_map<u32, u32>          m_IndexCache;
         mutable Scope<struct ShaperFace>              m_Shaper;
+        Scope<struct ColourStrike>                    m_Strike;
+        bool                                          m_Colour = false;
     };
 
 }

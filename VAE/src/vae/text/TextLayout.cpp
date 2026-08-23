@@ -10,7 +10,29 @@
 
 namespace vae::text {
 
+    namespace {
+        // Characters that mean the picture, not the letter. Unicode calls this emoji presentation,
+        // and the plane-1 pictographs are the block that has it by default — which is the case that
+        // matters, because a text face with some outline for U+1F600 must not beat the font that
+        // has the actual emoji. Below this the symbol blocks default to *text* presentation, so
+        // leaving them to the text face is right. A U+FE0F on a character that would otherwise be
+        // text is not honoured: that is a property of the cluster, not of one codepoint.
+        bool WantsColour(u32 codepoint) {
+            return codepoint >= 0x1F300 && codepoint <= 0x1FAFF;
+        }
+    }
+
     const Ref<Font>& TextStyle::FaceFor(u32 codepoint) const {
+        if (WantsColour(codepoint)) {
+            if (font && font->Colour() && font->HasGlyph(codepoint)) return font;
+            for (const auto& fallback : fallbacks)
+                if (fallback && fallback->Colour() && fallback->HasGlyph(codepoint)) return fallback;
+            if (db) {
+                const Ref<Font>& colour = db->FaceCovering(codepoint, weight, slant, true);
+                if (colour) return colour;
+            }
+        }
+
         if (font && font->HasGlyph(codepoint)) return font;
         for (const auto& fallback : fallbacks)
             if (fallback && fallback->HasGlyph(codepoint)) return fallback;
