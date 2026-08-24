@@ -10,22 +10,49 @@ namespace vae {
 
     namespace {
         u32  s_WindowCount = 0;
+        bool s_Initialised = false;
 
+        // Deduplicated, because a GLFW that is unhappy is unhappy once per call and the engine
+        // calls it several times a frame. One startup failure used to write 4.7 MB of the same
+        // line before anyone could read the one above it that said why.
         void OnGlfwError(int code, const char* description) {
+            static int lastCode = 0;
+            static u64 repeats = 0;
+            if (code == lastCode) {
+                if (++repeats > 3) return;
+            } else {
+                lastCode = code;
+                repeats = 0;
+            }
             VAE_CORE_ERROR("GLFW error {}: {}", code, description);
+            if (repeats == 3) VAE_CORE_ERROR("GLFW error {}: repeating; further copies suppressed", code);
         }
     }
 
-    Scope<Window> Window::Create(const WindowSpec& spec) { return CreateScope<DesktopWindow>(spec); }
+    // Null when there is no window to be had. Every caller has to cope with that: a machine with
+    // no display server is a normal machine to be started on by mistake, not a broken one, and the
+    // answer is one clear line and an exit code -- not a crash, and not a loop drawing nothing.
+    Scope<Window> Window::Create(const WindowSpec& spec) {
+        auto window = CreateScope<DesktopWindow>(spec);
+        return window->NativeHandle() ? Scope<Window>(std::move(window)) : nullptr;
+    }
 
     DesktopWindow::DesktopWindow(const WindowSpec& spec) {
         m_Data.width  = spec.width;
         m_Data.height = spec.height;
         m_Data.vsync  = spec.vsync;
 
+        // Never inside an assert: VAE_CORE_ASSERT is ((void)0) in Dist, which compiled the
+        // glfwInit() call itself out of the shipped build. The engine then ran its whole startup
+        // against an uninitialised GLFW, opened nothing, and spun forever logging error 65537.
         if (s_WindowCount == 0) {
             glfwSetErrorCallback(OnGlfwError);
-            VAE_CORE_ASSERT(glfwInit(), "glfwInit failed");
+            if (!glfwInit()) {
+                VAE_CORE_ERROR("GLFW could not start — no display server? "
+                               "(check WAYLAND_DISPLAY or DISPLAY)");
+                return;
+            }
+            s_Initialised = true;
         }
 
         glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);          // Vulkan does the drawing
@@ -39,7 +66,10 @@ namespace vae {
 
         m_Handle = glfwCreateWindow(static_cast<int>(spec.width), static_cast<int>(spec.height),
                                     spec.title.c_str(), nullptr, nullptr);
-        VAE_CORE_ASSERT(m_Handle, "glfwCreateWindow failed");
+        if (!m_Handle) {
+            VAE_CORE_ERROR("could not create a window — the display server refused it");
+            return;
+        }
         ++s_WindowCount;
 
         SetIcon();
@@ -64,7 +94,7 @@ namespace vae {
             cursor = nullptr;
         }
         if (m_Handle) { glfwDestroyWindow(m_Handle); --s_WindowCount; }
-        if (s_WindowCount == 0) glfwTerminate();
+        if (s_WindowCount == 0 && s_Initialised) { glfwTerminate(); s_Initialised = false; }
     }
 
     void DesktopWindow::InstallCallbacks() {
@@ -164,7 +194,7 @@ namespace vae {
 
     void DesktopWindow::OnUpdate() { glfwPollEvents(); }
 
-    bool DesktopWindow::ShouldClose() const { return glfwWindowShouldClose(m_Handle); }
+    bool DesktopWindow::ShouldClose() const { return !m_Handle || glfwWindowShouldClose(m_Handle); }
 
     void DesktopWindow::SetShouldClose(bool should) {
         glfwSetWindowShouldClose(m_Handle, should ? GLFW_TRUE : GLFW_FALSE);
@@ -174,6 +204,10 @@ namespace vae {
     // sizes. Wayland ignores this — a compositor takes the icon from the .desktop file, which is
     // why WM_CLASS is set — but X11, and every screenshot of an X11 session, uses it.
     void DesktopWindow::SetIcon() {
+        // Asking anyway is not harmless: GLFW answers with an error every single start, and a
+        // shipped app whose first log line is an error is a shipped app people file bugs about.
+        if (glfwGetPlatform() == GLFW_PLATFORM_WAYLAND) return;
+
         const auto source = FileSystem::ReadText(FileSystem::Asset("VAE/assets/icon.svg"));
         if (!source) return;
 

@@ -53,11 +53,21 @@ namespace vae {
 
         // First line in every log, because it is the first thing a bug report needs and the last
         // thing anyone remembers to ask for.
-        VAE_CORE_INFO("VAE {} — engine root: {}", Version::String(),
-                      FileSystem::EngineRoot().string());
+        VAE_CORE_INFO("VAE {} — {}", Version::String(),
+                      FileSystem::EngineRoot().empty()
+                          ? std::string("standalone")
+                          : "engine root: " + FileSystem::EngineRoot().string());
 
         if (m_Spec.createWindow) {
             m_Window = Window::Create(m_Spec.window);
+            if (!m_Window) {
+                // Nothing below this can work, and a loop with no window never ends by itself.
+                // Say so once and leave with a code a shell can test.
+                VAE_CORE_ERROR("{} cannot start without a window", m_Spec.name);
+                m_Running  = false;
+                m_ExitCode = 3;
+                return;
+            }
             m_Window->SetEventCallback([this](Event& e) { OnEvent(e); });
             VAE_CORE_INFO("window '{}' created ({}x{}, scale {:.2f})",
                           m_Spec.window.title, m_Window->Width(), m_Window->Height(),
@@ -70,7 +80,13 @@ namespace vae {
             desc.vsync   = m_Spec.window.vsync;
             desc.appName = m_Spec.name;
             m_Device = gpu::CreateDeviceWithFallback(desc);
-            if (!m_Device) VAE_CORE_ERROR("no graphics device — nothing will be drawn");
+            // With a window on screen and no device, every frame draws nothing and the user is
+            // looking at a blank rectangle wondering what happened. Better to say why and stop.
+            if (!m_Device) {
+                VAE_CORE_ERROR("no graphics device — {} needs Vulkan 1.3", m_Spec.name);
+                if (m_Window) { m_Running = false; m_ExitCode = 4; return; }
+                VAE_CORE_ERROR("no graphics device — nothing will be drawn");
+            }
         }
 
         // Pushed first so it is the bottom of the stack: OnImGuiRender runs in stack order, and the
