@@ -7,7 +7,8 @@
 namespace vae::gpu {
 
     // Loads a SPIR-V module produced by scripts/CompileShaders.sh. `name` is the source file name
-    // ("triangle.vert"), resolved against the engine root so it works from any working directory.
+    // ("triangle.vert"). The engine's own modules are compiled into the library, so an app built
+    // against VAE needs nothing on disk to draw; anything else is resolved against the engine root.
     Ref<Shader> LoadShader(Device& device, std::string_view name, ShaderStage stage);
 
 }

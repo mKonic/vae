@@ -18,4 +18,8 @@ for f in "$SRC"/*.vert "$SRC"/*.frag "$SRC"/*.comp; do
     glslc --target-env=vulkan1.3 -O "$f" -o "$out"
 done
 [ "$found" = 0 ] && echo "  (no shaders yet)"
+
+# Straight into the header the engine links, so the two can never drift: the compiled cache and
+# what a shipped binary actually carries are written in the same breath.
+[ "$found" = 1 ] && ./scripts/EmbedShaders.sh
 exit 0

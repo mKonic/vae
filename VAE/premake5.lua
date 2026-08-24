@@ -127,6 +127,14 @@ project "VAE"
    targetdir ("%{wks.location}/bin/"     .. outputdir .. "/%{prj.name}")
    objdir    ("%{wks.location}/bin-int/" .. outputdir .. "/%{prj.name}")
 
+   -- The engine's SPIR-V, turned into a header the renderer links into itself, so a binary built
+   -- against VAE carries its own pipelines and needs no engine checkout at run time. Reads the
+   -- compiled cache, so this needs no glslc; compiling the GLSL is CompileShaders.sh's job and it
+   -- calls this at the end. Idempotent, like version.sh above.
+   prebuildcommands {
+      "@%{wks.location}/scripts/EmbedShaders.sh %{wks.location}/VAE/vendor-generated/vae/Shaders.gen.h"
+   }
+
    pchheader "vaepch.h"
    pchsource "src/vaepch.cpp"
 
