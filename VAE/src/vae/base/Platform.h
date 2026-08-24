@@ -2,6 +2,7 @@
 
 #include "vae/base/Base.h"
 
+#include <cstdint>
 #include <filesystem>
 #include <string>
 #include <vector>
@@ -52,6 +53,28 @@ namespace vae::platform {
     std::string CompileCommand(const std::filesystem::path& source,
                                const std::filesystem::path& out,
                                const std::filesystem::path& includeDir);
+
+    // --- running another program -----------------------------------------------------------------
+    //
+    // `Run` above waits for what it started and hands back what it said, which is right for a
+    // compiler and wrong for an application: the editor launches the player and carries on editing.
+    // These three are the other shape — start it, ask whether it is still there, ask it to close.
+
+    // A started process, or 0 when it could not be started. Opaque: a pid here, a handle there.
+    using Process = std::uint64_t;
+
+    // Starts `program` with `args` and does not wait. The child gets its own process group, so a
+    // Ctrl+C in the terminal the editor was launched from does not take the app down with it.
+    Process Launch(const std::filesystem::path& program,
+                   const std::vector<std::string>& args = {});
+
+    // Whether it is still running. Reaps it when it is not, so a launcher that polls this does not
+    // leave zombies behind.
+    bool Running(Process& process);
+
+    // Asks it to close (SIGTERM / WM_CLOSE-equivalent). Not a kill: an app with unsaved work gets
+    // to ask about it.
+    void AskToClose(Process process);
 
     // What to tell someone whose machine cannot run `CompileCommand` at all. Different advice on
     // every system, and worth giving: "cl is not recognized" means "you are not in a developer

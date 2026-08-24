@@ -2,6 +2,7 @@
 
 #include "Blocks.h"
 #include "Example.h"
+#include "Export.h"
 
 #include "vae/gen/Emit.h"
 #include "panels/Panels.h"
@@ -15,7 +16,9 @@
 #include <imgui_internal.h>
 
 #include <algorithm>
+#include <chrono>
 #include <sstream>
+#include <thread>
 
 namespace vae {
 
@@ -55,7 +58,12 @@ namespace vae {
         }
     }
 
-    void StudioLayer::OnDetach() { m_Canvas.Shutdown(); }
+    void StudioLayer::OnDetach() {
+        // The app the editor started goes with it. Leaving it behind is how someone ends up with
+        // three copies of their own project running and no idea which one is listening.
+        StopWindow();
+        m_Canvas.Shutdown();
+    }
 
     void StudioLayer::OnRender(gpu::CommandList& cmd) { m_Canvas.OnRender(cmd, m_State); }
 
@@ -250,6 +258,86 @@ namespace vae {
         m_Scripts.SetProjectPath(path);
     }
 
+    // Where VAE-Player is, given where VAE-Studio is. Three layouts, all real: an install puts
+    // the two side by side under lib/vae, a premake build gives each its own directory under
+    // bin/<config>/, and a packaged VAE may only be on PATH.
+    std::filesystem::path StudioLayer::PlayerPath() {
+        std::error_code ec;
+        const std::filesystem::path exe = FileSystem::ExecutableDir();
+        const std::filesystem::path candidates[] = {
+            exe / "VAE-Player",
+            exe.parent_path() / "VAE-Player" / "VAE-Player",
+            exe / "vae-player",
+        };
+        for (const std::filesystem::path& candidate : candidates)
+            if (std::filesystem::is_regular_file(candidate, ec)) return candidate;
+
+        if (const char* path = std::getenv("PATH")) {
+            std::string_view rest(path);
+            while (!rest.empty()) {
+                const std::size_t colon = rest.find(':');
+                const std::filesystem::path dir(rest.substr(0, colon));
+                for (const char* name : { "vae-player", "VAE-Player" })
+                    if (const std::filesystem::path p = dir / name;
+                        !dir.empty() && std::filesystem::is_regular_file(p, ec))
+                        return p;
+                if (colon == std::string_view::npos) break;
+                rest.remove_prefix(colon + 1);
+            }
+        }
+        return {};
+    }
+
+    void StudioLayer::RunInWindow(const std::string& screen) {
+        m_RunError.clear();
+        // One at a time: a second window of the same app is only confusing, and two copies of a
+        // project that writes a store file are two writers of it. Wait for the old one to actually
+        // go, rather than launching over the top of a pid that has not been reaped yet.
+        StopWindow();
+        for (int i = 0; i < 200 && RunningInWindow(); ++i)
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+
+        // The player loads the project off disk, so what is on disk is what runs. Saving first is
+        // not a convenience — without it the window shows the last save and the designer chases a
+        // bug they already fixed.
+        const std::filesystem::path path = m_State.Path().empty() ? DefaultProjectPath()
+                                                                  : m_State.Path();
+        SaveProject(path);
+
+        const std::filesystem::path player = PlayerPath();
+        if (player.empty()) {
+            m_RunError = "VAE-Player is not beside VAE-Studio or on PATH";
+            VAE_ERROR("run: {}", m_RunError);
+            return;
+        }
+
+        std::vector<std::string> args{ path.string() };
+        if (!screen.empty()) { args.emplace_back("--screen"); args.emplace_back(screen); }
+        // The language being previewed is a choice the designer made and expects to see honoured.
+        if (!m_State.Locale().empty()) {
+            args.emplace_back("--locale");
+            args.emplace_back(m_State.Locale());
+        }
+
+        m_Windowed = platform::Launch(player, args);
+        if (!m_Windowed) {
+            m_RunError = "could not start " + player.string();
+            VAE_ERROR("run: {}", m_RunError);
+            return;
+        }
+        VAE_INFO("run: {} in its own window (pid {})", path.filename().string(), m_Windowed);
+    }
+
+    void StudioLayer::StopWindow() {
+        if (!RunningInWindow()) return;
+        platform::AskToClose(m_Windowed);
+        // The pid stays: the app is still a child of the editor until somebody reaps it, and
+        // forgetting it here leaves a <defunct> entry for as long as the editor runs.
+        // RunningInWindow reaps it on the next frame, which the menu bar asks for every frame.
+    }
+
+    bool StudioLayer::RunningInWindow() { return platform::Running(m_Windowed); }
+
     bool StudioLayer::HasUnsavedWork() const {
         return m_State.Dirty() || m_Scripts.Dirty();
     }
@@ -393,28 +481,12 @@ namespace vae {
     void StudioLayer::ExportProject() {
         const std::filesystem::path project = m_State.Path().empty() ? DefaultProjectPath()
                                                                      : m_State.Path();
-        gen::Options options;
-        options.appName = project.stem().string();
-        if (options.appName.empty()) options.appName = "App";
-        // The exported app runs the same logic the Studio was running, from a file beside it.
-        if (!m_Scripts.SourcePath().empty())
-            options.script = m_Scripts.SourcePath().filename().string();
-        options.assetRoot = m_State.AssetFolder();
-
-        const std::filesystem::path out = project.parent_path() / (options.appName + "-export");
+        // The built artifact, not the source: for a C++ project that is the .so, and the runtime
+        // picks its script host by extension. Handing it the .cpp is handing it a file it will try
+        // to run as Lua.
         std::string error;
-        if (!gen::EmitProject(m_State.Doc(), out, options, &error)) {
+        if (!vae::ExportProject(m_State.Doc(), project, m_Scripts.Artifact(), {}, &error))
             VAE_ERROR("export: {}", error);
-            return;
-        }
-        // The script goes with it: the exported app loads the same module the Studio was running.
-        if (!m_Scripts.SourcePath().empty()) {
-            std::error_code ec;
-            std::filesystem::copy_file(m_Scripts.SourcePath(),
-                                       out / m_Scripts.SourcePath().filename(),
-                                       std::filesystem::copy_options::overwrite_existing, ec);
-        }
-        VAE_INFO("export: {} — run `premake5 gmake && make` in there", out.string());
     }
 
     void StudioLayer::NewProject() {
@@ -831,8 +903,6 @@ namespace vae {
             ImGui::Separator();
             bool preview = m_Canvas.Preview();
             if (ImGui::MenuItem("Preview", "Ctrl+P", &preview)) { m_Canvas.SetPreview(preview); SaveSettings(); }
-            ImGui::Separator();
-            ImGui::MenuItem("ImGui demo", nullptr, &m_ShowDemo);
             ImGui::EndMenu();
         }
 
@@ -841,6 +911,20 @@ namespace vae {
             if (ImGui::MenuItem("Build script", "Ctrl+B")) m_Scripts.Build();
             if (ImGui::MenuItem("Hot reload", "F6", false, m_Scripts.Playing()))
                 m_Scripts.HotReload();
+            ImGui::Separator();
+
+            // On the canvas the app is a preview inside the editor: editor-sized, editor-themed,
+            // and sharing the editor's process. In a window it is the app — which is the only way
+            // to see what the design is actually like to use.
+            const bool windowed = RunningInWindow();
+            if (ImGui::MenuItem("Run in a window", "Ctrl+F5")) RunInWindow();
+            if (ImGui::MenuItem("Run this screen in a window", "Ctrl+F6", false,
+                                m_State.ActiveScreen().Valid())) {
+                const doc::Node* screen = m_State.Doc().Find(m_State.ActiveScreen());
+                RunInWindow(screen ? screen->name : std::string{});
+            }
+            if (ImGui::MenuItem("Close the window", nullptr, false, windowed)) StopWindow();
+            if (!m_RunError.empty()) ImGui::TextDisabled("%s", m_RunError.c_str());
             ImGui::Separator();
             const bool lua = m_Scripts.Lang() == ScriptSession::Language::Lua;
             if (ImGui::MenuItem("Lua", nullptr, lua, !m_Scripts.Playing()))
@@ -882,10 +966,20 @@ namespace vae {
         // and stopping a running app must work no matter what happens to have the keyboard.
         bool acted = false;
         if (ImGui::IsKeyPressed(ImGuiKey_F5, false)) {
-            if (io.KeyShift) m_Scripts.Stop(); else m_Scripts.Toggle();
+            if (io.KeyCtrl)       RunInWindow();
+            else if (io.KeyShift) m_Scripts.Stop();
+            else                  m_Scripts.Toggle();
             acted = true;
         }
-        if (ImGui::IsKeyPressed(ImGuiKey_F6, false)) { m_Scripts.HotReload(); acted = true; }
+        if (ImGui::IsKeyPressed(ImGuiKey_F6, false)) {
+            if (io.KeyCtrl) {
+                const doc::Node* screen = m_State.Doc().Find(m_State.ActiveScreen());
+                RunInWindow(screen ? screen->name : std::string{});
+            } else {
+                m_Scripts.HotReload();
+            }
+            acted = true;
+        }
         if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_B, false)) { m_Scripts.Build(); acted = true; }
 
         if (io.WantTextInput) return acted;   // a field has the keyboard; the rest is not ours
@@ -1006,7 +1100,6 @@ namespace vae {
         DrawUnsavedChangesDialog();
         DrawRecoveryDialog();
         DrawNewProjectDialog();
-        if (m_ShowDemo) ImGui::ShowDemoWindow(&m_ShowDemo);
     }
 
     void StudioLayer::OnEvent(Event& e) {

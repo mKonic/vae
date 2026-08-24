@@ -1,5 +1,6 @@
 #include "Selftest.h"
 #include "vae/base/FileSystem.h"
+#include "vae/base/Platform.h"
 
 #include "Canvas.h"
 #include "EditorState.h"
@@ -16,10 +17,12 @@
 
 #include <imgui.h>
 
+#include <chrono>
 #include <cmath>
 #include <filesystem>
 #include <fstream>
 #include <string>
+#include <thread>
 #include <tuple>
 #include <vector>
 
@@ -1251,6 +1254,54 @@ namespace vae {
             std::filesystem::remove_all(folder, ec);
         }
 
+        // Running the design in its own process, which is the only way to see what the app is
+        // actually like: real window size, the desktop's chrome, and a script that cannot take the
+        // editor down with it. Checked here without a window, by running the same player the same
+        // way with --headless — the launch, the arguments and the project on disk are the parts
+        // that break, and none of them need a screen to be wrong.
+        void TestRunInAWindow() {
+            Section("run in a window");
+            Shortcuts driver;
+            StudioLayer& layer = driver.Layer_();
+
+            const std::filesystem::path player = StudioLayer::PlayerPath();
+            if (!Check(!player.empty(), "an install can find its own VAE-Player")) return;
+
+            layer.OpenExample(StudioLayer::Example::Screens);
+            driver.Frame();
+
+            const std::filesystem::path project = FileSystem::ProjectsRoot() / "Screens example"
+                                                / "Screens example.vaeproj";
+            layer.SaveProject(project);
+            Check(std::filesystem::exists(project), "the project the window will open is on disk");
+
+            // Exactly what RunInWindow launches, minus the window. A wrong path, a missing script
+            // or a project the player cannot parse all come back as a non-zero exit here.
+            const std::string command = platform::Quote(player) + " " + platform::Quote(project)
+                                      + " --headless";
+            const platform::Ran ran = platform::Run(command);
+            Check(ran.Ok(), "the player runs the saved project: " + ran.output);
+
+            // And the screen argument the "run this screen" item passes is one the player honours,
+            // rather than one it warns about and ignores.
+            const platform::Ran detail = platform::Run(command + " --screen Detail");
+            Check(detail.Ok() && detail.output.find("no screen called") == std::string::npos,
+                  "and starts on the screen it was told to: " + detail.output);
+
+            // The launch path itself: a process that starts, is seen to be running, and is asked
+            // to close. --headless so this opens nothing on whatever display the tests are on.
+            platform::Process process = platform::Launch(player, { project.string(), "--headless",
+                                                                   "--frames", "600" });
+            if (Check(process != 0, "the player launches detached")) {
+                Check(platform::Running(process), "and is running once it has");
+                platform::AskToClose(process);
+                // Reaped, so a Studio that launches many runs does not leave zombies behind it.
+                for (int i = 0; i < 200 && platform::Running(process); ++i)
+                    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+                Check(!platform::Running(process), "and closes when asked");
+            }
+        }
+
         void TestProjectFolders() {
             Section("project folders");
             Shortcuts driver;
@@ -2405,6 +2456,7 @@ namespace vae {
         TestStyling();
         TestUnsavedClose();
         TestProjectFolders();
+        TestRunInAWindow();
         TestAssets();
         TestArtwork();
         TestComponentProperties();

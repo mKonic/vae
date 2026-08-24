@@ -10,6 +10,8 @@
 #ifdef VAE_PLATFORM_LINUX
     #include <dlfcn.h>
     #include <limits.h>
+    #include <signal.h>
+    #include <sys/wait.h>
     #include <unistd.h>
 #endif
 
@@ -79,6 +81,47 @@ namespace vae::platform {
         // into the engine's own headers is the thing this design exists to prevent.
         return "g++ -std=c++23 -shared -fPIC -O2 -g -fvisibility=hidden -I" + Quote(includeDir)
              + " " + Quote(source) + " -o " + Quote(out);
+    }
+
+    Process Launch(const fs::path& program, const std::vector<std::string>& args) {
+        // fork + execv rather than system(): no shell means no quoting to get wrong, and a path
+        // with a space or a quote in it is a path a project folder really has.
+        std::vector<std::string> owned;
+        owned.reserve(args.size() + 1);
+        owned.push_back(program.string());
+        for (const std::string& arg : args) owned.push_back(arg);
+
+        std::vector<char*> argv;
+        argv.reserve(owned.size() + 1);
+        for (std::string& arg : owned) argv.push_back(arg.data());
+        argv.push_back(nullptr);
+
+        const pid_t pid = ::fork();
+        if (pid < 0) return 0;
+        if (pid == 0) {
+            // Its own process group: a Ctrl+C in the terminal the editor was started from is for
+            // the editor, and must not take the app it launched down with it.
+            ::setpgid(0, 0);
+            ::execv(program.c_str(), argv.data());
+            // Only reached when exec failed. _exit, not exit: the child is holding a copy of the
+            // parent's atexit handlers and its open log file, and running them here would flush
+            // the same buffers twice.
+            ::_exit(127);
+        }
+        return static_cast<Process>(pid);
+    }
+
+    bool Running(Process& process) {
+        if (!process) return false;
+        int status = 0;
+        const pid_t done = ::waitpid(static_cast<pid_t>(process), &status, WNOHANG);
+        if (done == 0) return true;            // still there
+        process = 0;                            // reaped, or gone already
+        return false;
+    }
+
+    void AskToClose(Process process) {
+        if (process) ::kill(static_cast<pid_t>(process), SIGTERM);
     }
 
     const char* MissingCompilerHint() {
@@ -203,6 +246,41 @@ namespace vae::platform {
         // has to decide — find the toolchain, or refuse with an instruction.
         return "cl /nologo /std:c++latest /LD /O2 /EHsc /I" + Quote(includeDir) + " "
              + Quote(source) + " /link /OUT:" + Quote(out);
+    }
+
+    // Written, never compiled — see design/windows.md.
+    Process Launch(const fs::path& program, const std::vector<std::string>& args) {
+        // One command line, because that is the only thing CreateProcess takes. Every argument is
+        // quoted: a project path with a space in it is otherwise two arguments.
+        std::string line = Quote(program);
+        for (const std::string& arg : args) line += " " + Quote(fs::path(arg));
+
+        STARTUPINFOA startup{};
+        startup.cb = sizeof startup;
+        PROCESS_INFORMATION info{};
+        // A new process group, for the same reason the Linux side calls setpgid: a console signal
+        // aimed at the editor is not aimed at the app it launched.
+        if (!::CreateProcessA(nullptr, line.data(), nullptr, nullptr, FALSE,
+                              CREATE_NEW_PROCESS_GROUP, nullptr, nullptr, &startup, &info))
+            return 0;
+        ::CloseHandle(info.hThread);
+        return reinterpret_cast<Process>(info.hProcess);
+    }
+
+    bool Running(Process& process) {
+        if (!process) return false;
+        auto handle = reinterpret_cast<HANDLE>(process);
+        if (::WaitForSingleObject(handle, 0) == WAIT_TIMEOUT) return true;
+        ::CloseHandle(handle);
+        process = 0;
+        return false;
+    }
+
+    void AskToClose(Process process) {
+        if (!process) return;
+        // The nearest thing to SIGTERM a windowed process answers. A console app gets the break;
+        // a windowed one is closed by its own window, which is what the player has.
+        ::GenerateConsoleCtrlEvent(CTRL_BREAK_EVENT, ::GetProcessId(reinterpret_cast<HANDLE>(process)));
     }
 
     const char* MissingCompilerHint() {

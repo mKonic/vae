@@ -4,6 +4,7 @@
 #include "EditorState.h"
 #include "ScriptSession.h"
 
+#include "vae/base/Platform.h"
 #include "vae/core/Layer.h"
 
 #include <filesystem>
@@ -67,6 +68,20 @@ namespace vae {
         // Asks before closing, once. Returns true when the close should be held back.
         bool HoldCloseForUnsavedWork();
 
+        // Runs the project the way a user will: its own process, its own window, no editor
+        // anywhere in it. Play on the canvas answers "does this work?"; this answers "is this the
+        // app?" — the window is the size the design says, the chrome is the desktop's, and a
+        // script that crashes takes down nothing but itself. `screen` empty runs the project from
+        // its start screen. Public because the selftest drives it.
+        void RunInWindow(const std::string& screen = {});
+        // Where VAE-Player is, or empty. Public because the selftest checks that an install can
+        // find its own player before anything asks it to launch one.
+        static std::filesystem::path PlayerPath();
+        void StopWindow();
+        bool RunningInWindow();
+        // Why the last RunInWindow refused, or empty.
+        const std::string& RunError() const { return m_RunError; }
+
     private:
         void DrawMenuBar();
         void DrawDockSpace();
@@ -106,7 +121,9 @@ namespace vae {
         Canvas m_Canvas;
         ScriptSession m_Scripts;
         bool m_LayoutBuilt = false;
-        bool m_ShowDemo = false;
+        // The app running in its own window, if there is one, and why the last attempt failed.
+        platform::Process m_Windowed = 0;
+        std::string m_RunError;
         bool m_FrameNext = true;
         bool m_ShowLauncher = true;
         // A close the user has been asked about but not yet answered.
