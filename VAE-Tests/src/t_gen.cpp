@@ -12,6 +12,8 @@
 #include "vae/ui/Library.h"
 #include "vae/ui/UiHost.h"
 
+#include <vae/Shaders.gen.h>
+
 #include <cstdio>
 #include <cstring>
 #include <cstdlib>
@@ -306,9 +308,9 @@ TEST(gen, exporting_a_project_writes_something_that_builds) {
     const bool anyFont = fs::exists(dir / "fonts", fontEc)
                       && fs::directory_iterator(dir / "fonts", fontEc) != fs::directory_iterator();
     CHECK(anyFont);
-    const auto entry = FileSystem::ReadText(dir / "Main.cpp");
-    CHECK(entry.has_value());
-    if (entry) CHECK(entry->find("RegisterDirectory(\"fonts\"") != std::string::npos);
+    // And they land beside the binary, because that is where the engine looks for them. They used
+    // to be written to the project root while the binary went to bin/<config>/, so an exported app
+    // started with none of its own fonts and silently drew in the target machine's.
 
     // And it links. Checking the text of the generated premake is what let the export ship for
     // weeks without miniaudio or pugixml in its link list — the file said everything a reader
@@ -330,7 +332,9 @@ TEST(gen, exporting_a_project_writes_something_that_builds) {
             CHECK_MESSAGE(linked, log ? log->substr(0, 2000) : std::string("no build log"));
         } else {
             CHECK(linked);
-            CHECK(fs::exists(dir / "bin" / "Release-linux-x86_64" / "Sample"));
+            // Beside its fonts, not two directories away from them. The exported folder is the
+            // app: binary, fonts, pictures, translations and script, all in one place to copy.
+            CHECK(fs::exists(dir / "Sample"));
         }
     }
 
@@ -338,23 +342,33 @@ TEST(gen, exporting_a_project_writes_something_that_builds) {
     CHECK(premake.has_value());
     if (premake) {
         CHECK(premake->find("project \"Sample\"") != std::string::npos);
-        // Without the engine root the generated project cannot find a single header.
-        CHECK(premake->find(FileSystem::EngineRoot().generic_string()) != std::string::npos);
 
-        // The engine's library folder is named after the system it was built on. Spelling it out
-        // exports a project that only links on the machine that made it.
+        // The link line lives in the SDK, not in the exported file, so that an engine that gains a
+        // dependency does not silently break every project exported before it.
+        const fs::path sdk = FileSystem::SdkRoot();
+        CHECK(!sdk.empty());
+        CHECK(fs::exists(sdk / "vae.lua"));
+        CHECK(premake->find("include \"" + sdk.generic_string() + "/vae.lua\"") != std::string::npos);
+        CHECK(premake->find("VaeApp()") != std::string::npos);
+
+        // Dist first: a bare `make` in the exported folder should produce the build you would ship,
+        // not one full of assertions.
+        CHECK(premake->find("configurations { \"Dist\", \"Debug\", \"Release\" }")
+              != std::string::npos);
+
+        // Naming the build directory exports a project that only links on the machine that made it.
         CHECK(premake->find("linux-x86_64") == std::string::npos);
-        CHECK(premake->find("outputdir .. \"/*\"") != std::string::npos);
+    }
 
-        // Both halves of the platform split are emitted, so the folder can be carried to a Windows
-        // machine and generated there without editing.
-        CHECK(premake->find("filter \"system:linux\"") != std::string::npos);
-        CHECK(premake->find("filter \"system:windows\"") != std::string::npos);
-
-        // Whatever the engine was built with, the app has to be linked with. httplib is header
-        // only, so an engine built against OpenSSL has already inlined the TLS calls into its
-        // archive and an app that does not link it fails at the very last step.
-        CHECK((premake->find("\"ssl\", \"crypto\"") != std::string::npos) == svc::HasTls());
+    // Whatever the engine was built with, the app has to be linked with: httplib is header-only, so
+    // an engine built against OpenSSL has already inlined the TLS calls into its archive and an app
+    // that does not link it fails at the very last step. The SDK records what this build did rather
+    // than the app's machine re-detecting it, which is a different question.
+    {
+        const auto config = FileSystem::ReadText(FileSystem::SdkRoot() / "config.lua");
+        CHECK(config.has_value());
+        if (config)
+            CHECK((config->find("VAE_HAS_OPENSSL = true") != std::string::npos) == svc::HasTls());
     }
 
     const auto main = FileSystem::ReadText(dir / "Main.cpp");
@@ -363,6 +377,66 @@ TEST(gen, exporting_a_project_writes_something_that_builds) {
         CHECK(main->find("vae/app/RunLayer.h") != std::string::npos);
         CHECK(main->find("BuildDocument") != std::string::npos);
     }
+}
+
+TEST(gen, an_app_carries_the_engines_shaders_inside_it) {
+    // The whole of what "standalone" means at run time. An exported binary used to read its
+    // pipelines off disk through the .vaeroot walk-up, so one moved to another machine came up
+    // with no renderer and a blank window — which is exactly what happened the first time anyone
+    // tried to ship one.
+    const auto find = [](std::string_view name) -> const gpu::embedded::Module* {
+        for (const gpu::embedded::Module& module : gpu::embedded::kModules)
+            if (module.name == name) return &module;
+        return nullptr;
+    };
+
+    // The four the draw layer asks for by name. A shader that stops being embedded is a shader
+    // that starts needing a checkout.
+    for (const char* name : { "quad.vert", "quad.frag", "shadow.vert", "shadow.frag" }) {
+        const gpu::embedded::Module* module = find(name);
+        CHECK_MESSAGE(module != nullptr, std::string("no embedded ") + name);
+        if (!module) continue;
+
+        // Real SPIR-V, not a truncated file or a text one: the magic word first, and a whole
+        // number of words after it.
+        CHECK(module->size >= 20);
+        CHECK_EQ(module->size % 4, 0u);
+        u32 magic = 0;
+        std::memcpy(&magic, module->bytes, sizeof magic);
+        CHECK_EQ(magic, 0x07230203u);
+    }
+}
+
+TEST(gen, an_exported_app_finds_its_own_files_wherever_it_is_run_from) {
+    // Everything an app owns lives beside the binary, and nothing is looked up relative to the
+    // working directory. An app started from the desktop, or from /, has a working directory that
+    // is not its folder — which is where "it runs from the build directory and nowhere else" comes
+    // from every time.
+    doc::Document document;
+    BuildSample(document);
+
+    const fs::path dir = Scratch() / "standalone";
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+
+    gen::Options options;
+    options.appName = "Standalone";
+    options.script = "Standalone.lua";
+    std::string error;
+    CHECK_MESSAGE(gen::EmitProject(document, dir, options, &error), error);
+
+    const auto main = FileSystem::ReadText(dir / "Main.cpp");
+    CHECK(main.has_value());
+    if (main) {
+        CHECK(main->find("ExecutableDir() / \"Standalone.lua\"") != std::string::npos);
+        // A bare relative path is the bug this is here to catch.
+        CHECK(main->find("SetScript(\"Standalone.lua\")") == std::string::npos);
+    }
+
+    // And the binary is written into the folder that holds them, rather than two directories down.
+    const auto premake = FileSystem::ReadText(dir / "premake5.lua");
+    CHECK(premake.has_value());
+    if (premake) CHECK(premake->find("targetdir \"%{wks.location}\"") != std::string::npos);
 }
 
 TEST(gen, an_export_carries_its_assets) {

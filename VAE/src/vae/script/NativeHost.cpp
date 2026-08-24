@@ -149,8 +149,20 @@ namespace vae::script {
         // business, not this file's. What is this file's business is that there is exactly one
         // include path, the engine's source root, and it is only there for VaeScript.h — a script
         // that reaches past it into the engine's own headers is the thing this design prevents.
-        const platform::Ran ran = platform::Run(
-            platform::CompileCommand(source, out, FileSystem::EngineRoot() / "VAE" / "src"));
+        //
+        // No engine root, no header to include. That is a shipped app, which loads a module
+        // somebody else already built rather than building one; saying so beats a page of
+        // "VaeScript.h: No such file".
+        const std::filesystem::path headers = FileSystem::Asset("VAE/src");
+        if (headers.empty()) {
+            if (diagnostics)
+                *diagnostics = "C++ scripts are compiled against the engine's headers, and this "
+                               "build has no engine root. Build the module with VAE Studio and "
+                               "ship the " + std::string(platform::ModuleExtension())
+                             + " beside the app.";
+            return false;
+        }
+        const platform::Ran ran = platform::Run(platform::CompileCommand(source, out, headers));
 
         if (ran.Ok()) {
             if (diagnostics) *diagnostics = ran.output;

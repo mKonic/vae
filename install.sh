@@ -265,6 +265,50 @@ else
 	say "  copied   $libdir ${c_dim}(binaries, shaders, fonts)${c_off}"
 fi
 
+# ------------------------------------------------------------------------- SDK
+#
+# "Export C++" writes a premake project that compiles against the engine, so an
+# install that ships only binaries can export code nobody can build. The SDK is
+# the headers and the static libraries that make the exported folder buildable,
+# plus the one premake fragment that knows the link line.
+#
+# A linked install points at the clone's own sdk/, which detects that it is in a
+# checkout and reads headers straight out of VAE/src -- the same liveness that
+# makes a linked install worth having. A copied one gets a gathered tree, so the
+# clone can be deleted afterwards.
+if [ "$mode" = link ]; then
+	run ln -sfn "$here/sdk" "$libdir/sdk"
+	say "  linked   $libdir/sdk -> the clone"
+else
+	sdk=$libdir/sdk
+	run mkdir -p "$sdk/include/vae" "$sdk/lib/$build_dir"
+
+	# The public headers. VAE/src wholesale, because an app includes them by the
+	# same path the engine does, and the generated ones alongside.
+	run cp -r VAE/src/. "$sdk/include/"
+	run cp -r VAE/vendor-generated/. "$sdk/include/"
+	# Vendored headers the public API names: spdlog in Log.h, glm in Math.h, and
+	# the Vulkan headers behind gpu/. Nothing else is reachable from an app.
+	run cp -r VAE/vendor/spdlog/include/. "$sdk/include/"
+	run cp -r VAE/vendor/glm/glm "$sdk/include/glm"
+	run cp -r VAE/vendor/Vulkan-Headers/include/. "$sdk/include/"
+	# Only headers: .cpp under VAE/src would otherwise be picked up by an app's
+	# own glob, and the vendored trees carry sources and tests of their own.
+	run find "$sdk/include" -type f ! -name '*.h' ! -name '*.hpp' ! -name '*.inl' -delete
+	run find "$sdk/include" -type d -empty -delete
+
+	# Every static library, flattened: premake writes one directory per project
+	# and vae.lua expects one directory per configuration.
+	for lib in bin/"$build_dir"/*/lib*.a; do
+		[ -f "$lib" ] || continue
+		run install -m644 "$lib" "$sdk/lib/$build_dir/"
+	done
+
+	run install -m644 sdk/vae.lua   "$sdk/vae.lua"
+	run install -m644 sdk/config.lua "$sdk/config.lua"
+	say "  copied   $sdk ${c_dim}(headers and libraries, for Export C++)${c_off}"
+fi
+
 run ln -sfn "$libdir/VAE-Studio" "$bindir/vae-studio"
 run ln -sfn "$libdir/VAE-Player" "$bindir/vae-player"
 say "  linked   $bindir/vae-studio, $bindir/vae-player"
@@ -345,6 +389,7 @@ esac
 say ""
 say "  Start it:  ${c_bold}vae-studio${c_off}   ${c_dim}(or open a project from your file manager)${c_off}"
 say "  Run an app: ${c_bold}vae-player <project.vaeproj>${c_off}"
+say "  ${c_dim}Export C++ writes a folder that builds with 'premake5 gmake && make'${c_off}"
 
 if [ "$mode" = link ]; then
 	say ""

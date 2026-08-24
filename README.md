@@ -30,7 +30,9 @@ the supported target.
 - **Data-bound rows.** A container marked repeating plus a table of rows handed over at runtime; a
   node inside the template says which column it draws.
 - **Export C++.** The document is the source of truth; export emits readable C++ against the same
-  public API, plus a premake project that builds it.
+  public API, plus a premake project that builds it. The result is a folder you can copy to a
+  machine with no VAE on it: the engine's shaders are linked into the binary and the fonts, pictures,
+  translations and script sit beside it.
 
 ## Repository layout
 
@@ -43,6 +45,7 @@ the supported target.
 | `VAE/vendor/` | Dependencies, as submodules |
 | `vendor-build/` | premake scripts for the dependencies compiled from source |
 | `scripts/` | Setup, shader compilation, Wayland protocol generation |
+| `sdk/` | The premake fragment an exported app includes, and where an install gathers headers and libraries |
 
 ## Building
 
@@ -67,6 +70,11 @@ source file — the project files are generated from globs.
 ./bin/Debug-linux-x86_64/VAE-Player/VAE-Player <project.vaescreen> [--screen NAME]
 ```
 
+`Run > Play` (F5) runs the project on the canvas, inside the editor. `Run > Run in a window`
+(Ctrl+F5) saves it and starts it as its own process in its own window — real window size, the
+desktop's chrome, and a script that cannot take the editor down with it. Ctrl+F6 does the same
+starting on the screen you are looking at.
+
 Both binaries answer `--version`. The build number is `10000 + commits on HEAD` and the name is
 `git describe --tags --always --dirty`, both produced by `scripts/version.sh` and generated into a
 header before every build — releasing is tagging, and nothing declares a version in a file. A build
@@ -83,7 +91,8 @@ Projects live under `~/Documents/VAE` (or `$VAE_PROJECTS`), one directory each.
 |---|---|
 | `VAE_GPU` | `vulkan` (default), `d3d12`, `software`. Unimplemented backends report why and fall back. `software` routes through Mesa's lavapipe ICD and needs `vulkan-swrast`. |
 | `VAE_PROJECTS` | Projects root. Otherwise `$XDG_DOCUMENTS_DIR/VAE`, then `~/Documents/VAE`. |
-| `VAE_ROOT` | Engine asset root. Otherwise the engine walks up from the executable for a `.vaeroot` marker. |
+| `VAE_ROOT` | Engine asset root. Otherwise the engine walks up from the executable for a `.vaeroot` marker. A shipped app has neither and needs neither. |
+| `VAE_SDK` | Where "Export C++" points the project it writes. Otherwise `sdk/` beside the engine root. |
 | `VAE_FRAMES` | Render N frames and exit. |
 
 ## Installing
@@ -104,6 +113,25 @@ config=dist` takes effect with no reinstall — and moving the clone breaks it. 
 binaries and the engine's assets under the prefix instead. Either way `<prefix>/bin` gets
 `vae-studio` and `vae-player`, and `<prefix>/share` gets a desktop entry, an icon, and the
 `.vaescreen` file type so a project opens from a file manager.
+
+## Exporting an app
+
+`File > Export C++`, or from a script:
+
+```sh
+vae-studio --export <project> [directory]      # defaults to <project folder>/<Name>-export
+cd <Name>-export && premake5 gmake && make     # Dist by default; config=debug for symbols
+```
+
+The folder that comes out **is** the app. The binary is written into it, beside the fonts, pictures,
+translations and script it needs; the engine's shaders are compiled into the library it links, so
+nothing is looked up relative to a working directory and nothing walks up to a VAE checkout. Copy the
+folder to a machine with no VAE installed and it runs.
+
+Building it needs VAE, because it compiles against the engine — headers and static libraries, all
+linked in. That is what `sdk/` is: an install ships it beside the binaries and the generated
+`premake5.lua` includes `sdk/vae.lua`, which knows the whole link line so the exported file does not
+have to and does not go stale when the engine gains a dependency.
 
 ## Accessibility
 

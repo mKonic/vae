@@ -29,9 +29,11 @@ namespace vae {
                 if (dir == dir.parent_path()) break;   // hit "/"
             }
 
-            VAE_CORE_WARN("no {} found above the executable; falling back to the working directory. "
-                          "Engine assets may not resolve.", kRootMarker);
-            return fs::current_path();
+            // Not a warning: a shipped app has no engine root and does not need one. Shaders are
+            // compiled into the library and fonts, pictures and translations live beside the
+            // binary. Only the editor's own tooling reaches for the checkout, and that is an
+            // install that has one.
+            return {};
         }();
         return root;
     }
@@ -71,7 +73,23 @@ namespace vae {
         return root;
     }
 
-    fs::path FileSystem::Asset(std::string_view relative) { return EngineRoot() / relative; }
+    fs::path FileSystem::SdkRoot() {
+        std::error_code ec;
+        if (const char* env = std::getenv("VAE_SDK"); env && *env) {
+            const fs::path p(env);
+            if (fs::exists(p / "vae.lua", ec)) return p;
+            VAE_CORE_WARN("VAE_SDK points at '{}', which holds no vae.lua — ignoring", env);
+        }
+        const fs::path sdk = EngineRoot() / "sdk";
+        return fs::exists(sdk / "vae.lua", ec) ? sdk : fs::path{};
+    }
+
+    // Empty when there is no engine root, rather than a path relative to whatever directory the
+    // app happens to have been started in. A shipped app that looked up "VAE/assets/fonts" from
+    // the working directory would find one machine's checkout and not another's.
+    fs::path FileSystem::Asset(std::string_view relative) {
+        return EngineRoot().empty() ? fs::path{} : EngineRoot() / relative;
+    }
 
     std::optional<std::string> FileSystem::ReadText(const fs::path& path) {
         std::ifstream in(path, std::ios::in | std::ios::binary);

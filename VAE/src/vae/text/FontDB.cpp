@@ -173,10 +173,16 @@ namespace vae::text {
     }
 
     void FontDB::LoadDefaults() {
-        // Engine-bundled faces first, so a project always has a working default even on a machine
-        // with no fonts installed at all.
-        const u32 bundled = RegisterDirectory(FileSystem::Asset("VAE/assets/fonts"), false, true);
-        const u32 system  = ScanSystemFonts();
+        // Bundled faces first, so a project always has a working default even on a machine with no
+        // fonts installed at all.
+        //
+        // Beside the binary before the engine root, because that is where a *shipped* app keeps
+        // them. An exported app has no engine checkout to walk up to, and looking only there is
+        // what left one running against 937 of somebody else's system faces and none of its own.
+        u32 bundled = RegisterDirectory(FileSystem::ExecutableDir() / "fonts", false, true);
+        if (const std::filesystem::path engine = FileSystem::Asset("VAE/assets/fonts"); !engine.empty())
+            bundled += RegisterDirectory(engine, false, true);
+        const u32 system = ScanSystemFonts();
 
         if (!HasFamily(m_DefaultFamily)) {
             // Prefer the bundled family; fall back to whatever the first registered family is

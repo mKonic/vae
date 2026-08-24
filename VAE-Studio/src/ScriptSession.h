@@ -89,11 +89,14 @@ namespace vae {
         Debugger& Debug() { return m_Debugger; }
         const Debugger& Debug() const { return m_Debugger; }
 
+        // The file the runtime actually loads: the .lua itself, or the built .so for a C++
+        // project. Public because the exporter ships this, not the source beside it.
+        std::filesystem::path Artifact() const;
+
     private:
         void LoadSource();
         void ParseDiagnostics(const std::string& output);
         bool StartHosts();
-        std::filesystem::path Artifact() const;
 
         script::Runtime m_Runtime;
         svc::Services m_Services;
