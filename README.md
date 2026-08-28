@@ -1,284 +1,121 @@
 # VAE
 
 **Virtual App Engine** — a visual builder for desktop applications. Draw the interface on a canvas,
-give it layout, style and state, attach logic in Lua or C++, then run it or export it as C++.
+attach logic in Lua or C++, then run it or export it as C++.
 
 ![VAE Studio](docs/studio.png)
 
-C++23, premake5, Vulkan behind a swappable GPU abstraction, dependencies as git submodules. Linux is
-the supported target.
+## Features
 
-## What it does
+- The canvas draws with the app's own renderer — the design is the running app
+- 53 components: buttons, inputs, tables, charts, modals, menus, calendars
+- Any component can be opened and edited; an edited one forks into the project
+- Figma layout: auto-layout stacks, hug/fill/fixed sizing, absolute children with constraints
+- Components declare properties and variants; instances answer them
+- Design tokens and themes, dark and light
+- Data-bound rows — draw one row, hand over a table at runtime
+- Logic in Lua or C++, chosen once per project
+- Services for files, storage, HTTP, WebSockets, timers and audio
+- SVG import, vector shapes, pictures and fonts as project assets
+- Text shaped by HarfBuzz: right-to-left scripts, reordering, ligatures, colour emoji
+- Translations from one flat JSON per locale
+- Screen readers read an app over AT-SPI
+- Undo and redo everywhere, autosave with a recovery copy
+- Run a project on the canvas, or in its own window
+- Documents are XML, one file per screen, diffable
+- Export readable C++ that builds into a standalone folder
 
-- **Designer.** Layers, screens, components, inspector, assets, script editor, console. The canvas is
-  the runtime renderer drawing into an offscreen target, so the design and the running app are the
-  same picture.
-- **53 components.** Button, TextInput, Checkbox, Radio, Switch, Slider, Dropdown, Combobox, Tabs,
-  Scroll, List, Table, Grid, Card, Modal, Popover, Toast, Tooltip, Menu, Menubar, Navbar, Command,
-  Calendar, Carousel, Chart, Accordion, Progress and the rest. They are built from frames, text and
-  layout rather than native code, so any of them can be opened and edited; an edited one is forked
-  into the project and stops tracking the library.
-- **Figma layout semantics.** Auto-layout stacks with hug/fill/fixed sizing, absolute children with
-  edge constraints, wrap, gap, padding, alignment. Solved headlessly and unit-tested.
-- **Instanced SDF rendering.** Rounded rectangles with per-corner radii, borders, solid/linear/radial
-  fills, images, analytic shadows and glyph quads, all as instances in one storage buffer. A screen
-  is two or three draw calls.
-- **Logic in Lua or C++,** chosen once per project. Lua 5.4 through sol2, or a native module compiled
-  to a `.so` and reached through a C ABI table. Components bind by name and each instance gets its
-  own state.
-- **Services:** files, key-value storage, HTTP, WebSockets, timers and audio.
-- **Data-bound rows.** A container marked repeating plus a table of rows handed over at runtime; a
-  node inside the template says which column it draws.
-- **Export C++.** The document is the source of truth; export emits readable C++ against the same
-  public API, plus a premake project that builds it. The result is a folder you can copy to a
-  machine with no VAE on it: the engine's shaders are linked into the binary and the fonts, pictures,
-  translations and script sit beside it.
-
-## Repository layout
-
-| Path | What |
-|------|------|
-| `VAE/` | Engine. Two static libraries: `VAE-Core` (headless — document, layout, reactive graph, text, codegen) and `VAE` (window, GPU, renderer, widgets, scripting, services) |
-| `VAE-Studio/` | The designer |
-| `VAE-Player/` | Standalone runtime for a project |
-| `VAE-Tests/` | Unit tests; links `VAE-Core` only, so they need no GPU and no window |
-| `VAE/vendor/` | Dependencies, as submodules |
-| `vendor-build/` | premake scripts for the dependencies compiled from source |
-| `scripts/` | Setup, shader compilation, Wayland protocol generation |
-| `sdk/` | The premake fragment an exported app includes, and where an install gathers headers and libraries |
-
-## Building
-
-Needs a C++23 compiler, `premake5` (5.0.0-beta8 or newer), `glslc` (from shaderc), `wayland-scanner`,
-and the Vulkan loader. Vulkan headers are vendored.
+## Install
 
 ```sh
-git clone --recursive <url> vae
+git clone --recursive https://github.com/mKonic/vae
 cd vae
-./scripts/Setup.sh                   # submodules + premake5 gmake
-./scripts/CompileShaders.sh          # GLSL -> SPIR-V, needed once and after any shader change
-make config=debug -j$(nproc)         # or config=release / config=dist
+./install.sh
 ```
 
-Binaries land in `bin/<config>-linux-x86_64/<project>/`. Re-run `premake5 gmake` after adding a
-source file — the project files are generated from globs.
+Needs a C++23 compiler, premake5 (5.0.0-beta8 or newer), `glslc`, `wayland-scanner` and the Vulkan
+loader. Linux only for now.
 
-## Running
+`--copy` installs copies instead of symlinks into the clone, `--system` installs under
+`/usr/local`, `--uninstall` removes it. `./install.sh --help` lists the rest.
+
+## Usage
 
 ```sh
-./bin/Debug-linux-x86_64/VAE-Studio/VAE-Studio
-./bin/Debug-linux-x86_64/VAE-Player/VAE-Player <project.vaescreen> [--screen NAME]
+vae-studio                                          # the designer
+vae-studio <project>                                # open one
+vae-player <project> [--screen NAME] [--locale pt-BR]
+vae-player <project> --headless                     # lay out and paint, no window
 ```
 
-`Run > Play` (F5) runs the project on the canvas, inside the editor. `Run > Run in a window`
-(Ctrl+F5) saves it and starts it as its own process in its own window — real window size, the
-desktop's chrome, and a script that cannot take the editor down with it. Ctrl+F6 does the same
-starting on the screen you are looking at.
+Projects live in `~/Documents/VAE`, one folder each — set `VAE_PROJECTS` to move them.
 
-Both binaries answer `--version`. The build number is `10000 + commits on HEAD` and the name is
-`git describe --tags --always --dirty`, both produced by `scripts/version.sh` and generated into a
-header before every build — releasing is tagging, and nothing declares a version in a file. A build
-made without git says `unknown build` rather than inventing a number. Compatibility is separate and
-hand-bumped: the document format version, the script ABI version and the widget-library version.
-
-The Player loads the script beside the project — `<project>.so` or `<project>.lua`, native winning
-when both exist. `--headless [--frames N]` lays out and paints without a window and exits non-zero if
-the project or its script failed.
-
-Projects live under `~/Documents/VAE` (or `$VAE_PROJECTS`), one directory each.
-
-| Variable | Effect |
-|---|---|
-| `VAE_GPU` | `vulkan` (default), `d3d12`, `software`. Unimplemented backends report why and fall back. `software` routes through Mesa's lavapipe ICD and needs `vulkan-swrast`. |
-| `VAE_PROJECTS` | Projects root. Otherwise `$XDG_DOCUMENTS_DIR/VAE`, then `~/Documents/VAE`. |
-| `VAE_ROOT` | Engine asset root. Otherwise the engine walks up from the executable for a `.vaeroot` marker. A shipped app has neither and needs neither. |
-| `VAE_SDK` | Where "Export C++" points the project it writes. Otherwise `sdk/` beside the engine root. |
-| `VAE_FRAMES` | Render N frames and exit. |
-
-## Installing
-
-```sh
-./install.sh              # build, test, and link into ~/.local
-./install.sh --copy       # independent copies, so the clone is disposable
-./install.sh --system     # /usr/local, sudo only for the steps that write there
-./install.sh --uninstall
-```
-
-It checks the dependencies, fetches submodules, compiles the shaders, builds, runs the unit suite
-and the editor selftest, and installs only if both pass. `--destdir DIR` stages a package instead of
-installing.
-
-The default is a linked install: `<prefix>/lib/vae` points at this clone, so `git pull && make
-config=dist` takes effect with no reinstall — and moving the clone breaks it. `--copy` puts the
-binaries and the engine's assets under the prefix instead. Either way `<prefix>/bin` gets
-`vae-studio` and `vae-player`, and `<prefix>/share` gets a desktop entry, an icon, and the
-`.vaescreen` file type so a project opens from a file manager.
-
-## Exporting an app
-
-`File > Export C++`, or from a script:
-
-```sh
-vae-studio --export <project> [directory]      # defaults to <project folder>/<Name>-export
-cd <Name>-export && premake5 gmake && make     # Dist by default; config=debug for symbols
-```
-
-The folder that comes out **is** the app. The binary is written into it, beside the fonts, pictures,
-translations and script it needs; the engine's shaders are compiled into the library it links, so
-nothing is looked up relative to a working directory and nothing walks up to a VAE checkout. Copy the
-folder to a machine with no VAE installed and it runs.
-
-Building it needs VAE, because it compiles against the engine — headers and static libraries, all
-linked in. That is what `sdk/` is: an install ships it beside the binaries and the generated
-`premake5.lua` includes `sdk/vae.lua`, which knows the whole link line so the exported file does not
-have to and does not go stale when the engine gains a dependency.
-
-## Accessibility
-
-An app VAE builds exposes itself to a screen reader over AT-SPI. Roles come from the widget roles a
-designer already sets, and a control's name is the text drawn on it — a button with Save written on
-it is announced as "Save" without anybody saying so. An icon-only button, which has no text to be
-named by, sets `a11yLabel`.
-
-The bridge needs sd-bus at build time (`systemd/sd-bus.h`, present on every systemd desktop) and an
-accessibility bus at run time; without either, an app builds and runs with no bridge. A screen
-reader can walk an app, read its controls and follow focus. It cannot yet operate them:
-`org.a11y.atspi.Action` is not implemented.
-
-## Documents
-
-`.vaescreen` and `.vaecomp` are XML (format 3). The element name is the node kind, the tree is the
-indentation, and only what cannot be worked out on load is written — defaults, derivable types,
-unreferenced ids and the stock component catalog are all left out.
-
-```xml
-<vae version="3" library="vae.std@1" theme="dark">
-  <tokens>
-    <token name="accent" dark="0.365 0.51 0.894 1" light="0.29 0.44 0.85 1"/>
-  </tokens>
-  <screen name="Home" start="true" mode="stack" width="1280" height="800" padding="48" gap="32"
-          align="center" justify="center" fill="@surface">
-    <instance name="Left" of="c80f0394e2916d19" width="260"/>
-  </screen>
-</vae>
-```
-
-Attribute sigils: `@token`, `=binding`, `#hex`, `&node`, `*asset`, `$literal`. Sizes are `72`, `hug`,
-`fill`, `fill 2` or `50%`; padding takes 1, 2 or 4 values.
-
-A component declares what may vary, and each instance answers:
-
-```xml
-<component name="Chip" fill="#38508c">
-  <property name="label" type="string" default="Chip"/>
-  <property name="tone" type="string" default="neutral" options="neutral,success,danger"/>
-  <prop name="tone=danger:fill" type="color" value="#9e3338"/>
-  <text name="Label" text="=label"/>
-</component>
-```
-
-A plain property is read with a binding (`text="=label"`); a variant is answered with overlays keyed
-to an option (`tone=danger:fill`), the same shape as the `hovered:fill` state overlays. An
-instance's own override still beats a variant.
-
-Files written in the earlier JSON formats still open — `VAE-Studio --convert [--check] [--bench N]`
-rewrites one in format 3, verifies the round trip node for node, or times the load.
-
-A project is a folder. New ones are saved as `<name>.vaeproj`, an index beside the files it names:
-
-```
-Kiosk/
-  Kiosk.vaeproj          index: screens, components, script language, target resolution
-  Kiosk.lua              the logic
-  tokens.vae             theme, the project's own tokens, assets
-  screens/Home.vaescreen one file per screen
-  screens/Menu.vaescreen
-  components/Card.vaecomp one file per component the project forked
-```
-
-Every part is an ordinary format 3 document, so a screen file opens on its own. A history then says
-which screen changed, and two people can edit different screens without conflicting. A single
-`.vaescreen` holding every screen still opens and saves exactly as before — Studio and the Player
-take either — and opening one does not convert it.
-
-## Languages
-
-A text node can carry a key (`textKey`) beside the text it was authored with. `strings/<locale>.json`
-in the project is a flat object of key to text — the one file a translator opens:
-
-```json
-{ "home.greeting": "Bom dia" }
-```
-
-Studio writes that file for you (View → Language → Write) with every key the document uses and the
-authored text as the starting point, keeps whatever translations are already in it, and previews any
-locale on the canvas. The Player takes `--locale pt-BR`, or reads `LC_ALL`/`LC_MESSAGES`/`LANG`, and
-falls back from `pt-BR` to `pt`. A key with no translation draws the text the designer wrote, so a
-missing string is never a blank label.
-
-Text is shaped with HarfBuzz, so a translation is not limited to the scripts that map one character
-to one glyph: Arabic and Hebrew read right to left and take their joined forms, Devanagari reorders,
-marks attach to their letters, and a font's ligatures are drawn. Mixed-direction text resolves at a
-paragraph level with the neutrals between runs handled per UAX #9. When neither the chosen face nor
-the fallback chain has a character, VAE searches every installed family for one that does, so a
-script nobody listed still draws. Colour emoji draw as emoji: a `CBDT`/`CBLC` face — Noto Color
-Emoji, and so every Linux desktop — is read for its pictures, scaled to the size of the text around
-it, and drawn from an RGBA atlas page that the text colour does not tint. Apple's `sbix` and layered
-`COLR` faces are not read.
+`F5` runs a project on the canvas. `Ctrl+F5` runs it in its own window, `Ctrl+F6` starting on the
+screen you are looking at, and `Shift+F5` stops.
 
 ## Scripting
 
-A script registers classes by component name. Every instance of that component runs one, with its own
-`self` and its own state.
+A script registers a class per component name. Every instance runs one, with its own state.
 
 ```lua
 vae.component("Counter", {
     on_mount = function(self) self:show() end,
 
     on_event = function(self, event)
-        if event.kind ~= "clicked" then return end
-        if event.source == "Increment" then
+        if event.kind == "clicked" and event.source == "Increment" then
             self:set_state("count", self:state("count") + 1)
+            self:show()
         end
-        self:show()
     end,
 
     show = function(self)
-        self:set_text("Count", "text", tostring(math.floor(self:state("count"))))
+        self:set_text("Count", "text", tostring(self:state("count")))
     end,
 })
 ```
 
 The C++ form is the same shape against `vae/script/VaeScriptAPI.h`, compiled to a `.so` beside the
-project.
+project. The player loads whichever sits next to it, native winning when both do.
 
-## Tests
+## Export
+
+```sh
+vae-studio --export <project> [directory]      # or File > Export C++
+cd <Name>-export && premake5 gmake && make
+```
+
+The folder that comes out is the app: the binary, and beside it the fonts, pictures, translations
+and script. Copy it to a machine with no VAE on it and it runs.
+
+## Build from source
+
+```sh
+./scripts/Setup.sh                   # submodules, then premake5 gmake
+./scripts/CompileShaders.sh          # GLSL -> SPIR-V
+make config=debug -j8                # or config=release / config=dist
+```
+
+Binaries land in `bin/<config>-linux-x86_64/<project>/`. Re-run `premake5 gmake` after adding a
+source file.
 
 ```sh
 ./bin/Debug-linux-x86_64/VAE-Tests/VAE-Tests
-./bin/Debug-linux-x86_64/VAE-Tests/VAE-Tests --filter=layout
-
-VAE-Studio --selftest    # editor logic, no window and no device; exit code is the result
+./bin/Debug-linux-x86_64/VAE-Studio/VAE-Studio --selftest
 ```
 
-`--selftest` also rewrites the sample projects into the projects root.
+`VAE_GPU` picks the backend: `vulkan` (default), `software` (needs `vulkan-swrast`), `d3d12`.
 
 ## Built with it
 
 ![Vaecord](docs/vaecord.png)
 
-A chat client: one `.vaescreen`, one Lua file, rows fed to repeating containers, WebSockets for the
+A chat client: one screen, one Lua file, rows fed to repeating containers, WebSockets for the
 transport.
 
 ## Licence
 
-LGPL-3.0-or-later. `COPYING.LESSER` is the licence; `COPYING` is the GPLv3 it is written against.
+LGPL-3.0-or-later. See [COPYING.LESSER](COPYING.LESSER).
 
-The engine is a library, and that is the point of the choice: an app you build with VAE is your own
-work and stays yours, whatever licence you put on it. What LGPL asks in return is that whoever has
-your app can replace the copy of VAE inside it — which, for the static linking VAE does by default,
-means shipping your object files or a build that links VAE dynamically alongside it.
-
-Vendored dependencies keep their own licences, all permissive: GLFW (zlib), Dear ImGui, Lua, sol2,
-spdlog, pugixml, nlohmann/json, GLM, miniaudio, cpp-httplib, vk-bootstrap, VulkanMemoryAllocator,
-HarfBuzz and ImGuiColorTextEdit (MIT), stb (public domain).
+Vendored dependencies keep their own, all permissive: GLFW, Dear ImGui, Lua, sol2, spdlog, pugixml,
+nlohmann/json, GLM, miniaudio, cpp-httplib, vk-bootstrap, VulkanMemoryAllocator, HarfBuzz,
+ImGuiColorTextEdit, stb.
