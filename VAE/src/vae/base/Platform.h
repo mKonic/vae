@@ -76,6 +76,17 @@ namespace vae::platform {
     // to ask about it.
     void AskToClose(Process process);
 
+    // `Process` above is a child *this* program started, and on Windows it is a handle rather than
+    // a number. Naming a file after the process that owns it needs the other thing: the number the
+    // system uses, which any program can write down and a different one can read back.
+    using ProcessId = std::uint32_t;
+
+    ProcessId CurrentProcessId();
+    // Whether any process with that id exists. Not whether it is ours, and not whether it is still
+    // the same program — an id is reused eventually. Enough to decide whether a file might still
+    // be being written to, and not enough for anything else.
+    bool ProcessIdAlive(ProcessId id);
+
     // What to tell someone whose machine cannot run `CompileCommand` at all. Different advice on
     // every system, and worth giving: "cl is not recognized" means "you are not in a developer
     // prompt", which is not something a person guesses.

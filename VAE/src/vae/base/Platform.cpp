@@ -2,6 +2,7 @@
 #include "vae/base/Platform.h"
 
 #include <array>
+#include <cerrno>
 #include <cstdio>
 #include <cstdlib>
 #include <fstream>
@@ -122,6 +123,16 @@ namespace vae::platform {
 
     void AskToClose(Process process) {
         if (process) ::kill(static_cast<pid_t>(process), SIGTERM);
+    }
+
+    ProcessId CurrentProcessId() { return static_cast<ProcessId>(::getpid()); }
+
+    bool ProcessIdAlive(ProcessId id) {
+        if (!id) return false;
+        // Signal 0 is the existence check: nothing is delivered. EPERM means it is there and
+        // belongs to somebody else, which still answers the question that was asked.
+        if (::kill(static_cast<pid_t>(id), 0) == 0) return true;
+        return errno == EPERM;
     }
 
     const char* MissingCompilerHint() {
@@ -281,6 +292,20 @@ namespace vae::platform {
         // The nearest thing to SIGTERM a windowed process answers. A console app gets the break;
         // a windowed one is closed by its own window, which is what the player has.
         ::GenerateConsoleCtrlEvent(CTRL_BREAK_EVENT, ::GetProcessId(reinterpret_cast<HANDLE>(process)));
+    }
+
+    ProcessId CurrentProcessId() { return static_cast<ProcessId>(::GetCurrentProcessId()); }
+
+    bool ProcessIdAlive(ProcessId id) {
+        if (!id) return false;
+        // A handle can be opened for a process that has already exited, so the exit code is what
+        // actually answers this — the open alone would call every finished run alive.
+        HANDLE handle = ::OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, id);
+        if (!handle) return false;
+        DWORD code = 0;
+        const bool alive = ::GetExitCodeProcess(handle, &code) && code == STILL_ACTIVE;
+        ::CloseHandle(handle);
+        return alive;
     }
 
     const char* MissingCompilerHint() {

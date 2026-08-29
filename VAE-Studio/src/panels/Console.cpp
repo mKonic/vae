@@ -75,6 +75,16 @@ namespace vae {
             std::lock_guard lock(g_Mutex);
             ImGui::TextDisabled("%zu lines", g_Entries.size());
         }
+        // Which file this session is writing. Worth showing rather than documenting: there is a
+        // log per process now, so "the log" is no longer one path somebody can be told once.
+        if (!Log::FilePath().empty()) {
+            ImGui::SameLine();
+            ImGui::TextDisabled("· %s", Log::FilePath().filename().c_str());
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("%s\n(click to copy)", Log::FilePath().c_str());
+            if (ImGui::IsItemClicked())
+                ImGui::SetClipboardText(Log::FilePath().c_str());
+        }
         ImGui::Separator();
 
         ImGui::BeginChild("##log", ImVec2(0, 0), ImGuiChildFlags_None,

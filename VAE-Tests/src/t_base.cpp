@@ -2,10 +2,14 @@
 
 #include "vae/base/Version.h"
 #include "vae/base/FileSystem.h"
+#include "vae/base/Log.h"
 #include "vae/base/Math.h"
+#include "vae/base/Platform.h"
 #include "vae/base/Uuid.h"
 
+#include <chrono>
 #include <filesystem>
+#include <fstream>
 #include <unordered_set>
 
 using namespace vae;
@@ -77,4 +81,65 @@ TEST(base, filesystem_finds_the_engine_root_marker) {
     const auto root = FileSystem::EngineRoot();
     CHECK(std::filesystem::exists(root / FileSystem::kRootMarker));
     CHECK(std::filesystem::exists(FileSystem::Asset("VAE/src/vaepch.h")));
+}
+
+// --- the log file is named for the process that owns it --------------------------------------
+//
+// The Studio and the app it launches (Ctrl+F5) are two processes sharing one config directory. A
+// rotating sink is safe across threads and not across processes: rotation renames the file, and
+// the other writer goes on writing into the one that no longer has a name.
+
+TEST(base, a_log_file_is_named_for_its_program_and_pid) {
+    CHECK_EQ(Log::FileNameFor("VAE-Studio", 4131), std::string("vae-studio-4131.log"));
+    CHECK_EQ(Log::FileNameFor("VAE-Player", 9), std::string("vae-player-9.log"));
+    // An app is called whatever its author called it, and that is not always a file name.
+    CHECK_EQ(Log::FileNameFor("My App (2)", 7), std::string("my-app-2-7.log"));
+    CHECK_EQ(Log::FileNameFor("", 7), std::string("vae-7.log"));
+}
+
+TEST(base, pruning_keeps_the_recent_runs_and_never_a_live_one) {
+    namespace fs = std::filesystem;
+    const fs::path dir = fs::temp_directory_path() / "vae-log-prune-test";
+    fs::remove_all(dir);
+    fs::create_directories(dir);
+
+    // Eight finished runs, one live one, and a file this code did not write.
+    const auto touch = [&](const std::string& name, int minutesAgo) {
+        const fs::path path = dir / name;
+        std::ofstream(path) << "x";
+        fs::last_write_time(path, fs::file_time_type::clock::now() - std::chrono::minutes(minutesAgo));
+    };
+    for (int i = 0; i < 8; ++i) touch("vae-studio-" + std::to_string(100 + i) + ".log", 100 - i);
+    touch("vae-studio-100.1.log", 100);            // the rotated half of the oldest run
+    touch("vae-player-999.log", 500);              // ancient, but its process is still there
+    touch("notes.txt", 0);
+    touch("mystery.log", 0);                       // no pid in the name: not ours, not ours to delete
+    touch("vae.log", 400);                         // the one fixed name every process used to share
+    touch("vae.1.log", 400);
+
+    Log::Prune(dir, 5, [](std::uint32_t pid) { return pid == 999; });
+
+    // The five newest finished runs survive; the three oldest go, rotated files with them.
+    for (int i = 3; i < 8; ++i) CHECK(fs::exists(dir / ("vae-studio-" + std::to_string(100 + i) + ".log")));
+    for (int i = 0; i < 3; ++i) CHECK(!fs::exists(dir / ("vae-studio-" + std::to_string(100 + i) + ".log")));
+    CHECK(!fs::exists(dir / "vae-studio-100.1.log"));
+    CHECK(fs::exists(dir / "vae-player-999.log"));
+    CHECK(fs::exists(dir / "notes.txt"));
+    CHECK(fs::exists(dir / "mystery.log"));
+    CHECK(!fs::exists(dir / "vae.log"));           // ages out with the rest, rather than forever
+    CHECK(!fs::exists(dir / "vae.1.log"));
+
+    fs::remove_all(dir);
+}
+
+TEST(base, pruning_an_empty_or_missing_directory_is_not_an_error) {
+    namespace fs = std::filesystem;
+    Log::Prune(fs::temp_directory_path() / "vae-log-prune-nothing-here", 5,
+               [](std::uint32_t) { return false; });
+    CHECK(true);        // reaching here at all is the assertion
+}
+
+TEST(base, this_process_is_alive_and_pid_zero_is_not) {
+    CHECK(platform::ProcessIdAlive(platform::CurrentProcessId()));
+    CHECK(!platform::ProcessIdAlive(0));
 }
