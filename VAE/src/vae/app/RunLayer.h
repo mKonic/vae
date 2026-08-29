@@ -96,6 +96,10 @@ namespace vae::app {
             bool Do(u32 node, a11y::Action action) override;
             bool SetCaret(u32 node, u32 start, u32 end) override;
             bool Focus(u32 node) override;
+            bool EditText(u32 node, u32 start, u32 end, std::string_view insert) override;
+            bool CopyText(u32 node, u32 start, u32 end, bool cut) override;
+            bool PasteText(u32 node, u32 at) override;
+            bool SelectChild(u32 node, u32 child, bool selected) override;
 
             // Everything asked for since the last frame, replayed where input belongs.
             //
@@ -107,11 +111,18 @@ namespace vae::app {
 
         private:
             struct Request {
-                enum class Kind { Act, Caret, Focus };
+                enum class Kind { Act, Caret, Focus, Edit, Copy, Cut, Paste };
                 Kind kind = Kind::Act;
                 u32  node = 0;
                 u32  start = 0, end = 0;
+                // What an edit puts in place of [start, end).
+                std::string text;
             };
+
+            // The field behind a node, or ViewTree::kInvalid when the node is not one, has no edit
+            // state, or will not take an edit. Every editing path asks this first, so that a
+            // read-only field refuses in one place rather than in four.
+            u32 FieldFor(u32 node, bool forWriting) const;
 
             // The view behind a node, or ViewTree::kInvalid when the tree has moved on since the
             // snapshot the reader is talking about.

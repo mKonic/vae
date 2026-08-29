@@ -16,6 +16,7 @@ machine with none is not a failure, and this says so and exits 0.
 Run it against a nested compositor rather than the live session; a screen reader pressing buttons in
 the app you are using is exactly as disruptive as it sounds.
 """
+import re
 import sys
 
 try:
@@ -219,8 +220,129 @@ if entries:
     else:
         print("  (the entry is empty — type into it first to check the caret)")
 
+# --- EditableText: a screen reader that can type, not only read --------------------------------
+if entries:
+    path = entries[0][0]
+    check("org.a11y.atspi.EditableText" in interfaces(dest, path),
+          "an entry carries EditableText, so a reader can type into it")
+
+    def contents():
+        return call(dest, path, "org.a11y.atspi.Text", "GetText",
+                    GLib.Variant("(ii)", (0, -1)), "(s)").unpack()[0]
+
+    def edit(method, args, signature, reply="(b)"):
+        return call(dest, path, "org.a11y.atspi.EditableText", method,
+                    GLib.Variant(signature, args), reply)
+
+    check(edit("SetTextContents", ("naïve text",), "(s)").unpack()[0],
+          "SetTextContents is accepted")
+    wait(600)
+    check(contents() == "naïve text", "and the field really holds it", repr(contents()))
+
+    check(edit("InsertText", (5, " very", 5), "(isi)").unpack()[0], "InsertText is accepted")
+    wait(600)
+    # Offset five is *characters*, and "naïve" is five characters and six bytes — a field that
+    # counts bytes puts this inside the ï instead.
+    check(contents() == "naïve very text", "and inserted at the character offset it was given",
+          repr(contents()))
+
+    check(edit("DeleteText", (5, 10), "(ii)").unpack()[0], "DeleteText is accepted")
+    wait(600)
+    check(contents() == "naïve text", "and removed exactly that range", repr(contents()))
+
+    edit("CutText", (0, 6), "(ii)")
+    wait(600)
+    check(contents() == "text", "CutText takes the range out", repr(contents()))
+    check(edit("PasteText", (4,), "(i)").unpack()[0], "PasteText is accepted")
+    wait(600)
+    check(contents() == "textnaïve ", "and puts back what was cut, where it was asked to",
+          repr(contents()))
+
+    # The extents of every character, from the run that was actually shaped. An even split has
+    # every box the same width and every offset landing on the wrong character in proportional
+    # type; this is the check that says which one is being answered.
+    text = contents()
+    if len(text) > 3:
+        boxes = [call(dest, path, "org.a11y.atspi.Text", "GetCharacterExtents",
+                      GLib.Variant("(iu)", (i, 0)), "(iiii)").unpack()
+                 for i in range(len(text))]
+        check(all(b[2] > 0 and b[3] > 0 for b in boxes), "every character has a box")
+        check(all(boxes[i][0] >= boxes[i - 1][0] for i in range(1, len(boxes))),
+              "and they run left to right")
+        middle = boxes[2]
+        at = call(dest, path, "org.a11y.atspi.Text", "GetOffsetAtPoint",
+                  GLib.Variant("(iiu)", (middle[0] + middle[2] // 2, middle[1] + middle[3] // 2, 0)),
+                  "(i)").unpack()[0]
+        check(at == 2, "and a point inside one answers with that character", at)
+        span = call(dest, path, "org.a11y.atspi.Text", "GetRangeExtents",
+                    GLib.Variant("(iiu)", (0, 3, 0)), "(iiii)").unpack()
+        wanted = sum(b[2] for b in boxes[:3])
+        check(span[0] == boxes[0][0] and abs(span[2] - wanted) <= 2,
+              "a range is the union of the characters in it, not a guess",
+              (span, wanted))
+
+    check(edit("SetTextContents", ("",), "(s)").unpack()[0], "and the field can be emptied again")
+
+if labels:
+    # Sentence granularity: AT-SPI's SENTENCE is 2. Answering with the whole of the text — which
+    # is what this used to do — makes a reader walking by sentence read the field out in one go.
+    sentences = [n for n in labels if re.search(r"[.!?]\s+\S", n[2])]
+    if sentences:
+        path = sentences[0][0]
+        whole = call(dest, path, "org.a11y.atspi.Text", "GetText",
+                     GLib.Variant("(ii)", (0, -1)), "(s)").unpack()[0]
+        first = call(dest, path, "org.a11y.atspi.Text", "GetStringAtOffset",
+                     GLib.Variant("(iu)", (0, 2)), "(sii)").unpack()
+        check(first[0] and first[0] != whole, "a sentence is a sentence and not the whole label",
+              (first[0], whole))
+        after = call(dest, path, "org.a11y.atspi.Text", "GetTextAfterOffset",
+                     GLib.Variant("(iu)", (0, 3)), "(sii)").unpack()
+        check(after[0] and after[0] not in first[0], "and the one after it is a different one",
+              after)
+    else:
+        print("  (no label with more than one sentence on this screen)")
+
+
+# --- Selection: choosing a row in a list --------------------------------------------------------
+# The list that tracks a selection, not merely the first one on the screen: a strip of rows
+# nothing ever selects is a list too, and it has nothing to choose between.
+lists = [n for n in found if n[1] == "list"]
+chooseable = [n for n in lists if "org.a11y.atspi.Selection" in interfaces(dest, n[0])]
+if chooseable:
+    path = chooseable[0][0]
+    check(True, "a list that tracks a selection carries Selection")
+    rows = children(dest, path)
+    check(len(rows) > 1, "and has rows in it", len(rows))
+    if len(rows) > 1:
+        before = prop(dest, path, "org.a11y.atspi.Selection", "NSelectedChildren")
+        check(call(dest, path, "org.a11y.atspi.Selection", "SelectChild",
+                   GLib.Variant("(i)", (1,)), "(b)").unpack()[0], "SelectChild is accepted")
+        wait(900)
+        chosen = call(dest, path, "org.a11y.atspi.Selection", "IsChildSelected",
+                      GLib.Variant("(i)", (1,)), "(b)").unpack()[0]
+        check(chosen, "and the row it named is the one that came out selected",
+              (before, prop(dest, path, "org.a11y.atspi.Selection", "NSelectedChildren")))
+        picked = call(dest, path, "org.a11y.atspi.Selection", "GetSelectedChild",
+                      GLib.Variant("(i)", (0,)), "((so))").unpack()[0]
+        check(picked[1] == rows[1][1], "GetSelectedChild agrees with it", picked)
+        check(not call(dest, path, "org.a11y.atspi.Selection", "ClearSelection",
+                       None, "(b)").unpack()[0],
+              "and clearing it is refused rather than pretended")
+elif lists:
+    print(f"  ({len(lists)} lists on this screen, none of which tracks a selection)")
+else:
+    print("  (no list on this screen — run against a project with a repeated container)")
+
 if secrets:
     path = secrets[0][0]
+    # Fill it first if it is empty — typing into a password field is a thing a screen reader user
+    # does, and an empty one proves nothing about whether what is in it stays in it.
+    if prop(dest, path, "org.a11y.atspi.Text", "CharacterCount") == 0:
+        check("org.a11y.atspi.EditableText" in interfaces(dest, path),
+              "a password field can be typed into")
+        call(dest, path, "org.a11y.atspi.EditableText", "SetTextContents",
+             GLib.Variant("(s)", ("hunter2",)), "(b)")
+        wait(600)
     shown = call(dest, path, "org.a11y.atspi.Text", "GetText",
                  GLib.Variant("(ii)", (0, -1)), "(s)").unpack()[0]
     count = prop(dest, path, "org.a11y.atspi.Text", "CharacterCount")
@@ -229,6 +351,11 @@ if secrets:
         # the one question a password field exists to refuse.
         check(shown and set(shown) <= {"*"}, "a password field hands out only asterisks", repr(shown))
         check(len(shown) == count, "one per character, so its length is still readable", count)
+        # Typing into one is fine — that is what a password field is for. Taking what is in it
+        # back out over the bus is not, and the refusal is the bridge's, not the widget's.
+        check(not call(dest, path, "org.a11y.atspi.EditableText", "CutText",
+                       GLib.Variant("(ii)", (0, count)), "(b)").unpack()[0],
+              "and cutting a password out over the bus is refused")
     else:
         print("  (the password field is empty — type into it first to check that it is masked)")
 

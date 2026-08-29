@@ -101,6 +101,14 @@ namespace vae::a11y {
         u32 caret = 0;
         u32 selectionStart = 0, selectionEnd = 0;
 
+        // Where each character of `text` is on screen, in the same space as `bounds`, one rect per
+        // character. A screen reader draws a box around what it is reading and magnifiers follow
+        // it, so the answer has to come from the run that was actually shaped rather than from
+        // dividing the field's box by the number of characters in it — proportional type makes
+        // that wrong by a whole character within a few words. Empty when the text was not laid
+        // out, which is the signal to fall back rather than to report a box of nothing.
+        std::vector<Rect> characters;
+
         // Back to the view this came from, so a screen reader's "press this" reaches the widget.
         u32 view = kInvalid;
 

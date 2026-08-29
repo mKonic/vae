@@ -2,6 +2,7 @@
 #include "vae/a11y/Accessibility.h"
 
 #include "vae/ui/ViewTree.h"
+#include "vae/ui/widgets/Widgets.h"
 #include "vae/base/Utf8.h"
 
 #include <array>
@@ -165,6 +166,13 @@ namespace vae::a11y {
 
             if (role == Role::ListItem || role == Role::PageTab || role == Role::MenuItem)
                 set = set | State::Selectable;
+            // A copy of a repeated container whose container tracks a selection is selectable
+            // whatever it was drawn as. Vaecord's channel rows are instances of a Button, and a
+            // screen reader still has to be able to choose one — asking the role instead of the
+            // container would answer "no" for the most common list in the framework.
+            if (v.rowRoot && v.parent != ui::ViewTree::kInvalid
+                && views.At(v.parent).props.Find(doc::Prop::SelectedIndex))
+                set = set | State::Selectable;
             if (role == Role::Entry || role == Role::PasswordText)
                 if (!views.Flag(view, doc::Prop::ReadOnly, false)) set = set | State::Editable;
             // On the *widget* role, not the announced one. A switch and a collapsible section are
@@ -196,6 +204,33 @@ namespace vae::a11y {
                 }
             }
             for (u32 child : v.children) GatherText(views, child, out, depth + 1);
+        }
+
+        // Is anything inside this drawn from a row? Every list in VAE is a repeated container: the
+        // designer draws one row and the app hands over what the rows are. Nothing declares itself
+        // a list, so this is what asking looks like.
+        bool HoldsRows(const ui::ViewTree& views, u32 view) {
+            for (u32 child : views.At(view).children) {
+                if (!views.At(child).rowRoot) continue;
+                // And rows that say something. A strip of dots under a carousel is repeated too,
+                // and a list of four things a reader cannot name is four stops on the way past it.
+                std::string spoken;
+                GatherText(views, child, spoken);
+                return !spoken.empty();
+            }
+            return false;
+        }
+
+        // The shaped run, one rect per character — or nothing, when what was drawn is not what is
+        // being announced. An empty field draws its placeholder and a label whose translation
+        // arrived late draws something else again; a box per character of a string that is not
+        // this one is a screen reader pointing confidently at the wrong place, which is worse than
+        // the even split it would fall back to.
+        std::vector<Rect> TextBoxes(const ui::ViewTree& views, u32 view, std::string_view text) {
+            if (text.empty() || !views.Valid(view)) return {};
+            std::vector<Rect> boxes = views.CharacterBoxes(view);
+            if (boxes.size() != Utf8Length(text)) return {};
+            return boxes;
         }
 
     }
@@ -244,6 +279,19 @@ namespace vae::a11y {
             isLabel = true;
         }
 
+        // A repeated container is a list, and each copy of its row is an item in it. This is the
+        // one shape every list in VAE is built from — there is no list widget — so without this a
+        // screen reader is handed a stack of frames with text in them and no way to say "item 3 of
+        // 40", and a Selection interface has nothing to select. A copy with nothing to announce is
+        // left alone: a row of decoration is not an item, and calling it one only adds a node the
+        // user has to walk past.
+        if (role == Role::Invalid && HoldsRows(views, view)) role = Role::List;
+        if (role == Role::Invalid && v.rowRoot) {
+            std::string spoken;
+            GatherText(views, view, spoken);
+            if (!spoken.empty()) role = Role::ListItem;
+        }
+
         if (role == Role::Invalid) {
             // Nothing to announce here; its children may still have something.
             for (u32 child : v.children) Walk(views, child, parent, carets);
@@ -271,6 +319,7 @@ namespace vae::a11y {
             if (isLabel) {
                 node.name = views.Str(view, doc::Prop::Text);
                 node.text = node.name;
+                node.characters = TextBoxes(views, view, node.text);
             } else if (entry) {
                 // Deliberately not the text drawn inside it. What a field displays is what has
                 // been typed into it, and announcing a field as "someone@example.com" instead of
@@ -309,6 +358,11 @@ namespace vae::a11y {
                     node.selectionEnd   = CharsBefore(typed, std::max(caret, anchor));
                 }
             }
+
+            // A field draws its text on a label inside itself, and that label is what was shaped —
+            // so the boxes come from there. For a password field it is the bullets that were drawn,
+            // which is the right answer: what a magnifier follows is what is on the screen.
+            node.characters = TextBoxes(views, ui::widgets::LabelOf(views, view), node.text);
         }
 
         if (ReadsAValue(role)) {

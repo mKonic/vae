@@ -569,6 +569,62 @@ TEST(ui, copy_cut_and_paste_go_through_the_clipboard) {
     CHECK_EQ(ui.host.GetClipboard().GetText(), std::string("abcdefabcdef"));
 }
 
+// The mechanism a screen reader's typing rides on: put the selection where the client asked for
+// it, then deliver the text as keystrokes. Nothing reaches into the string, because the field's
+// own rules — its maximum length, its refusal of newlines, the label it keeps in step — are
+// exactly the rules an edit made through AT-SPI has to obey as well.
+TEST(ui, an_edit_placed_by_offset_replaces_that_range_and_nothing_else) {
+    Ui ui;
+    const Uuid field = ui.Place("TextInput");
+    ui.ClickOn(field);
+    ui.Type("naïve text");
+
+    const WidgetId id{ ui.ComponentRoot(field), field };
+    TextEditState& edit = ui.host.EditState(id);
+    // Bytes, because that is what an edit state counts — characters 2 to 6, which is not the
+    // same pair of numbers in a string with an ï in it: "ïve " is four characters and five bytes.
+    edit.anchor = 2;
+    edit.caret  = 7;
+    ui.Type("ï");
+    CHECK_EQ(ui.Str(field, doc::Prop::Text), std::string("naïtext"));
+
+    // And an empty insertion is a deletion, which is the same key the user would press.
+    edit.anchor = 0;
+    edit.caret  = 4;
+    ui.Key(Key::Backspace);
+    CHECK_EQ(ui.Str(field, doc::Prop::Text), std::string("text"));
+}
+
+TEST(ui, an_edit_still_obeys_the_fields_own_rules) {
+    Ui ui;
+    const Uuid field = ui.Place("TextInput");
+    ui.document.SetOverride(field, ui.ComponentRoot(field), doc::Prop::MaxLength, 6.0f);
+    ui.Frame();
+    ui.ClickOn(field);
+    ui.Type("abcdef");
+
+    const WidgetId id{ ui.ComponentRoot(field), field };
+    TextEditState& edit = ui.host.EditState(id);
+    edit.anchor = edit.caret = 6;
+    ui.Type("ghi");
+    // Not seven characters, because the field says six — a screen reader typing past the end of
+    // a field is stopped by the same rule a keyboard is.
+    CHECK_EQ(ui.Str(field, doc::Prop::Text), std::string("abcdef"));
+}
+
+TEST(ui, a_read_only_field_takes_no_typing_at_all) {
+    Ui ui;
+    const Uuid field = ui.Place("TextInput");
+    ui.document.SetOverride(field, ui.ComponentRoot(field), doc::Prop::Text,
+                            std::string("fixed"));
+    ui.document.SetOverride(field, ui.ComponentRoot(field), doc::Prop::ReadOnly, true);
+    ui.Frame();
+    ui.ClickOn(field);
+    ui.Type("x");
+    ui.Key(Key::Backspace);
+    CHECK_EQ(ui.Str(field, doc::Prop::Text), std::string("fixed"));
+}
+
 TEST(ui, ctrl_arrow_moves_by_words) {
     Ui ui;
     const Uuid field = ui.Place("TextInput");

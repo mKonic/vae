@@ -28,6 +28,22 @@ namespace vae::a11y {
 
         // Give a node the keyboard focus, which is how a screen reader moves through an app.
         virtual bool Focus(u32 node) = 0;
+
+        // Replace the characters in [start, end) with `insert`. Every edit a screen reader can
+        // ask for is this one operation: typing is an empty range, deleting is an empty string,
+        // and replacing the whole field is both ends of it. Offsets are in characters.
+        virtual bool EditText(u32 node, u32 start, u32 end, std::string_view insert) = 0;
+
+        // The desktop clipboard, which belongs to the app and not to the bridge — a reader that
+        // copies out of a field expects to paste it into something else entirely.
+        virtual bool CopyText(u32 node, u32 start, u32 end, bool cut) = 0;
+        virtual bool PasteText(u32 node, u32 at) = 0;
+
+        // Choose one of a container's children — a row in a list, a tab in a tab strip. `child` is
+        // the index among that node's children, which is the only name the bus has for it. False
+        // for anything the app cannot really do: a single-selection list cannot deselect, and
+        // saying it did would be worse than saying it cannot.
+        virtual bool SelectChild(u32 node, u32 child, bool selected) = 0;
     };
 
     // Carries the accessibility tree to whatever the desktop uses to read a screen out loud.

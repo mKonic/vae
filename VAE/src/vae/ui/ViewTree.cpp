@@ -1,6 +1,7 @@
 #include "vaepch.h"
 #include "vae/ui/ViewTree.h"
 
+#include "vae/base/Utf8.h"
 #include "vae/text/FontDB.h"
 #include "vae/text/TextCache.h"
 #include "vae/text/TextDraw.h"
@@ -800,6 +801,70 @@ namespace vae::ui {
                                        m_Frames[index].opacity);
         text::DrawGlyphs(*context.list, *context.atlas, result, rect.pos, colour, style.size,
                          context.pixelRatio);
+    }
+
+    // Laid out exactly as PaintText lays it out — same content, style, width, wrap and alignment,
+    // out of the same cache — because a box drawn around a character that the shaper put somewhere
+    // else is worse than no box at all.
+    std::vector<Rect> ViewTree::CharacterBoxes(u32 view) const {
+        std::vector<Rect> boxes;
+        if (!Valid(view) || m_Views[view].kind != doc::NodeKind::Text) return boxes;
+
+        const std::string content = TextOf(view);
+        if (content.empty()) return boxes;
+        const text::TextStyle style = StyleFor(view);
+        if (!style.font) return boxes;
+
+        const doc::PropBag& props = m_Views[view].props;
+        const Rect rect = Bounds(view);
+        const text::TextLayoutResult& layout = text::TextCache::Layout(
+            content, style, rect.size.x, WrapFromName(props.Text(doc::Prop::TextWrap, "word")),
+            AlignFromName(props.Text(doc::Prop::TextAlign, "left")));
+        const f32 lineHeight = style.font->Metrics(style.size).LineHeight();
+        const f32 ascent = style.font->Metrics(style.size).ascent;
+
+        // One entry per cluster the shaper produced, in byte order. Glyphs come back in *visual*
+        // order — an RTL run is already reversed — so they are gathered by byte offset rather than
+        // by position, and a mark sitting on the glyph before it joins that glyph's cluster
+        // instead of claiming a box of its own.
+        struct Cluster { std::size_t at = 0; f32 left = 0.0f, right = 0.0f, baseline = 0.0f; };
+        std::vector<Cluster> clusters;
+        for (const text::PositionedGlyph& glyph : layout.glyphs) {
+            const auto found = std::find_if(clusters.begin(), clusters.end(),
+                                            [&](const Cluster& c) { return c.at == glyph.byteOffset; });
+            if (found == clusters.end()) {
+                clusters.push_back({ glyph.byteOffset, glyph.pen.x, glyph.pen.x + glyph.advance,
+                                     glyph.pen.y });
+                continue;
+            }
+            found->left  = std::min(found->left, glyph.pen.x);
+            found->right = std::max(found->right, glyph.pen.x + glyph.advance);
+        }
+        if (clusters.empty()) return boxes;
+        std::sort(clusters.begin(), clusters.end(),
+                  [](const Cluster& a, const Cluster& b) { return a.at < b.at; });
+
+        // A cluster covers everything up to the next one, which is how a ligature is known to be
+        // two characters wide. Splitting its box evenly between them is an approximation — there
+        // is no answer to "where does the f end in fi" — but it is one that stays inside the
+        // ligature rather than pointing at the character after it.
+        for (std::size_t i = 0; i < clusters.size(); ++i) {
+            const Cluster& cluster = clusters[i];
+            // The first cluster owns anything before it and the last owns anything after, so the
+            // boxes come back one per character of the whole string even when the shaper drew no
+            // glyph for some of it — a newline is a character to everything above this line.
+            const std::size_t from = i == 0 ? 0 : cluster.at;
+            const std::size_t end = i + 1 < clusters.size() ? clusters[i + 1].at : content.size();
+            const auto characters = static_cast<u32>(Utf8Length(
+                std::string_view(content).substr(from, end - from)));
+            const f32 width = (cluster.right - cluster.left)
+                            / static_cast<f32>(std::max<u32>(characters, 1));
+            for (u32 c = 0; c < std::max<u32>(characters, 1); ++c)
+                boxes.push_back({ { rect.pos.x + cluster.left + static_cast<f32>(c) * width,
+                                    rect.pos.y + cluster.baseline + ascent },
+                                  { width, lineHeight } });
+        }
+        return boxes;
     }
 
     // ------------------------------------------------------------------------------ queries

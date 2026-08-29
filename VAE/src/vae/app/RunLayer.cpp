@@ -238,6 +238,17 @@ namespace vae::app {
 
     // --- what a screen reader can do -----------------------------------------------------------
 
+    namespace {
+        // Back from characters to bytes. Every offset a screen reader sends is a character index,
+        // because that is what AT-SPI counts; an edit state counts bytes, and a field with
+        // anything but ASCII in it would otherwise have its caret put inside a character.
+        std::size_t ByteOffset(std::string_view text, u32 characters) {
+            std::size_t at = 0;
+            for (u32 i = 0; i < characters && at < text.size(); ++i) Utf8Next(text, at);
+            return at;
+        }
+    }
+
     u32 RunLayer::ScreenReader::ViewFor(u32 node) const {
         const a11y::Tree& tree = m_Layer.m_Accessibility;
         if (node >= tree.Count()) return ui::ViewTree::kInvalid;
@@ -275,13 +286,58 @@ namespace vae::app {
         return Queue({ Request::Kind::Act, node, 0, 0 });
     }
 
-    bool RunLayer::ScreenReader::SetCaret(u32 node, u32 start, u32 end) {
+    // A field, and one that will take what is about to be done to it. The read-only check is here
+    // rather than left to the widget because a screen reader has to be *told* no: an edit that is
+    // silently dropped reads as an app that lost what the user typed.
+    u32 RunLayer::ScreenReader::FieldFor(u32 node, bool forWriting) const {
         const u32 view = ViewFor(node);
-        if (view == ui::ViewTree::kInvalid) return false;
+        if (view == ui::ViewTree::kInvalid) return ui::ViewTree::kInvalid;
         const ui::ViewTree& views = m_Layer.m_Host.Tree();
         const ui::WidgetId id{ views.At(view).sourceId, views.At(view).instanceId };
-        if (!m_Layer.m_Host.FindEditState(id)) return false;
+        if (!m_Layer.m_Host.FindEditState(id)) return ui::ViewTree::kInvalid;
+        if (forWriting && (views.Flag(view, doc::Prop::ReadOnly, false)
+                        || !views.Flag(view, doc::Prop::Enabled, true)))
+            return ui::ViewTree::kInvalid;
+        return view;
+    }
+
+    bool RunLayer::ScreenReader::SetCaret(u32 node, u32 start, u32 end) {
+        if (FieldFor(node, false) == ui::ViewTree::kInvalid) return false;
         return Queue({ Request::Kind::Caret, node, start, end });
+    }
+
+    bool RunLayer::ScreenReader::EditText(u32 node, u32 start, u32 end, std::string_view insert) {
+        if (FieldFor(node, true) == ui::ViewTree::kInvalid) return false;
+        Request request{ Request::Kind::Edit, node, start, end };
+        request.text = std::string(insert);
+        return Queue(std::move(request));
+    }
+
+    bool RunLayer::ScreenReader::CopyText(u32 node, u32 start, u32 end, bool cut) {
+        // Copying does not write, so a read-only field may still be copied out of.
+        if (FieldFor(node, cut) == ui::ViewTree::kInvalid) return false;
+        return Queue({ cut ? Request::Kind::Cut : Request::Kind::Copy, node, start, end });
+    }
+
+    bool RunLayer::ScreenReader::PasteText(u32 node, u32 at) {
+        if (FieldFor(node, true) == ui::ViewTree::kInvalid) return false;
+        return Queue({ Request::Kind::Paste, node, at, at });
+    }
+
+    bool RunLayer::ScreenReader::SelectChild(u32 node, u32 child, bool selected) {
+        const a11y::Tree& tree = m_Layer.m_Accessibility;
+        if (node >= tree.Count() || child >= tree.At(node).children.size()) return false;
+        // Selecting is clicking the row, and there is no gesture that un-clicks one: a VAE
+        // container holds one selection and letting it go is not something a person could do with
+        // a pointer either. Saying so is the honest answer.
+        if (!selected) return false;
+        const u32 item = tree.At(node).children[child];
+        const u32 view = ViewFor(item);
+        if (view == ui::ViewTree::kInvalid) return false;
+        if (m_Layer.m_Host.Tree().Bounds(view).Empty()) return false;
+        // Selecting a row IS clicking it — the same request a screen reader's "press this" makes,
+        // aimed at the child instead of the container. Nothing here needs a second path.
+        return Queue({ Request::Kind::Act, item, 0, 0 });
     }
 
     bool RunLayer::ScreenReader::Focus(u32 node) {
@@ -321,23 +377,81 @@ namespace vae::app {
                     const ui::WidgetId id{ views.At(view).sourceId, views.At(view).instanceId };
                     if (!host.FindEditState(id)) break;
 
-                    // Back from characters to bytes. The offsets came from AT-SPI, which counts
-                    // characters; an edit state counts bytes, and a field with anything but ASCII
-                    // in it would otherwise have its caret put inside a character.
                     const std::string text = views.Str(view, doc::Prop::Text);
-                    const auto ByteAt = [&text](u32 characters) {
-                        std::size_t at = 0;
-                        for (u32 i = 0; i < characters && at < text.size(); ++i) Utf8Next(text, at);
-                        return at;
-                    };
                     ui::TextEditState& edit = host.EditState(id);
-                    edit.anchor = ByteAt(std::min(request.start, request.end));
-                    edit.caret  = ByteAt(std::max(request.start, request.end));
+                    edit.anchor = ByteOffset(text, std::min(request.start, request.end));
+                    edit.caret  = ByteOffset(text, std::max(request.start, request.end));
                     break;
                 }
                 case Request::Kind::Focus:
                     host.Focus(view);
                     break;
+
+                // Every edit is the same three steps: put the selection where the client said,
+                // then deliver what it wants typed as keystrokes. Reaching into the string
+                // directly would skip the field's own rules — its maximum length, its refusal of
+                // newlines, the mirror that keeps the label showing what it holds — and those
+                // rules are exactly what a screen reader's typing has to obey too.
+                case Request::Kind::Edit:
+                case Request::Kind::Paste: {
+                    const ui::ViewTree& views = host.Tree();
+                    const ui::WidgetId id{ views.At(view).sourceId, views.At(view).instanceId };
+                    if (!host.FindEditState(id)) break;
+                    if (views.Flag(view, doc::Prop::ReadOnly, false)) break;
+
+                    const std::string text = views.Str(view, doc::Prop::Text);
+                    host.Focus(view);
+                    ui::TextEditState& edit = host.EditState(id);
+                    edit.anchor = ByteOffset(text, std::min(request.start, request.end));
+                    edit.caret  = ByteOffset(text, std::max(request.start, request.end));
+
+                    // Read here rather than when the request was queued: a frame has passed, and
+                    // the clipboard is the desktop's rather than ours.
+                    const std::string insert = request.kind == Request::Kind::Paste
+                                             ? host.GetClipboard().GetText() : request.text;
+                    if (insert.empty()) {
+                        // Nothing to type, so this is a deletion — and the field deletes what is
+                        // selected exactly the way it does for the key.
+                        if (edit.HasSelection())
+                            host.Dispatch(MakeKey(EventType::KeyPressed, Key::Backspace, Mod::None));
+                        break;
+                    }
+                    const bool multiline = views.Flag(view, doc::Prop::Multiline, false);
+                    for (std::size_t at = 0; at < insert.size(); ) {
+                        const u32 codepoint = Utf8Next(insert, at);
+                        if (codepoint == '\n') {
+                            // A single-line field drops it, as it does for a paste. Sending Enter
+                            // instead would submit the form the field is in.
+                            if (multiline)
+                                host.Dispatch(MakeKey(EventType::KeyPressed, Key::Enter, Mod::None));
+                            continue;
+                        }
+                        host.Dispatch(MakeTextInput(codepoint));
+                    }
+                    break;
+                }
+
+                case Request::Kind::Copy:
+                case Request::Kind::Cut: {
+                    const ui::ViewTree& views = host.Tree();
+                    const ui::WidgetId id{ views.At(view).sourceId, views.At(view).instanceId };
+                    if (!host.FindEditState(id)) break;
+
+                    const std::string text = views.Str(view, doc::Prop::Text);
+                    const std::size_t from = ByteOffset(text, std::min(request.start, request.end));
+                    const std::size_t to   = ByteOffset(text, std::max(request.start, request.end));
+                    if (to <= from) break;
+                    host.GetClipboard().SetText(text.substr(from, to - from));
+                    if (request.kind != Request::Kind::Cut) break;
+                    if (views.Flag(view, doc::Prop::ReadOnly, false)) break;
+
+                    host.Focus(view);
+                    ui::TextEditState& edit = host.EditState(id);
+                    edit.anchor = from;
+                    edit.caret  = to;
+                    host.Dispatch(MakeKey(EventType::KeyPressed, Key::Backspace, Mod::None));
+                    break;
+                }
             }
         }
         host.MarkDirty();

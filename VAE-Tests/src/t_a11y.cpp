@@ -544,3 +544,206 @@ TEST(a11y, moving_the_caret_changes_the_signature_so_it_is_published) {
     CHECK(Signature(1) != Signature(4));
     CHECK_EQ(Signature(2), Signature(2));
 }
+
+TEST(a11y, an_entry_reports_where_each_character_is_drawn) {
+    // A screen reader draws a box around what it is reading and a magnifier follows it. The
+    // answer has to come from the run that was shaped: dividing the field's box by the number
+    // of characters in it is a whole character out within a few words of proportional type.
+    A11yUi ui;
+    const Uuid field = ui.Place("TextInput");
+    ui.SetOn(field, "TextInput", doc::Prop::Text, std::string("Hello"));
+
+    const a11y::Tree tree = ui.Build();
+    const a11y::Node* node = FindRole(tree, a11y::Role::Entry);
+    CHECK(node != nullptr);
+    if (!node) return;
+
+    CHECK_EQ(node->characters.size(), std::size_t{ 5 });
+    if (node->characters.size() != 5) return;
+    for (std::size_t i = 0; i < node->characters.size(); ++i) {
+        const Rect& box = node->characters[i];
+        CHECK(box.size.x > 0.0f);
+        CHECK(box.size.y > 0.0f);
+        // Inside the field it is drawn in, and after the character before it.
+        CHECK(box.pos.x >= node->bounds.pos.x);
+        CHECK(box.pos.x + box.size.x <= node->bounds.pos.x + node->bounds.size.x + 1.0f);
+        if (i > 0) CHECK(box.pos.x > node->characters[i - 1].pos.x);
+    }
+}
+
+TEST(a11y, a_wrapped_label_puts_its_second_line_below_the_first) {
+    // The proof that these come from the shaped run rather than from arithmetic on the box: an
+    // even split has one row of boxes however the text was drawn, and a wrapped label has two.
+    A11yUi ui;
+    const Uuid label = ui.document.CreateNode(doc::NodeKind::Text, ui.screen, "Paragraph");
+    doc::Node* node = ui.document.Find(label);
+    node->layout.offsetStart = { 20.0f, 20.0f };
+    node->layout.width = layout::Size::Px(90.0f);
+    node->layout.height = layout::Size::Px(80.0f);
+    ui.document.SetProp(label, doc::Prop::Text, std::string("wrap me over lines"));
+    ui.document.SetProp(label, doc::Prop::TextWrap, std::string("word"));
+    ui.Frame();
+
+    const a11y::Tree tree = ui.Build();
+    const a11y::Node* found = FindRole(tree, a11y::Role::Label);
+    CHECK(found != nullptr);
+    if (!found) return;
+    CHECK_EQ(found->characters.size(), std::size_t{ 18 });
+    if (found->characters.empty()) return;
+
+    // Somewhere in there the text goes back to the left and down a line.
+    bool wrapped = false;
+    for (std::size_t i = 1; i < found->characters.size(); ++i)
+        if (found->characters[i].pos.y > found->characters[i - 1].pos.y
+            && found->characters[i].pos.x < found->characters[i - 1].pos.x)
+            wrapped = true;
+    CHECK(wrapped);
+}
+
+TEST(a11y, a_field_showing_its_placeholder_reports_no_character_boxes) {
+    // The placeholder is drawn and the field's text is empty, so a box per character would be a
+    // box per character of a string nobody is being read. Nothing is the honest answer, and the
+    // bridge falls back to the even split for it.
+    A11yUi ui;
+    const Uuid field = ui.Place("TextInput");
+    ui.SetOn(field, "TextInput", doc::Prop::Placeholder, std::string("Email"));
+
+    const a11y::Tree tree = ui.Build();
+    const a11y::Node* node = FindRole(tree, a11y::Role::Entry);
+    CHECK(node != nullptr);
+    if (node) CHECK(node->characters.empty());
+}
+
+TEST(a11y, a_password_field_reports_a_box_per_bullet_and_not_its_contents) {
+    A11yUi ui;
+    const Uuid field = ui.Place("TextInput");
+    ui.SetOn(field, "TextInput", doc::Prop::Password, true);
+    ui.SetOn(field, "TextInput", doc::Prop::Text, std::string("hunter2"));
+
+    const a11y::Tree tree = ui.Build();
+    const a11y::Node* node = FindRole(tree, a11y::Role::PasswordText);
+    CHECK(node != nullptr);
+    if (!node) return;
+    // As many boxes as there are characters, because that is what is on the screen — and the
+    // text beside them is still asterisks rather than the password.
+    CHECK_EQ(node->text, std::string("*******"));
+    CHECK_EQ(node->characters.size(), std::size_t{ 7 });
+}
+
+TEST(a11y, a_repeated_container_is_a_list_and_its_copies_are_items) {
+    // Every list in VAE is a repeated container — there is no list widget. Without this a screen
+    // reader is handed a stack of frames and cannot say "item 3 of 4", and the Selection
+    // interface on the bus has nothing to choose between.
+    A11yUi ui;
+    const Uuid list = ui.document.CreateNode(doc::NodeKind::Frame, ui.screen, "Channels");
+    {
+        doc::Node* node = ui.document.Find(list);
+        node->layout.mode = layout::LayoutMode::Stack;
+        node->layout.axis = layout::Axis::Column;
+        node->layout.offsetStart = { 20.0f, 20.0f };
+        node->layout.width = layout::Size::Px(240.0f);
+        node->layout.height = layout::Size::Px(200.0f);
+    }
+    const Uuid row = ui.document.CreateNode(doc::NodeKind::Frame, list, "Row");
+    {
+        doc::Node* node = ui.document.Find(row);
+        node->layout.mode = layout::LayoutMode::Stack;
+        node->layout.width = layout::Size::Fill();
+        node->layout.height = layout::Size::Px(32.0f);
+    }
+    const Uuid title = ui.document.CreateNode(doc::NodeKind::Text, row, "Title");
+    ui.document.SetProp(title, doc::Prop::Field, std::string("name"));
+    ui.Frame();
+
+    doc::RowTable rows;
+    rows.columns = { "name" };
+    rows.cells = { "general", "design", "random" };
+    ui.host.Tree().SetRows(WidgetId{ list, Uuid::Invalid() }, rows);
+    ui.host.MarkDirty();
+    ui.Frame();
+
+    const a11y::Tree tree = ui.Build();
+    CHECK_EQ(CountRole(tree, a11y::Role::List), 1u);
+    CHECK_EQ(CountRole(tree, a11y::Role::ListItem), 3u);
+
+    // Each item is announced by what its row drew, and every one of them can be chosen.
+    std::vector<std::string> names;
+    for (const a11y::Node& node : tree.Nodes())
+        if (node.role == a11y::Role::ListItem) {
+            names.push_back(node.name);
+            CHECK(a11y::Has(node.state, a11y::State::Selectable));
+        }
+    CHECK_EQ(names, (std::vector<std::string>{ "general", "design", "random" }));
+}
+
+TEST(a11y, the_row_a_list_marks_selected_is_the_one_reported_selected) {
+    A11yUi ui;
+    const Uuid list = ui.document.CreateNode(doc::NodeKind::Frame, ui.screen, "Channels");
+    {
+        doc::Node* node = ui.document.Find(list);
+        node->layout.mode = layout::LayoutMode::Stack;
+        node->layout.axis = layout::Axis::Column;
+        node->layout.offsetStart = { 20.0f, 20.0f };
+        node->layout.width = layout::Size::Px(240.0f);
+        node->layout.height = layout::Size::Px(200.0f);
+    }
+    ui.document.SetProp(list, doc::Prop::SelectedIndex, 1.0f);
+    const Uuid row = ui.document.CreateNode(doc::NodeKind::Frame, list, "Row");
+    {
+        doc::Node* node = ui.document.Find(row);
+        node->layout.mode = layout::LayoutMode::Stack;
+        node->layout.width = layout::Size::Fill();
+        node->layout.height = layout::Size::Px(32.0f);
+    }
+    const Uuid title = ui.document.CreateNode(doc::NodeKind::Text, row, "Title");
+    ui.document.SetProp(title, doc::Prop::Field, std::string("name"));
+    ui.Frame();
+
+    doc::RowTable rows;
+    rows.columns = { "name" };
+    rows.cells = { "general", "design", "random" };
+    ui.host.Tree().SetRows(WidgetId{ list, Uuid::Invalid() }, rows);
+    ui.host.MarkDirty();
+    ui.Frame();
+
+    const a11y::Tree tree = ui.Build();
+    u32 selected = 0;
+    std::string chosen;
+    for (const a11y::Node& node : tree.Nodes())
+        if (node.role == a11y::Role::ListItem && a11y::Has(node.state, a11y::State::Selected)) {
+            ++selected;
+            chosen = node.name;
+        }
+    CHECK_EQ(selected, 1u);
+    CHECK_EQ(chosen, std::string("design"));
+}
+
+TEST(a11y, a_repeated_row_with_nothing_to_say_is_not_announced_as_an_item) {
+    // A strip of decoration — dots under a carousel, bars in a chart — is repeated too, and
+    // announcing four unnamed list items is four things the user has to walk past to get on.
+    A11yUi ui;
+    const Uuid strip = ui.document.CreateNode(doc::NodeKind::Frame, ui.screen, "Dots");
+    {
+        doc::Node* node = ui.document.Find(strip);
+        node->layout.mode = layout::LayoutMode::Stack;
+        node->layout.axis = layout::Axis::Row;
+        node->layout.offsetStart = { 20.0f, 20.0f };
+        node->layout.width = layout::Size::Px(240.0f);
+        node->layout.height = layout::Size::Px(20.0f);
+    }
+    const Uuid dot = ui.document.CreateNode(doc::NodeKind::Frame, strip, "Dot");
+    {
+        doc::Node* node = ui.document.Find(dot);
+        node->layout.width = layout::Size::Px(8.0f);
+        node->layout.height = layout::Size::Px(8.0f);
+    }
+    ui.document.SetProp(strip, doc::Prop::Repeat, 4.0f);
+    ui.Frame();
+
+    const a11y::Tree tree = ui.Build();
+    CHECK_EQ(CountRole(tree, a11y::Role::ListItem), 0u);
+    // And the strip around them is not a list either: a list of nothing is still a stop.
+    CHECK_EQ(CountRole(tree, a11y::Role::List), 0u);
+    for (const a11y::Tree::Problem& problem : tree.Problems())
+        CHECK(problem.what.find("list item") == std::string::npos);
+}

@@ -223,6 +223,13 @@ namespace vae::ui {
         layout::LayoutTree& LayoutNodes() { return m_Layout; }
         text::TextStyle StyleFor(u32 view) const;
 
+        // Where each character of a text view is drawn, in the same space as Bounds(view) — one
+        // rect per **character**, which is not one per glyph: a ligature is one glyph across two
+        // characters and a combining mark is a second glyph on one. Everything outside the shaper
+        // counts characters, so the split happens here rather than being pushed onto the caller.
+        // Empty when the view holds no text or has no face to draw it with.
+        std::vector<Rect> CharacterBoxes(u32 view) const;
+
     private:
         struct Frame {
             Rect rect;
