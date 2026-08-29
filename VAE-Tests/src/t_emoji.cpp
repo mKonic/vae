@@ -332,3 +332,45 @@ TEST(colour, a_downscaled_picture_keeps_its_colour_at_the_edge) {
     }
     CHECK(partial);      // an all-or-nothing bitmap would prove nothing
 }
+
+TEST(colour, a_truncated_or_corrupt_colour_table_is_refused_rather_than_read_past) {
+    // A font is a file from somewhere else, and these readers walk offsets out of it. Every one of
+    // them is a chance to read past the end. Loading a hundred broken versions of a good font is
+    // worth more than any amount of staring at the bounds checks — and under the sanitized build
+    // (premake5 gmake --sanitize=address,undefined) it is what proves them.
+    for (std::vector<u8> whole : { fixture::SbixFont({ .letter = 'A' }),
+                                   fixture::ColrFont('A', { { 'B', 0 }, { 'C', 1 } },
+                                                     { { 255, 0, 0, 255 }, { 0, 0, 255, 255 } }) }) {
+        if (whole.empty()) continue;
+
+        for (std::size_t cut = 1; cut < 128; ++cut) {
+            // Cut at a spread of lengths rather than every one: the interesting places are the
+            // table directory, the table headers and the middle of an offset array.
+            const std::size_t keep = whole.size() * cut / 128;
+            std::vector<u8> truncated(whole.begin(), whole.begin() + static_cast<long>(keep));
+            const auto font = Font::LoadFromMemory(std::move(truncated), "truncated");
+            // Some prefixes are still a readable outline font and some are nothing. Either answer
+            // is fine; reading past the end of the buffer is not, and that is what is under test.
+            if (font) {
+                const u32 glyph = font->GlyphIndex('A');
+                font->Glyph(glyph, 24.0f);
+                font->Rasterize(glyph, 24.0f);
+                font->HasColourGlyph(glyph);
+            }
+        }
+
+        // And bytes flipped in place, which truncation never produces: a length that is too big,
+        // an offset that points backwards, a count that overruns its own table.
+        for (std::size_t at = 0; at < whole.size(); at += 397) {
+            std::vector<u8> corrupt = whole;
+            corrupt[at] = static_cast<u8>(~corrupt[at]);
+            const auto font = Font::LoadFromMemory(std::move(corrupt), "corrupt");
+            if (font) {
+                const u32 glyph = font->GlyphIndex('A');
+                font->Glyph(glyph, 24.0f);
+                font->Rasterize(glyph, 24.0f);
+            }
+        }
+    }
+    CHECK(true);        // reaching here without the sanitizer stopping us is the assertion
+}

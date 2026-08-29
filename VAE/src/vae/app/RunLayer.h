@@ -87,12 +87,50 @@ namespace vae::app {
         bool StartScripts();
         void Paint();
 
+        // What a screen reader is allowed to do back to the app. A nested class rather than a base
+        // so that "press the control at accessibility node 12" does not become part of RunLayer's
+        // own surface — nothing but the bridge has any business addressing a widget that way.
+        class ScreenReader final : public a11y::Actor {
+        public:
+            explicit ScreenReader(RunLayer& layer) : m_Layer(layer) {}
+            bool Do(u32 node, a11y::Action action) override;
+            bool SetCaret(u32 node, u32 start, u32 end) override;
+            bool Focus(u32 node) override;
+
+            // Everything asked for since the last frame, replayed where input belongs.
+            //
+            // None of it is done where it arrives. The bridge is pumped from the middle of
+            // OnUpdate, and an action a widget emits after that point is thrown away by the same
+            // frame's Paint — which calls ClearActions — before anything reads it. Real input
+            // arrives before OnUpdate for exactly that reason, so a screen reader's does too.
+            void Drain();
+
+        private:
+            struct Request {
+                enum class Kind { Act, Caret, Focus };
+                Kind kind = Kind::Act;
+                u32  node = 0;
+                u32  start = 0, end = 0;
+            };
+
+            // The view behind a node, or ViewTree::kInvalid when the tree has moved on since the
+            // snapshot the reader is talking about.
+            u32 ViewFor(u32 node) const;
+            // Queues one, and asks for the frame that will carry it out — an idle app is blocked
+            // in WaitEvents and would otherwise get to it whenever the half-second net expired.
+            bool Queue(Request request);
+
+            RunLayer& m_Layer;
+            std::vector<Request> m_Pending;
+        };
+
         doc::Document m_Document;
         ui::UiHost m_Host;
         // What a screen reader sees, and what carries it there. Both null on a desktop with no
         // accessibility bus, which costs a running app nothing.
         a11y::Tree       m_Accessibility;
         Scope<a11y::Bridge> m_Bridge;
+        ScreenReader     m_ScreenReader{ *this };
         u64              m_PublishedRevision = 0;
         bool             m_BridgeAsked = false;
         script::Runtime m_Runtime;

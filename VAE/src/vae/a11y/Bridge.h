@@ -7,6 +7,29 @@
 
 namespace vae::a11y {
 
+    // The other direction. Reading the tree is answered from a snapshot, which is what makes it
+    // safe to do from a bus callback; *acting* has to reach the live widget, and only the app knows
+    // how to get there. Every call runs on the app's own thread, from inside Bridge::Pump().
+    //
+    // Nodes are named by their index in the tree that was last published, which is the only name
+    // the thing on the other end has.
+    class Actor {
+    public:
+        virtual ~Actor() = default;
+
+        // Perform an action on a node. False when it could not be done, which the bus reports back
+        // rather than swallowing — a screen reader that says "done" about nothing is worse than
+        // one that says it cannot.
+        virtual bool Do(u32 node, Action action) = 0;
+
+        // Move the caret in a text field, in characters. `end` equal to `start` clears the
+        // selection, which is what setting a caret means.
+        virtual bool SetCaret(u32 node, u32 start, u32 end) = 0;
+
+        // Give a node the keyboard focus, which is how a screen reader moves through an app.
+        virtual bool Focus(u32 node) = 0;
+    };
+
     // Carries the accessibility tree to whatever the desktop uses to read a screen out loud.
     //
     // On Linux that is AT-SPI, which is a D-Bus protocol: the app exports an object per accessible
@@ -26,6 +49,11 @@ namespace vae::a11y {
         virtual bool Connect(std::string_view applicationName) = 0;
         virtual bool Connected() const = 0;
         virtual void Shutdown() = 0;
+
+        // Who to ask when a screen reader wants something done. Null — the default — makes every
+        // action fail politely, which is the right answer for anything publishing a tree it does
+        // not own, and the state a bridge is in before the app has finished starting.
+        virtual void SetActor(Actor* actor) = 0;
 
         // The whole tree, whenever it has changed. Cheap when nothing did: publishing compares
         // against what was last sent and says nothing when the answer is the same, because a

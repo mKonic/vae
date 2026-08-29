@@ -8,6 +8,7 @@
 #include "vae/ui/UiHost.h"
 
 #include <string>
+#include <vector>
 
 using namespace vae;
 using namespace vae::ui;
@@ -302,4 +303,244 @@ TEST(a11y, every_widget_in_the_library_has_a_role_that_is_not_a_panel) {
         if (!found) VAE_ERROR("a11y: {} is not announced as {}", c.widget, a11y::RoleName(c.role));
         CHECK(found);
     }
+}
+
+// --- acting, not just reading -------------------------------------------------------------------
+//
+// The tree above is what a screen reader hears. These are what it can *do* — the actions it offers
+// the user, and the caret it needs to follow a typist through a field. Both are computed here and
+// carried by the AT-SPI bridge, which is the half that needs a bus and cannot be a unit test.
+
+namespace {
+
+    std::vector<std::string> ActionNames(const a11y::Node& node) {
+        std::vector<std::string> out;
+        for (u32 i = 0; i < static_cast<u32>(a11y::Action::Count); ++i)
+            if (a11y::Has(node.actions, static_cast<a11y::Action>(i)))
+                out.emplace_back(a11y::ActionName(static_cast<a11y::Action>(i)));
+        return out;
+    }
+
+}
+
+TEST(a11y, a_button_offers_exactly_one_thing_to_do) {
+    A11yUi ui;
+    ui.Place("Button");
+    const a11y::Tree tree = ui.Build();
+
+    const a11y::Node* button = FindRole(tree, a11y::Role::PushButton);
+    CHECK(button != nullptr);
+    if (!button) return;
+    CHECK(ActionNames(*button) == std::vector<std::string>{ "click" });
+}
+
+TEST(a11y, a_checkbox_says_it_toggles_rather_than_only_that_it_clicks) {
+    A11yUi ui;
+    ui.Place("Checkbox");
+    const a11y::Tree tree = ui.Build();
+
+    const a11y::Node* box = FindRole(tree, a11y::Role::CheckBox);
+    CHECK(box != nullptr);
+    if (!box) return;
+    // Both, and in this order: a screen reader reads the first out as the default and the second
+    // is what actually describes the effect.
+    CHECK(ActionNames(*box) == (std::vector<std::string>{ "click", "toggle" }));
+}
+
+TEST(a11y, a_dropdown_offers_to_expand_and_then_to_collapse) {
+    A11yUi ui;
+    const Uuid drop = ui.Place("Dropdown");
+
+    const a11y::Tree closed = ui.Build();
+    const a11y::Node* shut = FindRole(closed, a11y::Role::ComboBox);
+    CHECK(shut != nullptr);
+    if (!shut) return;
+    CHECK(a11y::Has(shut->state, a11y::State::Expandable));
+    CHECK(!a11y::Has(shut->state, a11y::State::Expanded));
+    CHECK(a11y::Has(shut->actions, a11y::Action::Expand));
+    CHECK(!a11y::Has(shut->actions, a11y::Action::Collapse));
+
+    // Opened by clicking it, which is the same gesture the bridge performs.
+    const Rect bounds = closed.At(closed.ForView(shut->view)).bounds;
+    const Vec2 centre = bounds.Center();
+    ui.host.DispatchAll({ MakeMouseMoved(centre.x, centre.y),
+                          MakeMouseButton(EventType::MouseButtonPressed, Mouse::Left,
+                                          centre.x, centre.y, Mod::None),
+                          MakeMouseButton(EventType::MouseButtonReleased, Mouse::Left,
+                                          centre.x, centre.y, Mod::None) });
+    (void)drop;
+
+    const a11y::Tree open = ui.Build();
+    const a11y::Node* shown = FindRole(open, a11y::Role::ComboBox);
+    CHECK(shown != nullptr);
+    if (!shown) return;
+    CHECK(a11y::Has(shown->state, a11y::State::Expanded));
+    // One or the other, never both: offering to open what is open is an instruction that does
+    // nothing, which is worse than not offering it.
+    CHECK(a11y::Has(shown->actions, a11y::Action::Collapse));
+    CHECK(!a11y::Has(shown->actions, a11y::Action::Expand));
+}
+
+TEST(a11y, a_switch_is_not_expandable_and_does_not_offer_to_open) {
+    // A switch and a collapsible section are both announced as toggle buttons, and only one of
+    // them contains anything. Deciding on the announced role told a screen reader it could open
+    // a switch.
+    A11yUi ui;
+    ui.Place("Switch");
+    const a11y::Tree tree = ui.Build();
+
+    const a11y::Node* toggle = FindRole(tree, a11y::Role::ToggleButton);
+    CHECK(toggle != nullptr);
+    if (!toggle) return;
+    CHECK(!a11y::Has(toggle->state, a11y::State::Expandable));
+    CHECK(ActionNames(*toggle) == (std::vector<std::string>{ "click", "toggle" }));
+}
+
+TEST(a11y, a_disabled_control_offers_nothing_to_do) {
+    A11yUi ui;
+    const Uuid button = ui.Place("Button");
+    ui.SetOn(button, "Button", doc::Prop::Enabled, false);
+
+    const a11y::Tree tree = ui.Build();
+    const a11y::Node* node = FindRole(tree, a11y::Role::PushButton);
+    CHECK(node != nullptr);
+    if (node) CHECK_EQ(node->actions, 0u);
+}
+
+TEST(a11y, a_label_is_read_and_never_operated) {
+    A11yUi ui;
+    const Uuid heading = ui.document.CreateNode(doc::NodeKind::Text, ui.screen, "Heading");
+    ui.document.Find(heading)->props.Set(doc::Prop::Text, std::string("A heading"));
+    ui.document.Touch(heading);
+    ui.Frame();
+
+    const a11y::Tree tree = ui.Build();
+    const a11y::Node* label = FindRole(tree, a11y::Role::Label);
+    CHECK(label != nullptr);
+    if (label) CHECK_EQ(label->actions, 0u);
+}
+
+TEST(a11y, an_entry_reports_where_the_caret_is_in_characters) {
+    A11yUi ui;
+    const Uuid field = ui.Place("TextInput");
+    // Four characters, seven bytes: AT-SPI counts characters and an edit state counts bytes, and
+    // a field with anything but ASCII in it is where the two stop agreeing.
+    ui.SetOn(field, "TextInput", doc::Prop::Text, std::string("na\xC3\xAF" "ve"));
+    ui.Frame();
+
+    a11y::Tree tree;
+    // Caret after the ï, which is byte 4 and character 3.
+    tree.Build(ui.host.Tree(), "Test app", [](u32, u32& caret, u32& anchor) {
+        caret = anchor = 4;
+        return true;
+    });
+
+    const a11y::Node* entry = FindRole(tree, a11y::Role::Entry);
+    CHECK(entry != nullptr);
+    if (!entry) return;
+    CHECK(entry->hasCaret);
+    CHECK_EQ(entry->caret, 3u);
+    CHECK_EQ(entry->selectionStart, 3u);
+    CHECK_EQ(entry->selectionEnd, 3u);
+    CHECK_EQ(entry->text, std::string("na\xC3\xAF" "ve"));
+}
+
+TEST(a11y, a_selection_is_reported_lowest_offset_first) {
+    A11yUi ui;
+    const Uuid field = ui.Place("TextInput");
+    ui.SetOn(field, "TextInput", doc::Prop::Text, std::string("hello world"));
+    ui.Frame();
+
+    a11y::Tree tree;
+    // Dragged backwards: the caret is before the anchor, and AT-SPI wants a range.
+    tree.Build(ui.host.Tree(), "Test app", [](u32, u32& caret, u32& anchor) {
+        caret = 2; anchor = 8;
+        return true;
+    });
+
+    const a11y::Node* entry = FindRole(tree, a11y::Role::Entry);
+    CHECK(entry != nullptr);
+    if (!entry) return;
+    CHECK_EQ(entry->caret, 2u);
+    CHECK_EQ(entry->selectionStart, 2u);
+    CHECK_EQ(entry->selectionEnd, 8u);
+}
+
+TEST(a11y, no_caret_source_means_no_caret_rather_than_offset_zero) {
+    A11yUi ui;
+    const Uuid field = ui.Place("TextInput");
+    ui.SetOn(field, "TextInput", doc::Prop::Text, std::string("hello"));
+
+    const a11y::Tree tree = ui.Build();
+    const a11y::Node* entry = FindRole(tree, a11y::Role::Entry);
+    CHECK(entry != nullptr);
+    if (entry) CHECK(!entry->hasCaret);
+}
+
+TEST(a11y, a_password_field_reports_its_length_and_never_its_contents) {
+    // The tree is published on a bus any process on the session can read, and the Text interface
+    // hands out exactly this string. "What is in that field" is the question a password field
+    // exists to refuse.
+    A11yUi ui;
+    const Uuid field = ui.Place("TextInput");
+    ui.SetOn(field, "TextInput", doc::Prop::Password, true);
+    ui.SetOn(field, "TextInput", doc::Prop::Text, std::string("hunter2"));
+
+    const a11y::Tree tree = ui.Build();
+    const a11y::Node* secret = FindRole(tree, a11y::Role::PasswordText);
+    CHECK(secret != nullptr);
+    if (!secret) return;
+    CHECK_EQ(secret->text, std::string("*******"));
+    CHECK(secret->text.find("hunter") == std::string::npos);
+    CHECK(secret->name.find("hunter") == std::string::npos);
+}
+
+TEST(a11y, the_same_control_keeps_its_key_across_a_rebuild) {
+    // What lets the bridge say "that checkbox is now checked" instead of "the screen is new".
+    // Tree position is not identity: the view tree is rebuilt from scratch every frame.
+    A11yUi ui;
+    const Uuid box = ui.Place("Checkbox");
+
+    const a11y::Tree before = ui.Build();
+    const a11y::Node* first = FindRole(before, a11y::Role::CheckBox);
+    CHECK(first != nullptr);
+    if (!first) return;
+    const u64 key = first->key;
+    CHECK(key != 0u);
+
+    // Something else appears above it, so every index below moves.
+    ui.Place("Button", { 40.0f, 300.0f });
+    ui.SetOn(box, "Checkbox", doc::Prop::Checked, true);
+
+    const a11y::Tree after = ui.Build();
+    const a11y::Node* second = FindRole(after, a11y::Role::CheckBox);
+    CHECK(second != nullptr);
+    if (!second) return;
+    CHECK_EQ(second->key, key);
+    CHECK(a11y::Has(second->state, a11y::State::Checked));
+
+    // And two different controls are not the same thing.
+    const a11y::Node* button = FindRole(after, a11y::Role::PushButton);
+    CHECK(button != nullptr);
+    if (button) CHECK(button->key != key);
+}
+
+TEST(a11y, moving_the_caret_changes_the_signature_so_it_is_published) {
+    // Publish only happens when the signature changes, so a caret left out of it is a caret a
+    // screen reader never hears move — which is the whole of following a typist.
+    A11yUi ui;
+    const Uuid field = ui.Place("TextInput");
+    ui.SetOn(field, "TextInput", doc::Prop::Text, std::string("hello"));
+    ui.Frame();
+
+    const auto Signature = [&ui](u32 at) {
+        a11y::Tree tree;
+        tree.Build(ui.host.Tree(), "Test app", [at](u32, u32& caret, u32& anchor) {
+            caret = anchor = at;
+            return true;
+        });
+        return tree.Signature();
+    };
+    CHECK(Signature(1) != Signature(4));
+    CHECK_EQ(Signature(2), Signature(2));
 }

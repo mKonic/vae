@@ -126,6 +126,9 @@ namespace vae::text {
         Scope<struct ColrLayers>                      m_Colr;
         ColourFormat                                  m_ColourFormat = ColourFormat::None;
         bool                                          m_Outlines = false;
+        // Where this font's table directory is. Non-zero only in a collection ('ttcf'), which is
+        // how Apple ships the colour face `sbix` exists for.
+        u32                                           m_Sfnt = 0;
     };
 
 }

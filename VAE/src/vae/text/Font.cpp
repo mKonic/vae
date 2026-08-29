@@ -123,14 +123,41 @@ namespace vae::text {
         }
     }
 
+    // Where the font's table directory starts. Zero for an ordinary file; a *collection* ('ttcf')
+    // holds several fonts in one file and lists where each begins. Apple Color Emoji — the font
+    // `sbix` is read for at all — ships as one, so this is not a hypothetical.
+    static u32 SfntOffset(const std::vector<u8>& data) {
+        if (data.size() < 16 || std::memcmp(data.data(), "ttcf", 4) != 0) return 0;
+        return Be32(data, 8) > 0 ? Be32(data, 12) : 0;      // numFonts, then the first one
+    }
+
+    // Whether the file is even shaped like a font, checked before stb_truetype is let near it.
+    // **`stbtt_InitFont` takes a pointer and no length**: it trusts the table directory and walks
+    // it, so a truncated or corrupt file reads straight off the end of the buffer. Every table
+    // this class reads for itself is bounds-checked in TableRange; this is that same check for the
+    // ones stb reads, done once, before anything is handed to it.
+    static bool Plausible(const std::vector<u8>& data, u32 sfnt) {
+        if (data.size() < static_cast<std::size_t>(sfnt) + 12) return false;
+        const u32 tables = Be16(data, sfnt + 4);
+        if (tables == 0 || data.size() < sfnt + 12 + static_cast<std::size_t>(tables) * 16)
+            return false;
+        for (u32 i = 0; i < tables; ++i) {
+            const std::size_t entry = sfnt + 12 + static_cast<std::size_t>(i) * 16;
+            const u32 offset = Be32(data, entry + 8), length = Be32(data, entry + 12);
+            if (offset > data.size() || length > data.size() - offset) return false;
+        }
+        return true;
+    }
+
     // Where a table is, walked by hand because stb_truetype has already refused the file and none
     // of its helpers are available on it. Offset and length, or {0,0} when there is no such table.
+    // Offsets are from the start of the *file* even in a collection; only the directory moves.
     std::pair<u32, u32> Font::TableRange(const char* tag) const {
-        if (m_Data.size() < 12) return { 0, 0 };
-        const u32 tables = Be16(m_Data, 4);
-        if (m_Data.size() < 12 + static_cast<std::size_t>(tables) * 16u) return { 0, 0 };
+        if (m_Data.size() < static_cast<std::size_t>(m_Sfnt) + 12) return { 0, 0 };
+        const u32 tables = Be16(m_Data, m_Sfnt + 4);
+        if (m_Data.size() < m_Sfnt + 12 + static_cast<std::size_t>(tables) * 16u) return { 0, 0 };
         for (u32 i = 0; i < tables; ++i) {
-            const std::size_t entry = 12 + static_cast<std::size_t>(i) * 16;
+            const std::size_t entry = m_Sfnt + 12 + static_cast<std::size_t>(i) * 16;
             if (std::memcmp(m_Data.data() + entry, tag, 4) != 0) continue;
             const u32 offset = Be32(m_Data, entry + 8), length = Be32(m_Data, entry + 12);
             if (offset > m_Data.size() || length > m_Data.size() - offset) return { 0, 0 };
@@ -291,8 +318,14 @@ namespace vae::text {
 
     bool Font::Init() {
         m_Impl = CreateScope<FontImpl>();
-        const int offset = stbtt_GetFontOffsetForIndex(m_Data.data(), 0);
-        m_Outlines = offset >= 0 && stbtt_InitFont(&m_Impl->info, m_Data.data(), offset);
+        m_Sfnt = SfntOffset(m_Data);
+        // Nothing below reads a byte until this says the directory is inside the file.
+        if (!Plausible(m_Data, m_Sfnt)) {
+            VAE_CORE_ERROR("'{}' is not a font: {} bytes with no readable table directory",
+                           m_Name, m_Data.size());
+            return false;
+        }
+        m_Outlines = stbtt_InitFont(&m_Impl->info, m_Data.data(), static_cast<int>(m_Sfnt));
 
         // Colour is asked about whether or not the outlines loaded, because two of the three
         // formats sit *on top of* an ordinary font. An sbix or COLR face is a normal face with an

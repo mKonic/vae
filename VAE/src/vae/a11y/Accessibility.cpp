@@ -2,6 +2,7 @@
 #include "vae/a11y/Accessibility.h"
 
 #include "vae/ui/ViewTree.h"
+#include "vae/base/Utf8.h"
 
 #include <array>
 
@@ -23,6 +24,29 @@ namespace vae::a11y {
     const char* RoleName(Role role) {
         const auto index = static_cast<std::size_t>(role);
         return index < kRoleNames.size() ? kRoleNames[index] : "invalid";
+    }
+
+    // AT-SPI's own vocabulary again, and "click" in particular is not ours to rename: a screen
+    // reader reads the name out to the user, and every other toolkit on the desktop calls the
+    // thing a button does "click".
+    const char* ActionName(Action action) {
+        switch (action) {
+            case Action::Click:    return "click";
+            case Action::Toggle:   return "toggle";
+            case Action::Expand:   return "expand";
+            case Action::Collapse: return "collapse";
+            default:               return "";
+        }
+    }
+
+    const char* ActionDescription(Action action) {
+        switch (action) {
+            case Action::Click:    return "activate this control";
+            case Action::Toggle:   return "turn this on or off";
+            case Action::Expand:   return "show what this contains";
+            case Action::Collapse: return "hide what this contains";
+            default:               return "";
+        }
     }
 
     // VAE's roles are about behaviour and AT-SPI's are about what a thing is called. Mostly they
@@ -98,6 +122,32 @@ namespace vae::a11y {
             return role == Role::Slider || role == Role::ProgressBar;
         }
 
+        // What a screen reader may ask to have done. Everything that can be operated can be
+        // clicked; the rest are the cases where "click" alone would not say what happens.
+        ActionSet ActionsOf(Role role, StateSet state) {
+            if (!Interactive(role) || !Has(state, State::Sensitive)) return 0;
+            ActionSet set = Only(Action::Click);
+            // A checkbox is not "clicked" so much as changed, and a screen reader that can say so
+            // is telling the user what the key they are about to press will do.
+            if (role == Role::CheckBox || role == Role::RadioButton || role == Role::ToggleButton)
+                set |= Only(Action::Toggle);
+            // One or the other, never both: offering to expand something already open is an
+            // instruction that does nothing, which is worse than not offering it.
+            if (Has(state, State::Expandable))
+                set |= Only(Has(state, State::Expanded) ? Action::Collapse : Action::Expand);
+            return set;
+        }
+
+        // Characters before a byte offset. AT-SPI counts characters; a caret here is a byte index,
+        // and in a field holding anything but ASCII the two are different numbers.
+        u32 CharsBefore(std::string_view text, std::size_t bytes) {
+            bytes = std::min(bytes, text.size());
+            std::size_t at = 0;
+            u32 characters = 0;
+            while (at < bytes) { Utf8Next(text, at); ++characters; }
+            return characters;
+        }
+
         StateSet StatesOf(const ui::ViewTree& views, u32 view, Role role) {
             const ui::ViewTree::View& v = views.At(view);
             StateSet set = 0;
@@ -117,7 +167,11 @@ namespace vae::a11y {
                 set = set | State::Selectable;
             if (role == Role::Entry || role == Role::PasswordText)
                 if (!views.Flag(view, doc::Prop::ReadOnly, false)) set = set | State::Editable;
-            if (role == Role::ComboBox || role == Role::ToggleButton) {
+            // On the *widget* role, not the announced one. A switch and a collapsible section are
+            // both announced as toggle buttons, and only one of them contains anything: calling a
+            // switch expandable makes a screen reader offer to open it.
+            if (v.role == ui::Role::Dropdown || v.role == ui::Role::Combobox
+                || v.role == ui::Role::Collapsible) {
                 set = set | State::Expandable;
                 if (ui::HasState(v.state, ui::StateBit::Open)) set = set | State::Expanded;
             }
@@ -171,7 +225,7 @@ namespace vae::a11y {
         return Node::kInvalid;
     }
 
-    void Tree::Walk(const ui::ViewTree& views, u32 view, u32 parent) {
+    void Tree::Walk(const ui::ViewTree& views, u32 view, u32 parent, const CaretSource& carets) {
         if (!views.Valid(view)) return;
         const ui::ViewTree::View& v = views.At(view);
         // An invisible subtree is not announced at all. A screen reader reading out a closed menu
@@ -192,7 +246,7 @@ namespace vae::a11y {
 
         if (role == Role::Invalid) {
             // Nothing to announce here; its children may still have something.
-            for (u32 child : v.children) Walk(views, child, parent);
+            for (u32 child : v.children) Walk(views, child, parent, carets);
             return;
         }
 
@@ -201,6 +255,14 @@ namespace vae::a11y {
         node.view = view;
         node.bounds = views.Bounds(view);
         node.state = StatesOf(views, view, role);
+        node.actions = ActionsOf(role, node.state);
+        // Document identity, not tree position. The view tree is rebuilt from scratch whenever
+        // anything changes, so an index is only ever "where it was this time"; the pair of ids is
+        // what makes two builds of the same screen recognisably the same controls. The row is in
+        // it because every copy of a repeated container is the same document node.
+        node.key = std::hash<u64>{}(v.sourceId.Value())
+                 ^ (std::hash<u64>{}(v.instanceId.Value()) << 1)
+                 ^ (static_cast<u64>(v.row + 1) << 40);
 
         node.description = views.Str(view, doc::Prop::Tooltip);
         node.name = views.Str(view, doc::Prop::A11yLabel);
@@ -225,8 +287,29 @@ namespace vae::a11y {
         // — "Frame 12", "IconButton" — and announcing it would hide exactly the case this is meant
         // to catch behind a string that means nothing to whoever is listening.
 
-        if (role == Role::Entry || role == Role::PasswordText)
-            node.text = views.Str(view, doc::Prop::Text);
+        if (role == Role::Entry || role == Role::PasswordText) {
+            const std::string typed = views.Str(view, doc::Prop::Text);
+            // A password field reports its *length*, never its contents. The tree is published on
+            // a bus any process on the session can read, and "what is in that field" is exactly
+            // the question a password field exists to refuse. Masked here rather than at the
+            // bridge so nothing downstream — a test, a Studio panel — can hold the real one.
+            if (role == Role::PasswordText) {
+                node.text.clear();
+                for (std::size_t i = 0, count = Utf8Length(typed); i < count; ++i) node.text += "*";
+            } else {
+                node.text = typed;
+            }
+
+            if (carets) {
+                u32 caret = 0, anchor = 0;
+                if (carets(view, caret, anchor)) {
+                    node.hasCaret = true;
+                    node.caret = CharsBefore(typed, caret);
+                    node.selectionStart = CharsBefore(typed, std::min(caret, anchor));
+                    node.selectionEnd   = CharsBefore(typed, std::max(caret, anchor));
+                }
+            }
+        }
 
         if (ReadsAValue(role)) {
             node.hasValue = true;
@@ -257,11 +340,12 @@ namespace vae::a11y {
             if (spokenFor && views.At(child).kind == doc::NodeKind::Text
                           && RoleFor(views.At(child).role, false, false) == Role::Invalid)
                 continue;
-            Walk(views, child, index);
+            Walk(views, child, index, carets);
         }
     }
 
-    void Tree::Build(const ui::ViewTree& views, std::string_view windowName) {
+    void Tree::Build(const ui::ViewTree& views, std::string_view windowName,
+                     const CaretSource& carets) {
         Clear();
         m_ByView.assign(views.ViewCount(), Node::kInvalid);
 
@@ -272,7 +356,7 @@ namespace vae::a11y {
         if (views.Valid(views.Root())) window.bounds = views.Bounds(views.Root());
         Add(Node::kInvalid, std::move(window));
 
-        if (views.Valid(views.Root())) Walk(views, views.Root(), 0);
+        if (views.Valid(views.Root())) Walk(views, views.Root(), 0, carets);
 
         // Everything that would change what is announced. Position is in it because a screen
         // reader draws a box around what it is reading; the sub-pixel part is not, because a
@@ -290,6 +374,10 @@ namespace vae::a11y {
             mix(static_cast<u64>(static_cast<i64>(node.bounds.size.x)));
             mix(static_cast<u64>(static_cast<i64>(node.bounds.size.y)));
             if (node.hasValue) mix(static_cast<u64>(static_cast<i64>(node.value * 1000.0f)));
+            mix(node.actions);
+            // The caret is in here because moving it is news: a screen reader following a typist
+            // has to hear about it, and Publish only happens when this number changes.
+            if (node.hasCaret) mix((static_cast<u64>(node.caret) << 32) | node.selectionEnd);
             mix(node.children.size());
         }
     }

@@ -2,6 +2,7 @@
 #include "vae/app/RunLayer.h"
 
 #include "vae/base/FileSystem.h"
+#include "vae/base/Utf8.h"
 
 #include <cstdlib>
 #include "vae/base/Platform.h"
@@ -208,6 +209,7 @@ namespace vae::app {
                 const bool ok = m_Bridge->Connect(ScreenName());
                 VAE_CORE_INFO("accessibility: {}", m_Bridge->Status());
                 if (!ok) m_Bridge.reset();
+                else     m_Bridge->SetActor(&m_ScreenReader);
             }
             if (!m_Bridge) return;
         }
@@ -215,12 +217,130 @@ namespace vae::app {
         // Built every frame and sent only when it differs. Building is a walk of the view tree;
         // telling a screen reader that the whole screen is new makes it read the screen out again,
         // so the second is the one worth being careful about.
-        m_Accessibility.Build(m_Host.Tree(), ScreenName());
+        // The caret comes from the host rather than the view tree: an edit state has to survive
+        // the tree being rebuilt, so that is where it lives.
+        m_Accessibility.Build(m_Host.Tree(), ScreenName(), [this](u32 view, u32& caret, u32& anchor) {
+            const ui::ViewTree& views = m_Host.Tree();
+            if (!views.Valid(view)) return false;
+            const ui::WidgetId id{ views.At(view).sourceId, views.At(view).instanceId };
+            const ui::TextEditState* edit = m_Host.FindEditState(id);
+            if (!edit) return false;
+            caret  = static_cast<u32>(edit->caret);
+            anchor = static_cast<u32>(edit->anchor);
+            return true;
+        });
         if (m_Accessibility.Signature() != m_PublishedRevision) {
             m_Bridge->Publish(m_Accessibility);
             m_PublishedRevision = m_Accessibility.Signature();
         }
         m_Bridge->Pump();
+    }
+
+    // --- what a screen reader can do -----------------------------------------------------------
+
+    u32 RunLayer::ScreenReader::ViewFor(u32 node) const {
+        const a11y::Tree& tree = m_Layer.m_Accessibility;
+        if (node >= tree.Count()) return ui::ViewTree::kInvalid;
+        const u32 view = tree.At(node).view;
+        return m_Layer.m_Host.Tree().Valid(view) ? view : ui::ViewTree::kInvalid;
+    }
+
+    bool RunLayer::ScreenReader::Queue(Request request) {
+        // A screen reader asks for one thing at a time and waits for the answer, so this never
+        // grows. The cap is here so that a client which does not wait cannot make it.
+        if (m_Pending.size() >= 32) return false;
+        m_Pending.push_back(request);
+
+        // And ask for the frame that will carry it out. An idle app is blocked in WaitEvents, and
+        // without this the press would happen whenever the half-second safety net next expired —
+        // which a person waiting for their screen reader would feel.
+        if (Application::Exists()) {
+            Application::Get().RequestFrame();
+            // And wake the loop, which is blocked in WaitEvents. Not in a headless run, which has
+            // no window to post to and no loop to wake.
+            if (Application::Get().HasWindow()) Application::Get().GetWindow().PostEmptyEvent();
+        }
+        return true;
+    }
+
+    bool RunLayer::ScreenReader::Do(u32 node, a11y::Action action) {
+        const u32 view = ViewFor(node);
+        if (view == ui::ViewTree::kInvalid) return false;
+        if (m_Layer.m_Host.Tree().Bounds(view).Empty()) return false;
+        // Every action a VAE control has is the same gesture — a checkbox is toggled by clicking
+        // it, a combo box is expanded by clicking it. The names differ because what the user is
+        // told differs; there is no second way in, and inventing one would be a code path only a
+        // screen reader ever took, and so a code path only a screen reader could find broken.
+        (void)action;
+        return Queue({ Request::Kind::Act, node, 0, 0 });
+    }
+
+    bool RunLayer::ScreenReader::SetCaret(u32 node, u32 start, u32 end) {
+        const u32 view = ViewFor(node);
+        if (view == ui::ViewTree::kInvalid) return false;
+        const ui::ViewTree& views = m_Layer.m_Host.Tree();
+        const ui::WidgetId id{ views.At(view).sourceId, views.At(view).instanceId };
+        if (!m_Layer.m_Host.FindEditState(id)) return false;
+        return Queue({ Request::Kind::Caret, node, start, end });
+    }
+
+    bool RunLayer::ScreenReader::Focus(u32 node) {
+        const u32 view = ViewFor(node);
+        if (view == ui::ViewTree::kInvalid) return false;
+        return Queue({ Request::Kind::Focus, node, 0, 0 });
+    }
+
+    void RunLayer::ScreenReader::Drain() {
+        if (m_Pending.empty()) return;
+        const std::vector<Request> pending = std::move(m_Pending);
+        m_Pending.clear();
+
+        ui::UiHost& host = m_Layer.m_Host;
+        for (const Request& request : pending) {
+            // Resolved again here, not when it was asked for: a frame has passed, and the tree it
+            // named may have been rebuilt around it.
+            const u32 view = ViewFor(request.node);
+            if (view == ui::ViewTree::kInvalid) continue;
+
+            switch (request.kind) {
+                case Request::Kind::Act: {
+                    const Rect bounds = host.Tree().Bounds(view);
+                    if (bounds.Empty()) break;
+                    const Vec2 centre = bounds.Center();
+                    // A real click, through the same hit test and the same behaviors as a pointer.
+                    // Calling into the widget directly would be a path only this ever takes.
+                    host.DispatchAll({ MakeMouseMoved(centre.x, centre.y),
+                                       MakeMouseButton(EventType::MouseButtonPressed, Mouse::Left,
+                                                       centre.x, centre.y, Mod::None),
+                                       MakeMouseButton(EventType::MouseButtonReleased, Mouse::Left,
+                                                       centre.x, centre.y, Mod::None) });
+                    break;
+                }
+                case Request::Kind::Caret: {
+                    const ui::ViewTree& views = host.Tree();
+                    const ui::WidgetId id{ views.At(view).sourceId, views.At(view).instanceId };
+                    if (!host.FindEditState(id)) break;
+
+                    // Back from characters to bytes. The offsets came from AT-SPI, which counts
+                    // characters; an edit state counts bytes, and a field with anything but ASCII
+                    // in it would otherwise have its caret put inside a character.
+                    const std::string text = views.Str(view, doc::Prop::Text);
+                    const auto ByteAt = [&text](u32 characters) {
+                        std::size_t at = 0;
+                        for (u32 i = 0; i < characters && at < text.size(); ++i) Utf8Next(text, at);
+                        return at;
+                    };
+                    ui::TextEditState& edit = host.EditState(id);
+                    edit.anchor = ByteAt(std::min(request.start, request.end));
+                    edit.caret  = ByteAt(std::max(request.start, request.end));
+                    break;
+                }
+                case Request::Kind::Focus:
+                    host.Focus(view);
+                    break;
+            }
+        }
+        host.MarkDirty();
     }
 
     void RunLayer::Resize(Vec2 window) {
@@ -269,6 +389,9 @@ namespace vae::app {
         //   lay out — the tree that is showing after that navigation
         //   sync — mount what appeared and unmount what left
         //   tick — timers and on_update, for what is live now
+        // First of all, because a screen reader's press has to be indistinguishable from a
+        // pointer's — and a pointer's arrived before this line, in OnEvent.
+        m_ScreenReader.Drain();
         m_Runtime.Dispatch(m_Host.TakeActions());
         if (m_Host.ApplyNavigation()) Resize(m_WindowSize);
         m_Host.Update(m_WindowSize, ts);

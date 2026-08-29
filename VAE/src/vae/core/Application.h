@@ -71,6 +71,9 @@ namespace vae {
         int  ExitCode() const { return m_ExitCode; }
 
         static Application& Get() { return *s_Instance; }
+        // Whether there is one. A headless run — the test suite, --selftest — has none, and code
+        // reached from both has to be able to ask rather than dereference null to find out.
+        static bool Exists() { return s_Instance != nullptr; }
 
     private:
         AppSpec           m_Spec;

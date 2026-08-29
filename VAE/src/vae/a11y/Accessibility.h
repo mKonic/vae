@@ -3,6 +3,7 @@
 #include "vae/base/Math.h"
 #include "vae/ui/Widget.h"
 
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -56,6 +57,19 @@ namespace vae::a11y {
     inline StateSet operator|(StateSet a, State b) { return a | static_cast<u32>(b); }
     inline bool Has(StateSet set, State bit) { return (set & static_cast<u32>(bit)) != 0; }
 
+    // What can be *done* to a node, as opposed to read off it. A screen reader offers these to the
+    // user by name and then asks the app to perform one, which is the whole difference between an
+    // app somebody can hear and an app somebody can use. Deliberately a short list: these are the
+    // things a VAE control really has, not a translation of every event a widget can receive.
+    enum class Action : u8 { Click, Toggle, Expand, Collapse, Count };
+
+    const char* ActionName(Action action);
+    const char* ActionDescription(Action action);
+
+    using ActionSet = u32;
+    inline ActionSet Only(Action action) { return 1u << static_cast<u32>(action); }
+    inline bool Has(ActionSet set, Action action) { return (set & Only(action)) != 0; }
+
     struct Node {
         static constexpr u32 kInvalid = 0xFFFFFFFFu;
 
@@ -77,14 +91,37 @@ namespace vae::a11y {
         bool hasValue = false;
         f32 value = 0.0f, minimum = 0.0f, maximum = 100.0f, step = 1.0f;
 
+        // What a screen reader may ask to have done to this. Empty for anything that is only read.
+        ActionSet actions = 0;
+
+        // Where the caret is in `text` and what of it is selected, in **characters**. AT-SPI counts
+        // characters and VAE stores byte offsets, and a field with anything but ASCII in it reports
+        // the wrong place in itself if that conversion is skipped. Only an entry has these.
+        bool hasCaret = false;
+        u32 caret = 0;
+        u32 selectionStart = 0, selectionEnd = 0;
+
         // Back to the view this came from, so a screen reader's "press this" reaches the widget.
         u32 view = kInvalid;
+
+        // What this node *is*, independently of where it landed in either tree. Two builds of the
+        // same screen give the same key for the same control, which is what lets the bridge tell a
+        // node that changed from one that merely moved — and so say "checked" to a screen reader
+        // instead of "the whole screen is new". Zero for the window, which is always node 0.
+        u64 key = 0;
     };
 
     // The tree, rebuilt from a view tree whenever the view tree changes.
     class Tree {
     public:
-        void Build(const ui::ViewTree& views, std::string_view windowName);
+        // Where the caret is in a text field, in bytes into its text, and where its selection was
+        // anchored. A parameter because the view tree does not hold it: an edit state has to
+        // survive the tree being rebuilt, so it lives on the host instead. Absent is fine — a
+        // document being inspected rather than run has no carets in it.
+        using CaretSource = std::function<bool(u32 view, u32& caret, u32& anchor)>;
+
+        void Build(const ui::ViewTree& views, std::string_view windowName,
+                   const CaretSource& carets = {});
         void Clear();
 
         const std::vector<Node>& Nodes() const { return m_Nodes; }
@@ -113,7 +150,7 @@ namespace vae::a11y {
 
     private:
         u32 Add(u32 parent, Node node);
-        void Walk(const ui::ViewTree& views, u32 view, u32 parent);
+        void Walk(const ui::ViewTree& views, u32 view, u32 parent, const CaretSource& carets);
 
         std::vector<Node> m_Nodes;
         std::vector<Problem> m_Problems;
