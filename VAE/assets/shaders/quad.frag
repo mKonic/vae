@@ -84,11 +84,11 @@ void main() {
     } else if (kind == kColourGlyph) {
         // An emoji brings its own colours. The instance contributes opacity and nothing else —
         // tinting it would make text colour apply to a picture, which is never what was meant.
-        // The atlas holds it premultiplied, so the colour is unmultiplied back out here rather
-        // than at the blend, which the rest of the pipeline expects to be straight alpha.
+        // The atlas holds straight alpha, the same as the PNG it came from and the same as this
+        // pipeline's blend expects, so there is nothing to unmultiply.
         vec2 uv = mix(q.uv.xy, q.uv.zw, t);
         vec4 texel = texture(uTextures[nonuniformEXT(uint(q.params.z + 0.5))], uv);
-        fill = vec4(texel.a > 0.0 ? texel.rgb / texel.a : texel.rgb, texel.a * q.color0.a);
+        fill = vec4(texel.rgb, texel.a * q.color0.a);
     } else {
         fill = q.color0;
     }

@@ -24,9 +24,11 @@ namespace vae::text {
 
     const Ref<Font>& TextStyle::FaceFor(u32 codepoint) const {
         if (WantsColour(codepoint)) {
-            if (font && font->Colour() && font->HasGlyph(codepoint)) return font;
+            // ColourCovers, not Colour: an sbix or COLR face draws most of its glyphs as plain
+            // outlines, so "this face can do colour" is not "this face does colour for *this*".
+            if (font && font->ColourCovers(codepoint)) return font;
             for (const auto& fallback : fallbacks)
-                if (fallback && fallback->Colour() && fallback->HasGlyph(codepoint)) return fallback;
+                if (fallback && fallback->ColourCovers(codepoint)) return fallback;
             if (db) {
                 const Ref<Font>& colour = db->FaceCovering(codepoint, weight, slant, true);
                 if (colour) return colour;

@@ -33,6 +33,16 @@ namespace vae::text {
         bool Colour() const { return channels == 4; }
     };
 
+    // How a face stores colour glyphs, when it has any. Four formats exist and three are read
+    // here. They are not variations on one idea: two are pictures and one is drawing instructions.
+    enum class ColourFormat {
+        None,
+        Cbdt,   // CBLC indexes CBDT: PNGs at one big ppem. Noto Color Emoji, and so every Linux.
+        Sbix,   // Apple's: PNGs again, indexed per strike per glyph, and the face keeps its outlines.
+        Colr,   // Not pictures at all — a base glyph is a list of other glyphs, each in a palette
+                // colour (COLR/CPAL). Composited here rather than drawn as layers; see Font.cpp.
+    };
+
     // A single face at arbitrary sizes. Rasterization is CPU-only with no GPU dependency, which is
     // what lets text measurement be unit-tested headlessly — layout depends on measurement, so if
     // measuring needed a device then so would every layout test.
@@ -42,10 +52,24 @@ namespace vae::text {
         static Ref<Font> LoadFromMemory(std::vector<u8> data, std::string name);
         ~Font();
 
-        // A face whose glyphs are pictures rather than outlines — a colour emoji font. It has no
-        // `glyf` table at all, so nothing that reads outlines can read it; its metrics come from
-        // HarfBuzz and its glyphs come out of the embedded bitmaps as colour.
-        bool Colour() const { return m_Colour; }
+        // Whether this face can produce colour glyphs at all, and how it stores them. Not the same
+        // question as whether a *particular* glyph is coloured: a CBDT emoji face has a picture for
+        // everything it covers, but a COLR face draws most of its glyphs as ordinary outlines and
+        // only some as layers.
+        bool Colour() const { return m_ColourFormat != ColourFormat::None; }
+        ColourFormat ColourStorage() const { return m_ColourFormat; }
+        bool HasColourGlyph(u32 glyph) const;
+        // The same question asked of a character rather than a glyph, which is what font selection
+        // wants: "does this face draw U+1F600 in colour", not "does it have some outline for it".
+        bool ColourCovers(u32 codepoint) const {
+            const u32 glyph = GlyphIndex(codepoint);
+            return glyph != 0 && HasColourGlyph(glyph);
+        }
+
+        // Whether the face has outlines to rasterize. False for CBDT emoji faces, which have no
+        // `glyf` table at all — that is why stb_truetype refuses them and why everything they
+        // answer comes from HarfBuzz and the bitmap strike instead.
+        bool Outlines() const { return m_Outlines; }
 
         const std::string& Name() const { return m_Name; }
         // From the font's own `name` table, not from the filename.
@@ -73,12 +97,18 @@ namespace vae::text {
 
     private:
         bool Init();
-        bool InitColour();
+        bool InitCbdt();
+        bool InitSbix();
+        bool InitColr();
         bool HasTable(const char* tag) const;
         std::pair<u32, u32> TableRange(const char* tag) const;
         f32  Scale(f32 pixelSize) const;
-        GlyphMetrics ColourGlyph(u32 glyph, f32 pixelSize) const;
-        GlyphBitmap  RasterizeColour(u32 glyph, f32 pixelSize) const;
+        // CBDT and sbix are both "a PNG and where to put it", so they share the two calls that
+        // turn one into metrics and pixels; only finding it differs.
+        GlyphMetrics PictureGlyph(u32 glyph, f32 pixelSize) const;
+        GlyphBitmap  RasterizePicture(u32 glyph, f32 pixelSize) const;
+        GlyphMetrics ColrGlyph(u32 glyph, f32 pixelSize) const;
+        GlyphBitmap  RasterizeColr(u32 glyph, f32 pixelSize) const;
 
         std::vector<u8> m_Data;
         std::string     m_Name;
@@ -91,8 +121,11 @@ namespace vae::text {
         mutable std::unordered_map<u64, GlyphMetrics> m_MetricsCache;
         mutable std::unordered_map<u32, u32>          m_IndexCache;
         mutable Scope<struct ShaperFace>              m_Shaper;
-        Scope<struct ColourStrike>                    m_Strike;
-        bool                                          m_Colour = false;
+        Scope<struct ColourStrike>                    m_Strike;   // CBDT
+        Scope<struct SbixStrike>                      m_Sbix;
+        Scope<struct ColrLayers>                      m_Colr;
+        ColourFormat                                  m_ColourFormat = ColourFormat::None;
+        bool                                          m_Outlines = false;
     };
 
 }

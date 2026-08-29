@@ -324,7 +324,8 @@ namespace vae::text {
         if (const auto it = m_Coverage.find(key); it != m_Coverage.end()) return it->second;
 
         const auto acceptable = [&](const Ref<Font>& font) {
-            return font && font->HasGlyph(codepoint) && (!preferColour || font->Colour());
+            if (!font) return false;
+            return preferColour ? font->ColourCovers(codepoint) : font->HasGlyph(codepoint);
         };
 
         // Loaded faces first: they cost nothing to ask, and on a machine whose fonts have already
