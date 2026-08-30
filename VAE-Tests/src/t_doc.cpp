@@ -2,6 +2,7 @@
 
 #include "vae/base/FileSystem.h"
 #include "vae/doc/Command.h"
+#include "vae/doc/LayoutText.h"
 #include "vae/doc/Serializer.h"
 #include "vae/doc/Strings.h"
 #include "vae/ui/Library.h"
@@ -1086,6 +1087,103 @@ TEST(doc, a_field_binding_survives_a_round_trip_through_the_serializer) {
     CHECK_MESSAGE(Serializer::FromXml(xml, loaded, &error), error);
     CHECK_EQ(loaded.GetProp(list, Prop::Repeat), Value{ 3.0f });
     CHECK_EQ(loaded.GetProp(body, Prop::Field), Value{ std::string("fill:tint") });
+}
+
+// ------------------------------------------------------- format: the layout field table
+
+namespace {
+
+    // Every field of a LayoutStyle at something that is NOT its default. The point of the tests
+    // below is that a field the table forgot is a field this style sets and the file does not
+    // carry, so every value here has to actually differ from LayoutStyle{}.
+    layout::LayoutStyle EverythingSet() {
+        layout::LayoutStyle s;
+        s.mode        = layout::LayoutMode::Grid;
+        s.axis        = layout::Axis::Row;
+        s.width       = layout::Size::Fill(2.0f);
+        s.height      = layout::Size::Percent(0.5f);
+        s.padding     = Edges{ 1.0f, 2.0f, 3.0f, 4.0f };
+        s.gap         = 7.5f;
+        s.align       = layout::Align::Stretch;
+        s.justify     = layout::Justify::SpaceEvenly;
+        s.wrap        = true;
+        s.columns     = 4;
+        s.minColumn   = 123.0f;
+        s.rowGap      = 9.0f;
+        s.minSize     = { 10.0f, 20.0f };
+        s.maxSize     = { 800.0f, 600.0f };
+        s.aspectRatio = 1.0f / 3.0f;
+        s.offsetStart = { 5.0f, 6.0f };
+        s.offsetEnd   = { 7.0f, 8.0f };
+        s.constraintX = layout::Constraint::StartEnd;
+        s.constraintY = layout::Constraint::Scale;
+        return s;
+    }
+
+}
+
+TEST(layout_fields, the_table_knows_every_field_and_each_one_round_trips) {
+    // The whole reason the table exists. The names used to be written out three separate times —
+    // the reserved-attribute list, the writer, the reader — with nothing binding them, so a field
+    // added to two of the three failed silently: the encoder wrote an attribute the reader
+    // rejected, and a file VAE wrote was a file VAE would not open.
+    const layout::LayoutStyle full = EverythingSet();
+    const layout::LayoutStyle defaults;
+
+    CHECK_EQ(LayoutFields().size(), std::size_t(19));
+
+    std::size_t written = 0;
+    for (const LayoutField& field : LayoutFields()) {
+        // A field at its default writes nothing — that rule lives in the table, once.
+        CHECK_MESSAGE(!field.write(defaults).has_value(),
+                      std::string("'") + std::string(field.name) + "' wrote a default");
+
+        const auto text = field.write(full);
+        CHECK_MESSAGE(text.has_value(),
+                      std::string("'") + std::string(field.name) + "' wrote nothing when set");
+        if (!text) continue;
+        ++written;
+
+        // ...and what it wrote reads back as the same value, into a style that started empty.
+        layout::LayoutStyle back;
+        CHECK_MESSAGE(field.read(back, *text),
+                      std::string("'") + std::string(field.name) + "' cannot read \"" + *text + "\"");
+        CHECK_MESSAGE(field.write(back) == text,
+                      std::string("'") + std::string(field.name) + "' did not round trip");
+    }
+    CHECK_EQ(written, LayoutFields().size());
+}
+
+TEST(layout_fields, a_name_that_is_not_a_layout_field_is_not_found) {
+    CHECK(LayoutFieldNamed("width") != nullptr);
+    CHECK(LayoutFieldNamed("witdh") == nullptr);
+    // A property is not a layout field, and neither is a node flag: the three namespaces are
+    // disjoint, which is what lets an attribute be resolved by name alone.
+    CHECK(LayoutFieldNamed("fill") == nullptr);
+    CHECK(LayoutFieldNamed("hidden") == nullptr);
+}
+
+TEST(layout_fields, a_value_a_field_cannot_hold_is_refused_rather_than_dropped) {
+    layout::LayoutStyle s;
+    CHECK(!LayoutFieldNamed("mode")->read(s, "diagonal"));
+    CHECK(!LayoutFieldNamed("width")->read(s, "quite wide"));
+    CHECK(!LayoutFieldNamed("padding")->read(s, "1 2 3"));   // 1, 2 or 4 — never 3
+    CHECK(!LayoutFieldNamed("wrap")->read(s, "yes"));
+    CHECK(s == layout::LayoutStyle{});                        // and nothing was half-written
+}
+
+TEST(layout_fields, every_field_survives_a_document_round_trip) {
+    Document doc;
+    const Uuid node = doc.CreateNode(NodeKind::Frame, Uuid::Invalid(), "Everything");
+    doc.Find(node)->layout = EverythingSet();
+    doc.Touch(node);
+
+    Document loaded;
+    std::string error;
+    CHECK_MESSAGE(Serializer::FromXml(Serializer::ToXml(doc, true, nullptr, true), loaded, &error),
+                  error);
+    CHECK(loaded.Find(node) != nullptr);
+    if (loaded.Find(node)) CHECK(loaded.Find(node)->layout == EverythingSet());
 }
 
 // ------------------------------------------------------- format: what is not written

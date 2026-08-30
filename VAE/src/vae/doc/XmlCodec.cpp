@@ -1,6 +1,7 @@
 #include "vaepch.h"
 #include "vae/doc/Serializer.h"
 
+#include "vae/doc/LayoutText.h"
 #include "vae/doc/ValueText.h"
 
 #include <pugixml.hpp>
@@ -27,78 +28,7 @@ namespace vae::doc {
 
     namespace {
 
-        // ------------------------------------------------------------------ names
-
-        const char* LayoutModeName(layout::LayoutMode m) {
-            switch (m) {
-                case layout::LayoutMode::Absolute: return "absolute";
-                case layout::LayoutMode::Stack:    return "stack";
-                case layout::LayoutMode::Grid:     return "grid";
-            }
-            return "absolute";
-        }
-
-        const char* AxisName(layout::Axis a) {
-            return a == layout::Axis::Row ? "row" : "column";
-        }
-
-        const char* AlignName(layout::Align a) {
-            switch (a) {
-                case layout::Align::Start:   return "start";
-                case layout::Align::Center:  return "center";
-                case layout::Align::End:     return "end";
-                case layout::Align::Stretch: return "stretch";
-            }
-            return "start";
-        }
-
-        const char* JustifyName(layout::Justify j) {
-            switch (j) {
-                case layout::Justify::Start:        return "start";
-                case layout::Justify::Center:       return "center";
-                case layout::Justify::End:          return "end";
-                case layout::Justify::SpaceBetween: return "spaceBetween";
-                case layout::Justify::SpaceAround:  return "spaceAround";
-                case layout::Justify::SpaceEvenly:  return "spaceEvenly";
-            }
-            return "start";
-        }
-
-        const char* ConstraintName(layout::Constraint c) {
-            switch (c) {
-                case layout::Constraint::Start:    return "start";
-                case layout::Constraint::End:      return "end";
-                case layout::Constraint::StartEnd: return "startEnd";
-                case layout::Constraint::Center:   return "center";
-                case layout::Constraint::Scale:    return "scale";
-            }
-            return "start";
-        }
-
         // ------------------------------------------------------------------ scalars
-
-        // A size says its mode in its spelling: a bare number is pixels, which is the case that
-        // appears on 39 of Vaecord's 61 nodes and the one worth making shortest.
-        std::string SizeText(const layout::Size& size) {
-            switch (size.mode) {
-                case layout::SizeMode::Fixed:   return Number(size.value);
-                case layout::SizeMode::Hug:     return "hug";
-                case layout::SizeMode::Fill:    return size.value == 1.0f ? "fill"
-                                                                         : "fill " + Number(size.value);
-                case layout::SizeMode::Percent: return Number(size.value * 100.0f) + "%";
-            }
-            return "hug";
-        }
-
-        // One value for all four, two for horizontal and vertical, four for l t r b. The short
-        // forms are exactly Edges(f32) and Edges(h, v), so the file and the constructor agree —
-        // note this is NOT css order, which is t r b l.
-        std::string EdgesText(const Edges& e) {
-            if (e.left == e.right && e.top == e.bottom)
-                return e.left == e.top ? Number(e.left) : Number(e.left) + " " + Number(e.top);
-            return Number(e.left) + " " + Number(e.top) + " " + Number(e.right) + " "
-                 + Number(e.bottom);
-        }
 
         std::string ColorText(const Color& c) {
             if (auto hex = ColorToHex(c)) return *hex;
@@ -240,14 +170,8 @@ namespace vae::doc {
         bool IsReservedAttr(std::string_view name) {
             static constexpr std::string_view kNode[]{ "id", "name", "of", "start", "hidden",
                                                        "locked", "slot" };
-            static constexpr std::string_view kLayout[]{ "mode", "axis", "width", "height",
-                                                         "padding", "gap", "align", "justify",
-                                                         "wrap", "columns", "minColumn", "rowGap",
-                                                         "minSize", "maxSize", "aspectRatio",
-                                                         "offsetStart", "offsetEnd", "constraintX",
-                                                         "constraintY" };
-            for (std::string_view n : kNode)   if (n == name) return true;
-            for (std::string_view n : kLayout) if (n == name) return true;
+            for (std::string_view n : kNode) if (n == name) return true;
+            if (LayoutFieldNamed(name)) return true;
             return PropFromName(name).has_value();
         }
 
@@ -316,31 +240,12 @@ namespace vae::doc {
 
         // Only what differs from a default LayoutStyle, in the order the struct declares them —
         // eleven of the nineteen fields are at their default on 97-100% of real nodes, and a
-        // declared order reads better than the alphabetical one a map would give.
+        // declared order reads better than the alphabetical one a map would give. Both halves of
+        // that live in the table now: it is in declaration order, and a field equal to its default
+        // writes nothing.
         void LayoutAttrs(const layout::LayoutStyle& s, std::vector<Attr>& out) {
-            const layout::LayoutStyle d{};
-            if (s.mode != d.mode)               out.push_back({ "mode", LayoutModeName(s.mode) });
-            if (s.axis != d.axis)               out.push_back({ "axis", AxisName(s.axis) });
-            if (s.width != d.width)             out.push_back({ "width", SizeText(s.width) });
-            if (s.height != d.height)           out.push_back({ "height", SizeText(s.height) });
-            if (s.padding != d.padding)         out.push_back({ "padding", EdgesText(s.padding) });
-            if (s.gap != d.gap)                 out.push_back({ "gap", Number(s.gap) });
-            if (s.align != d.align)             out.push_back({ "align", AlignName(s.align) });
-            if (s.justify != d.justify)         out.push_back({ "justify", JustifyName(s.justify) });
-            if (s.wrap != d.wrap)               out.push_back({ "wrap", s.wrap ? "true" : "false" });
-            if (s.columns != d.columns)         out.push_back({ "columns", Number(static_cast<f32>(s.columns)) });
-            if (s.minColumn != d.minColumn)     out.push_back({ "minColumn", Number(s.minColumn) });
-            if (s.rowGap != d.rowGap)           out.push_back({ "rowGap", Number(s.rowGap) });
-            if (s.minSize != d.minSize)         out.push_back({ "minSize", Vec2Text(s.minSize) });
-            // An unbounded max is the default and usually absent; when only one axis is bounded,
-            // to_chars writes the other as "inf" and from_chars reads it back. JSON had to spell
-            // this as null, having no way to say infinity at all.
-            if (s.maxSize != d.maxSize)         out.push_back({ "maxSize", Vec2Text(s.maxSize) });
-            if (s.aspectRatio != d.aspectRatio) out.push_back({ "aspectRatio", Number(s.aspectRatio) });
-            if (s.offsetStart != d.offsetStart) out.push_back({ "offsetStart", Vec2Text(s.offsetStart) });
-            if (s.offsetEnd != d.offsetEnd)     out.push_back({ "offsetEnd", Vec2Text(s.offsetEnd) });
-            if (s.constraintX != d.constraintX) out.push_back({ "constraintX", ConstraintName(s.constraintX) });
-            if (s.constraintY != d.constraintY) out.push_back({ "constraintY", ConstraintName(s.constraintY) });
+            for (const LayoutField& field : LayoutFields())
+                if (auto value = field.write(s)) out.push_back({ std::string(field.name), *value });
         }
 
         // `skipText` is set when the text property is going into the element body instead, and
@@ -572,67 +477,6 @@ namespace vae::doc {
 
     namespace {
 
-        std::optional<layout::LayoutMode> LayoutModeFromName(std::string_view n) {
-            if (n == "absolute") return layout::LayoutMode::Absolute;
-            if (n == "stack")    return layout::LayoutMode::Stack;
-            if (n == "grid")     return layout::LayoutMode::Grid;
-            return std::nullopt;
-        }
-        std::optional<layout::Axis> AxisFromName(std::string_view n) {
-            if (n == "row")    return layout::Axis::Row;
-            if (n == "column") return layout::Axis::Column;
-            return std::nullopt;
-        }
-        std::optional<layout::Align> AlignFromName(std::string_view n) {
-            if (n == "start")   return layout::Align::Start;
-            if (n == "center")  return layout::Align::Center;
-            if (n == "end")     return layout::Align::End;
-            if (n == "stretch") return layout::Align::Stretch;
-            return std::nullopt;
-        }
-        std::optional<layout::Justify> JustifyFromName(std::string_view n) {
-            if (n == "start")        return layout::Justify::Start;
-            if (n == "center")       return layout::Justify::Center;
-            if (n == "end")          return layout::Justify::End;
-            if (n == "spaceBetween") return layout::Justify::SpaceBetween;
-            if (n == "spaceAround")  return layout::Justify::SpaceAround;
-            if (n == "spaceEvenly")  return layout::Justify::SpaceEvenly;
-            return std::nullopt;
-        }
-        std::optional<layout::Constraint> ConstraintFromName(std::string_view n) {
-            if (n == "start")    return layout::Constraint::Start;
-            if (n == "end")      return layout::Constraint::End;
-            if (n == "startEnd") return layout::Constraint::StartEnd;
-            if (n == "center")   return layout::Constraint::Center;
-            if (n == "scale")    return layout::Constraint::Scale;
-            return std::nullopt;
-        }
-
-        std::optional<layout::Size> SizeFromText(std::string_view s) {
-            if (s == "hug")  return layout::Size::Hug();
-            if (s == "fill") return layout::Size::Fill();
-            if (s.starts_with("fill ")) {
-                if (auto w = ParseNumber(s.substr(5))) return layout::Size::Fill(*w);
-                return std::nullopt;
-            }
-            if (s.ends_with("%")) {
-                if (auto f = ParseNumber(s.substr(0, s.size() - 1)))
-                    return layout::Size::Percent(*f / 100.0f);
-                return std::nullopt;
-            }
-            if (auto px = ParseNumber(s)) return layout::Size::Px(*px);
-            return std::nullopt;
-        }
-
-        std::optional<Edges> EdgesFromText(std::string_view s) {
-            auto nums = Numbers(s);
-            if (!nums) return std::nullopt;
-            if (nums->size() == 1) return Edges{ (*nums)[0] };
-            if (nums->size() == 2) return Edges{ (*nums)[0], (*nums)[1] };
-            if (nums->size() == 4) return Edges{ (*nums)[0], (*nums)[1], (*nums)[2], (*nums)[3] };
-            return std::nullopt;
-        }
-
         std::optional<ValueType> ValueTypeFromName(std::string_view n) {
             for (u8 i = 0; i <= static_cast<u8>(ValueType::Bound); ++i)
                 if (n == ValueTypeName(static_cast<ValueType>(i)))
@@ -674,50 +518,12 @@ namespace vae::doc {
             bool ReadLayout(const pugi::xml_attribute& a, layout::LayoutStyle& s, bool& handled) {
                 const std::string_view n = a.name();
                 const std::string_view v = a.value();
-                handled = true;
-                if (n == "mode") {
-                    if (auto m = LayoutModeFromName(v)) { s.mode = *m; return true; }
-                } else if (n == "axis") {
-                    if (auto x = AxisFromName(v)) { s.axis = *x; return true; }
-                } else if (n == "width") {
-                    if (auto z = SizeFromText(v)) { s.width = *z; return true; }
-                } else if (n == "height") {
-                    if (auto z = SizeFromText(v)) { s.height = *z; return true; }
-                } else if (n == "padding") {
-                    if (auto e = EdgesFromText(v)) { s.padding = *e; return true; }
-                } else if (n == "gap") {
-                    if (auto f = ParseNumber(v)) { s.gap = *f; return true; }
-                } else if (n == "align") {
-                    if (auto x = AlignFromName(v)) { s.align = *x; return true; }
-                } else if (n == "justify") {
-                    if (auto x = JustifyFromName(v)) { s.justify = *x; return true; }
-                } else if (n == "wrap") {
-                    s.wrap = v == "true"; return true;
-                } else if (n == "columns") {
-                    if (auto f = ParseNumber(v)) { s.columns = static_cast<u16>(*f); return true; }
-                } else if (n == "minColumn") {
-                    if (auto f = ParseNumber(v)) { s.minColumn = *f; return true; }
-                } else if (n == "rowGap") {
-                    if (auto f = ParseNumber(v)) { s.rowGap = *f; return true; }
-                } else if (n == "minSize") {
-                    if (auto p = Vec2FromText(v)) { s.minSize = *p; return true; }
-                } else if (n == "maxSize") {
-                    if (auto p = Vec2FromText(v)) { s.maxSize = *p; return true; }
-                } else if (n == "aspectRatio") {
-                    if (auto f = ParseNumber(v)) { s.aspectRatio = *f; return true; }
-                } else if (n == "offsetStart") {
-                    if (auto p = Vec2FromText(v)) { s.offsetStart = *p; return true; }
-                } else if (n == "offsetEnd") {
-                    if (auto p = Vec2FromText(v)) { s.offsetEnd = *p; return true; }
-                } else if (n == "constraintX") {
-                    if (auto x = ConstraintFromName(v)) { s.constraintX = *x; return true; }
-                } else if (n == "constraintY") {
-                    if (auto x = ConstraintFromName(v)) { s.constraintY = *x; return true; }
-                } else {
-                    handled = false;
-                    return true;
-                }
-                error = "attribute '" + std::string(n) + "' does not understand \"" + std::string(v) + "\"";
+                const LayoutField* field = LayoutFieldNamed(n);
+                handled = field != nullptr;
+                if (!handled) return true;
+                if (field->read(s, v)) return true;
+                error = "attribute '" + std::string(n) + "' does not understand \"" + std::string(v)
+                      + "\"";
                 return false;
             }
         };
