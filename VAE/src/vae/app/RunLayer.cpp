@@ -191,7 +191,6 @@ namespace vae::app {
             VAE_ERROR("app: renderer failed to initialise");
         m_Atlas.Init(*m_Device);
         m_Assets.SetDevice(m_Device);
-        app.SetContinuousRendering(true);
     }
 
     void RunLayer::OnDetach() {
@@ -541,6 +540,21 @@ namespace vae::app {
         // Last: an answer from the network is delivered here, so a script sees it in the frame
         // after it arrived rather than the frame after that.
         m_Services.Tick(ts);
+
+        RequestFrameIfBusy();
+    }
+
+    // An app that is sitting still costs nothing: the loop blocks in WaitEvents until something
+    // happens, and this is what says something still is. Rendering unconditionally — which is what
+    // this layer used to ask for — spent a core on redrawing an unchanged screen forever.
+    //
+    // The signals are everything that can change the picture without anyone touching the app.
+    // A script's on_update is covered by the tree: changing anything invalidates the layout, which
+    // asks for the frame that draws it, and a script that changes nothing stops asking.
+    void RunLayer::RequestFrameIfBusy() {
+        if (!Application::Get().HasDevice()) return;   // headless drives its own frames
+        if (m_Host.NeedsFrame() || m_Runtime.HasPendingTimers() || m_Services.Busy())
+            Application::Get().RequestFrame();
     }
 
     void RunLayer::Paint() {

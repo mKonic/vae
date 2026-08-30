@@ -145,6 +145,9 @@ namespace vae {
 
     void Application::Run() {
         m_LastFrameTime = NowSeconds();
+        // The first frame is always owed: nothing has happened yet, and a window that waits for
+        // something to happen before it draws opens blank.
+        m_FrameRequested = true;
 
         while (m_Running) {
             if (m_Window) {
@@ -159,13 +162,22 @@ namespace vae {
             const Timestep ts{ static_cast<f32>(now - m_LastFrameTime) };
             m_LastFrameTime = now;
 
+            // Waiting is not the same as not drawing, and on Wayland the difference is the whole
+            // problem: the compositor's frame callback wakes WaitEvents at vsync whether or not
+            // anything changed, so a loop that draws every time it wakes draws at 60 Hz forever.
+            // What decides a frame is whether one was asked for.
+            const bool draw = m_Continuous || m_FrameRequested;
             m_FrameRequested = false;
 
             const bool minimized = m_Window && m_Window->Minimized();
             if (!minimized) {
+                // Layers update every pass, drawn or not: timers, network answers and script
+                // clocks have to keep running, and asking for the next frame is how a layer that
+                // did something says so. Cheap by construction — a layout that nothing invalidated
+                // returns immediately.
                 for (auto& layer : m_LayerStack) layer->OnUpdate(ts);
 
-                if (m_Device) {
+                if (draw && m_Device) {
                     // BeginFrame returns null when the frame must be skipped (the swapchain is
                     // being rebuilt). Recording anything in that case is undefined.
                     if (gpu::CommandList* cmd = m_Device->BeginFrame()) {
@@ -189,7 +201,7 @@ namespace vae {
                         m_Device->EndFrame();
                         ++m_FrameCount;
                     }
-                } else {
+                } else if (draw) {
                     ++m_FrameCount;
                 }
             }

@@ -189,6 +189,14 @@ namespace vae::ui {
         m_Animating = m_Animating || m_AnimationRequested;
     }
 
+    bool UiHost::NeedsFrame() const {
+        if (m_Animating || m_Dirty || !m_Actions.empty()) return true;
+        if (m_Tree && m_Tree->NeedsLayout()) return true;
+        for (const auto& overlay : m_Overlays)
+            if (overlay->tree->NeedsLayout() || overlay->timeToLive > 0.0f) return true;
+        return false;
+    }
+
     void UiHost::TickTree(ViewTree& tree, f32 dt) {
         for (u32 i = 0; i < tree.ViewCount(); ++i) {
             Behavior* behavior = tree.At(i).behavior;

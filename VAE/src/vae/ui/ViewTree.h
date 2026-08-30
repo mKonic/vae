@@ -190,7 +190,7 @@ namespace vae::ui {
             f32 duration = 0.14f;
             motion::Easing curve = motion::Easing::OutCubic;
         };
-        void SetMotion(Motion motion) { m_Motion = motion; }
+        void SetMotion(Motion motion) { m_Motion = motion; m_NeedsSolve = true; }
         const Motion& MotionSettings() const { return m_Motion; }
         // Advances every transition. True while anything is still moving, which is what tells an
         // idle main loop it owes another frame.
@@ -218,6 +218,12 @@ namespace vae::ui {
         // True once since the last layout: a behavior moved something. Lets the host re-solve only
         // when a knob or a thumb actually moved rather than laying out twice every frame.
         bool ConsumeLayoutDirty();
+        // Whether a solve is owed. A script that changes something after the frame's layout has
+        // already run needs the next frame to happen, or what it changed is never drawn.
+        bool NeedsLayout() const { return m_NeedsSolve; }
+        // Says the next Layout() has real work to do. Everything that can change where a box ends
+        // up goes through here, and Layout() returns immediately when nothing has.
+        void InvalidateLayout() { m_NeedsSolve = true; }
 
         doc::Document& Document() const { return *m_Document; }
         layout::LayoutTree& LayoutNodes() { return m_Layout; }
@@ -292,6 +298,10 @@ namespace vae::ui {
         motion::Driver m_Driver;
         Motion m_Motion{};
         bool m_LayoutDirty = false;
+        // Whether the solve on the tree is still the right answer. Laying out again when nothing
+        // has moved re-derives an answer that is already there, which was the entire per-frame cost
+        // of an app sitting still — 1.0 ms at 4,000 views, every frame, for nothing.
+        bool m_NeedsSolve = true;
         Vec2 m_Available{ 0.0f, 0.0f };
         Vec2 m_Origin{ 0.0f, 0.0f };
     };

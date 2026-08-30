@@ -289,6 +289,12 @@ namespace vae::script {
         }
     }
 
+    bool Runtime::HasPendingTimers() const {
+        for (const auto& [instance, record] : m_Live)
+            if (!record->timers.empty()) return true;
+        return false;
+    }
+
     void Runtime::Update(f32 dt) {
         if (!m_Host) return;
 

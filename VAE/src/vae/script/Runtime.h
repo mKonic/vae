@@ -75,6 +75,9 @@ namespace vae::script {
         bool Reload(std::string* error = nullptr);
 
         std::size_t LiveCount() const { return m_Live.size(); }
+        // Whether any live script has asked to be woken again. A timer is the only thing a script
+        // owns that fires without anyone touching the app.
+        bool HasPendingTimers() const;
         bool IsLive(Uuid instance) const { return m_Live.contains(instance); }
         // The state bag, for tests and for the Studio's inspector.
         const std::map<std::string, doc::Value>* StateOf(Uuid instance) const;

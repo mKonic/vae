@@ -86,6 +86,8 @@ namespace vae::app {
         Uuid FindStartScreen() const;
         bool StartScripts();
         void Paint();
+        // Asks for the next frame when something is still moving. See the definition.
+        void RequestFrameIfBusy();
 
         // What a screen reader is allowed to do back to the app. A nested class rather than a base
         // so that "press the control at accessibility node 12" does not become part of RunLayer's

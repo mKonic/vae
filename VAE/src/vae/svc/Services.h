@@ -166,6 +166,10 @@ namespace vae::svc {
         // Once a frame: advances the clock and delivers whatever the network brought back.
         void Tick(f32 dt);
 
+        // Whether something is on its way in. An app waiting on an answer has to keep drawing
+        // frames or the answer arrives into a window that has stopped looking.
+        bool Busy() const { return m_Http.Pending() > 0 || !m_Sockets.empty(); }
+
     private:
         Storage m_Storage;
         Files m_Files;

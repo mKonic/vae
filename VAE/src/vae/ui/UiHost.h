@@ -51,6 +51,10 @@ namespace vae::ui {
         // Whether a transition is still running. An idle main loop that sleeps until the next input
         // has to be told about the one thing on screen that moves without any.
         bool Animating() const { return m_Animating; }
+        // Whether this host owes another frame: something is moving, something asked for one, or a
+        // script changed the tree after it was laid out. What an idle loop asks before going back
+        // to sleep.
+        bool NeedsFrame() const;
         // A behavior saying "I am moving, keep drawing". A spinner is not a transition — nothing
         // changed state and nothing is easing — so without this the frame loop sleeps and the one
         // widget whose whole job is to move stops moving. Cleared and re-asked every frame.

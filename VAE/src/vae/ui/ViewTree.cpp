@@ -42,6 +42,7 @@ namespace vae::ui {
     ViewTree::~ViewTree() = default;
 
     void ViewTree::Clear() {
+        m_NeedsSolve = true;
         m_Views.clear();
         m_Frames.clear();
         m_Behaviors.clear();
@@ -233,7 +234,12 @@ namespace vae::ui {
 
     void ViewTree::Layout(Vec2 available) {
         if (m_Root == kInvalid) return;
+        // Nothing has happened that could move anything, and the box is the one it was solved
+        // against: the tree already holds the answer. Everything that invalidates a solve says so
+        // through InvalidateLayout, so this is a gate rather than a guess.
+        if (!m_NeedsSolve && available == m_Available) return;
         m_Available = available;
+        m_NeedsSolve = false;
 
         for (u32 i = 0; i < m_Views.size(); ++i) {
             const View& view = m_Views[i];
@@ -439,6 +445,7 @@ namespace vae::ui {
         if (prop == doc::Prop::ScrollX) node.scroll.x = node.props.Number(doc::Prop::ScrollX, 0.0f);
         if (prop == doc::Prop::ScrollY) node.scroll.y = node.props.Number(doc::Prop::ScrollY, 0.0f);
         m_LayoutDirty = true;
+        m_NeedsSolve = true;
     }
 
     void ViewTree::SetViewProp(u32 view, doc::Prop prop, doc::Value value) {
@@ -465,6 +472,7 @@ namespace vae::ui {
         // Also apply locally so a behavior that reads back what it just wrote sees it this frame,
         // before the host has had a chance to rebuild.
         node.props.Set(prop, std::move(value));
+        m_NeedsSolve = true;
         if (prop == doc::Prop::ScrollX) node.scroll.x = node.props.Number(doc::Prop::ScrollX, 0.0f);
         if (prop == doc::Prop::ScrollY) node.scroll.y = node.props.Number(doc::Prop::ScrollY, 0.0f);
     }
@@ -518,6 +526,9 @@ namespace vae::ui {
         }
 
         m_Views[view].state = after;
+        // A state overlay can name a property that decides a box — `hovered:fontSize` is a label
+        // that grows — so a state change is a reason to lay out again.
+        m_NeedsSolve = true;
         for (const auto& [node, bag] : was) StartTransitions(node, bag);
     }
 
@@ -547,7 +558,12 @@ namespace vae::ui {
 
     bool ViewTree::Animate(f32 dt) {
         if (!m_Motion.enabled) { m_Driver.Clear(); return false; }
-        return m_Driver.Advance(dt);
+        const bool busy = m_Driver.Advance(dt);
+        // A transition on a clipping node's corner radius decides where its children are clipped,
+        // so a frame that is still moving is a frame whose boxes are worth recomputing. Nothing
+        // else in Animatable() reaches the layout, so this ends the moment the motion does.
+        if (busy) m_NeedsSolve = true;
+        return busy;
     }
 
     void ViewTree::SetLayoutStyle(u32 view, const layout::LayoutStyle& style) {
@@ -555,6 +571,7 @@ namespace vae::ui {
         if (m_Layout.Style(m_Views[view].layoutNode) == style) return;
         m_Layout.SetStyle(m_Views[view].layoutNode, style);
         m_LayoutDirty = true;
+        m_NeedsSolve = true;
     }
 
     const layout::LayoutStyle& ViewTree::LayoutStyleOf(u32 view) const {
@@ -565,19 +582,25 @@ namespace vae::ui {
         if (!Valid(view) || m_Views[view].visible == visible) return;
         m_Views[view].visible = visible;
         m_LayoutDirty = true;
+        m_NeedsSolve = true;
     }
 
     void ViewTree::SetRows(WidgetId widget, doc::RowTable rows) {
         m_Rows[widget] = std::move(rows);
+        m_NeedsSolve = true;
     }
 
-    void ViewTree::ClearRows(WidgetId widget) { m_Rows.erase(widget); }
+    void ViewTree::ClearRows(WidgetId widget) {
+        m_Rows.erase(widget);
+        m_NeedsSolve = true;
+    }
 
     void ViewTree::SetStrings(const doc::StringTable* strings) {
         if (m_Strings == strings) return;
         m_Strings = strings;
         // Every label with a key says something different now, and text decides layout.
         m_LayoutDirty = true;
+        m_NeedsSolve = true;
     }
 
     void ViewTree::ShowSampleRows(bool on) {
@@ -602,7 +625,11 @@ namespace vae::ui {
         return empty ? nullptr : &stored;
     }
 
-    void ViewTree::KeepAtEnd(WidgetId widget) { m_ScrollToEnd.insert(widget); }
+    void ViewTree::KeepAtEnd(WidgetId widget) {
+        m_ScrollToEnd.insert(widget);
+        // The scroll that answers this happens inside Layout, so Layout has to run.
+        m_NeedsSolve = true;
+    }
 
     // A container that fills from its far edge, in the two states it is ever in: short content
     // held against the bottom of the box, and long content scrolled to the end of itself. Doing
@@ -681,6 +708,9 @@ namespace vae::ui {
     bool ViewTree::ConsumeLayoutDirty() {
         const bool dirty = m_LayoutDirty;
         m_LayoutDirty = false;
+        // The caller asks this to decide whether to lay out again, so saying yes has to mean the
+        // second pass is allowed to do something.
+        if (dirty) m_NeedsSolve = true;
         return dirty;
     }
 
