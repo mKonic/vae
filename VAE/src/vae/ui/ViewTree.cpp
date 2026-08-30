@@ -125,6 +125,17 @@ namespace vae::ui {
                 it != m_ScrollState.end())
                 view.scroll = it->second;
 
+            // What the nodes above hand down. The parent is already complete — the flatten is
+            // depth-first, so a parent is always built before its children — so this is one lookup
+            // rather than a walk, and the chain resolves itself as the tree is built.
+            if (node.parent != UINT32_MAX) {
+                const View& above = m_Views[node.parent];
+                view.inherited = above.inherited;
+                for (const doc::Prop prop : Inheritable())
+                    if (const doc::Value* value = above.props.Find(prop))
+                        view.inherited.Set(prop, *value);
+            }
+
             const u32 index = static_cast<u32>(m_Views.size());
             const u32 parentLayout = node.parent == UINT32_MAX
                                    ? layout::LayoutTree::kInvalid
@@ -372,6 +383,10 @@ namespace vae::ui {
                     return Tinted(*colour, tint);
             return resolved;
         }
+        // Nothing here says what this should be, so ask what was handed down. Last, because a
+        // value the node names is a decision about this node and beats one made further up.
+        if (const doc::Value* value = node.inherited.Find(prop))
+            return m_Document->ResolveValue(*value);
         return {};
     }
 
@@ -389,7 +404,10 @@ namespace vae::ui {
 
     doc::PropBag ViewTree::Resolved(u32 view) const {
         if (!Valid(view)) return {};
-        doc::PropBag bag = m_Views[view].props;
+        // Inherited underneath, authored over the top, state overlays over that: weakest first, so
+        // each layer is allowed to be overruled by a more specific decision.
+        doc::PropBag bag = m_Views[view].inherited;
+        m_Views[view].props.MergeInto(bag);
         ApplyStateOverlay(bag, m_Views[view].props, EffectiveState(view));
 
         doc::PropBag out;
@@ -487,6 +505,24 @@ namespace vae::ui {
             if (m_Views[i].behavior) break;
         }
         return mask;
+    }
+
+    const std::vector<doc::Prop>& ViewTree::Inheritable() {
+        // The set CSS inherits, and for the same reason: these describe how text looks, and text
+        // is drawn by nodes far below the one that decided what it should look like. Nothing about
+        // a box — fill, radius, padding, a shadow — is here, because a card inside a card is not
+        // the same drawing twice.
+        static const std::vector<doc::Prop> kProps{
+            doc::Prop::FontFamily, doc::Prop::FontSize, doc::Prop::FontWeight,
+            doc::Prop::FontItalic, doc::Prop::TextColor, doc::Prop::LineHeight,
+            doc::Prop::LetterSpacing, doc::Prop::TextAlign, doc::Prop::TextWrap,
+        };
+        return kProps;
+    }
+
+    const doc::PropBag& ViewTree::InheritedProps(u32 view) const {
+        static const doc::PropBag kNone;
+        return Valid(view) ? m_Views[view].inherited : kNone;
     }
 
     const std::vector<doc::Prop>& ViewTree::Animatable() {

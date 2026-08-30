@@ -70,6 +70,11 @@ namespace vae::ui {
             Role role = Role::None;
             std::string name;
             doc::PropBag props;              // as authored, state overlays included
+            // What this view gets from the nodes above it, already resolved down the chain: the
+            // properties that describe how text looks, which is the set CSS inherits and for the
+            // same reason. Filled once per rebuild, never per frame. A value the node sets itself
+            // always wins — that is the whole rule.
+            doc::PropBag inherited;
             StateMask state = 0;
 
             Vec2 scroll{ 0.0f, 0.0f };
@@ -150,6 +155,14 @@ namespace vae::ui {
         void SetViewPropLocal(u32 view, doc::Prop prop, doc::Value value);
 
         void SetState(u32 view, StateBit bit, bool on);
+
+        // The properties a node hands down to everything drawn inside it. Exactly the ones that
+        // describe how text looks — set a font on a screen and every label under it follows,
+        // instead of every label having to say it. A node that names its own value keeps it.
+        static const std::vector<doc::Prop>& Inheritable();
+        // What `view` would inherit if it named nothing itself. For the Inspector, which has to
+        // show the value a field will actually draw with rather than an empty box.
+        const doc::PropBag& InheritedProps(u32 view) const;
 
         // --- rows ---------------------------------------------------------------------------------
         // What a repeated container repeats over. Kept here rather than in the document because

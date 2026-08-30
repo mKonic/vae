@@ -163,6 +163,125 @@ namespace {
 
 // ------------------------------------------------------------------ state overlays
 
+// ---------------------------------------------------------------------- inheritance
+
+TEST(inheritance, a_font_set_on_a_container_reaches_the_labels_inside_it) {
+    // The whole point: change the app's typeface in one place instead of on every text node.
+    Ui ui;
+    const Uuid card = ui.document.CreateNode(doc::NodeKind::Frame, ui.screen, "Card");
+    ui.document.SetProp(card, doc::Prop::FontFamily, std::string("Inter"));
+    ui.document.SetProp(card, doc::Prop::FontSize, 22.0f);
+    ui.document.SetProp(card, doc::Prop::TextColor, doc::TokenRef{ "accent" });
+
+    const Uuid inner = ui.document.CreateNode(doc::NodeKind::Frame, card, "Inner");
+    const Uuid label = ui.document.CreateNode(doc::NodeKind::Text, inner, "Label");
+    ui.document.SetProp(label, doc::Prop::Text, std::string("Hello"));
+    ui.Frame();
+
+    const u32 view = ui.ViewOfPlain(label);
+    CHECK(view != ViewTree::kInvalid);
+    // Two levels down, through a frame that says nothing about type at all.
+    CHECK_EQ(ui.host.Tree().Str(view, doc::Prop::FontFamily), std::string("Inter"));
+    CHECK_EQ(ui.host.Tree().Number(view, doc::Prop::FontSize, 0.0f), 22.0f);
+    // A token still resolves — inheriting hands down the reference, not a colour.
+    const doc::Value colour = ui.host.Tree().ResolvedProp(view, doc::Prop::TextColor);
+    CHECK(doc::TypeOf(colour) == doc::ValueType::Colour);
+}
+
+TEST(inheritance, a_node_that_names_its_own_value_keeps_it) {
+    Ui ui;
+    const Uuid card = ui.document.CreateNode(doc::NodeKind::Frame, ui.screen, "Card");
+    ui.document.SetProp(card, doc::Prop::FontSize, 22.0f);
+
+    const Uuid inherits = ui.document.CreateNode(doc::NodeKind::Text, card, "Inherits");
+    const Uuid decides  = ui.document.CreateNode(doc::NodeKind::Text, card, "Decides");
+    ui.document.SetProp(inherits, doc::Prop::Text, std::string("big"));
+    ui.document.SetProp(decides,  doc::Prop::Text, std::string("small"));
+    ui.document.SetProp(decides,  doc::Prop::FontSize, 11.0f);
+    ui.Frame();
+
+    CHECK_EQ(ui.host.Tree().Number(ui.ViewOfPlain(inherits), doc::Prop::FontSize, 0.0f), 22.0f);
+    CHECK_EQ(ui.host.Tree().Number(ui.ViewOfPlain(decides),  doc::Prop::FontSize, 0.0f), 11.0f);
+}
+
+TEST(inheritance, the_nearest_answer_wins_and_nothing_boxlike_is_inherited) {
+    Ui ui;
+    const Uuid outer = ui.document.CreateNode(doc::NodeKind::Frame, ui.screen, "Outer");
+    ui.document.SetProp(outer, doc::Prop::FontSize, 30.0f);
+    // Not inheritable: a card inside a card is not the same drawing twice.
+    ui.document.SetProp(outer, doc::Prop::Fill, doc::TokenRef{ "surface" });
+    ui.document.SetProp(outer, doc::Prop::CornerRadius, 12.0f);
+
+    const Uuid middle = ui.document.CreateNode(doc::NodeKind::Frame, outer, "Middle");
+    ui.document.SetProp(middle, doc::Prop::FontSize, 15.0f);
+    const Uuid label = ui.document.CreateNode(doc::NodeKind::Text, middle, "Label");
+    ui.document.SetProp(label, doc::Prop::Text, std::string("x"));
+    ui.Frame();
+
+    const u32 view = ui.ViewOfPlain(label);
+    CHECK_EQ(ui.host.Tree().Number(view, doc::Prop::FontSize, 0.0f), 15.0f);
+    CHECK_EQ(ui.host.Tree().Number(view, doc::Prop::CornerRadius, -1.0f), -1.0f);
+    CHECK(!doc::IsSet(ui.host.Tree().ResolvedProp(view, doc::Prop::Fill)));
+}
+
+TEST(inheritance, an_inherited_size_is_what_the_text_is_actually_measured_at) {
+    // The read being right is not the same as the drawing being right: layout has to see it too,
+    // or a label inherits a font it is not laid out in.
+    Ui ui;
+    const Uuid card = ui.document.CreateNode(doc::NodeKind::Frame, ui.screen, "Card");
+    doc::Node* frame = ui.document.Find(card);
+    frame->layout.width = layout::Size::Hug();
+    frame->layout.height = layout::Size::Hug();
+
+    const Uuid label = ui.document.CreateNode(doc::NodeKind::Text, card, "Label");
+    ui.document.SetProp(label, doc::Prop::Text, std::string("measured"));
+    ui.Frame();
+    const Rect small = ui.BoundsOfPlain(label);
+
+    ui.document.SetProp(card, doc::Prop::FontSize, 48.0f);
+    ui.Frame();
+    const Rect large = ui.BoundsOfPlain(label);
+
+    CHECK(large.size.x > small.size.x * 1.5f);
+    CHECK(large.size.y > small.size.y * 1.5f);
+}
+
+TEST(inheritance, a_state_overlay_on_the_node_beats_what_it_inherited) {
+    Ui ui;
+    const Uuid card = ui.document.CreateNode(doc::NodeKind::Frame, ui.screen, "Card");
+    ui.document.SetProp(card, doc::Prop::FontSize, 20.0f);
+    const Uuid label = ui.document.CreateNode(doc::NodeKind::Text, card, "Label");
+    ui.document.SetProp(label, doc::Prop::Text, std::string("x"));
+    ui.document.SetProp(label, StateKey(StateBit::Hovered, doc::Prop::FontSize), 40.0f);
+    ui.Frame();
+
+    const u32 view = ui.ViewOfPlain(label);
+    CHECK_EQ(ui.host.Tree().Number(view, doc::Prop::FontSize, 0.0f), 20.0f);
+    ui.host.Tree().SetState(view, StateBit::Hovered, true);
+    CHECK_EQ(ui.host.Tree().Number(view, doc::Prop::FontSize, 0.0f), 40.0f);
+}
+
+TEST(inheritance, it_reaches_through_an_instance_into_the_component) {
+    // An instance is expanded before any of this runs, so the chain a value travels is the one on
+    // screen — not the one in the file.
+    Ui ui;
+    const Uuid card = ui.document.CreateNode(doc::NodeKind::Frame, ui.screen, "Card");
+    ui.document.SetProp(card, doc::Prop::FontFamily, std::string("Inter"));
+    const Uuid button = ui.document.CreateInstance(ui.library.Find("Button"), card);
+    ui.Frame();
+
+    const u32 root = ui.host.Tree().ViewOf(WidgetId{ ui.ComponentRoot(button), button });
+    CHECK(root != ViewTree::kInvalid);
+    const u32 label = ui.host.Tree().FindRole(root, Role::None);
+    // The label inside the stock Button names no family of its own, so it takes the card's.
+    for (u32 i = 0; i < ui.host.Tree().ViewCount(); ++i) {
+        if (ui.host.Tree().At(i).kind != doc::NodeKind::Text) continue;
+        CHECK_EQ(ui.host.Tree().Str(i, doc::Prop::FontFamily), std::string("Inter"));
+        break;
+    }
+    (void)label;
+}
+
 TEST(ui, a_stronger_state_overrides_a_weaker_one) {
     doc::PropBag source;
     source.Set(doc::Prop::Fill, Color{ 1, 0, 0, 1 });
