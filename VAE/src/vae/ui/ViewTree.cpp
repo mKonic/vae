@@ -264,6 +264,7 @@ namespace vae::ui {
         if (!m_NeedsSolve && available == m_Available) return;
         m_Available = available;
         m_NeedsSolve = false;
+        ++m_Solves;
 
         for (u32 i = 0; i < m_Views.size(); ++i) {
             const View& view = m_Views[i];

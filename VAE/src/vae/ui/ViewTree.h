@@ -260,6 +260,9 @@ namespace vae::ui {
         // Whether a solve is owed. A script that changes something after the frame's layout has
         // already run needs the next frame to happen, or what it changed is never drawn.
         bool NeedsLayout() const { return m_NeedsSolve; }
+        // How many times the solver has actually run. The gate above is the whole of P1, and a flag
+        // that Layout clears on its way past cannot tell you whether it was honoured — this can.
+        u64 Solves() const { return m_Solves; }
         // Says the next Layout() has real work to do. Everything that can change where a box ends
         // up goes through here, and Layout() returns immediately when nothing has.
         void InvalidateLayout() { m_NeedsSolve = true; }
@@ -345,6 +348,7 @@ namespace vae::ui {
         // document declares? Almost no design does, and the ones that do pay for one extra solve.
         bool m_HasBreakpoints = false;
         f32 m_PreviewWidth = 0.0f;   // design-time only; 0 is the root's own width
+        u64 m_Solves = 0;
         // Reads every view's settled width, works out which breakpoints it is inside, and restyles
         // the ones that changed. True when anything moved, which is when the solve has to run again.
         bool ApplyBreakpoints();
