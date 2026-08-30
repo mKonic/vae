@@ -1,5 +1,6 @@
 #include "vaepch.h"
 #include "vae/doc/Command.h"
+#include "vae/doc/Serializer.h"
 
 #include <algorithm>
 
@@ -260,6 +261,15 @@ namespace vae::doc {
     void SetTokenCommand::Undo(Document& document) {
         if (m_Existed) document.SetToken(m_Name, m_Old);
         else           document.RemoveToken(m_Name);
+    }
+
+    void ReplaceSubtreeCommand::Apply(Document& document) {
+        if (!m_Captured) { m_Old = Serializer::ToXmlSubtree(document, m_Node); m_Captured = true; }
+        Serializer::FromXmlSubtree(m_New, document, m_Node);
+    }
+
+    void ReplaceSubtreeCommand::Undo(Document& document) {
+        Serializer::FromXmlSubtree(m_Old, document, m_Node);
     }
 
     void SetBreakpointsCommand::Apply(Document& document) {

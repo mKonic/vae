@@ -128,6 +128,7 @@ namespace vae {
         // code editor nobody can read what they are typing in.
         ImGui::DockBuilderDockWindow("Canvas###Canvas", centre);
         ImGui::DockBuilderDockWindow("Script###Script", centre);
+        ImGui::DockBuilderDockWindow("XML###Markup", centre);
         ImGui::DockBuilderDockWindow("Inspector###Inspector", right);
         ImGui::DockBuilderDockWindow("Assets###Assets", right);
         ImGui::DockBuilderDockWindow("Tokens###Tokens", right);
@@ -1093,6 +1094,7 @@ namespace vae {
             OpenProject(open);
         DrawRuntimePanel(m_Scripts, m_Canvas);
         DrawScriptPanel(m_Scripts, m_State);
+        DrawMarkupPanel(m_State);
         m_Canvas.OnImGuiRender(m_State);
 
         // A running app has timers and on_update; it is the one thing in the editor that changes

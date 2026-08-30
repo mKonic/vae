@@ -100,7 +100,7 @@ namespace vae {
         void LoadRecents();
         // Bumped whenever the default layout gains a panel, so an existing layout is rebuilt
         // once instead of hiding the new one.
-        static constexpr int kLayoutVersion = 2;
+        static constexpr int kLayoutVersion = 3;   // 3: the XML tab
         int  m_LayoutVersion = 0;
 
         void TickAutosave();

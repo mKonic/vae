@@ -67,6 +67,22 @@ namespace vae::doc {
         static bool FromXml(std::string_view xml, Document& out, std::string* error = nullptr,
                             const LibrarySource* library = nullptr, bool merge = false);
 
+        // One node and everything under it, as the markup a document holds for it — with no <vae>
+        // wrapper, because the wrapper belongs to the file and this is a view of a selection. Ids
+        // are always written: what comes back is spliced into a live document, and every observer,
+        // the selection and every override key is holding one.
+        static std::string ToXmlSubtree(const Document& document, Uuid node);
+
+        // Reads markup back over `node`: same id, same parent, same place among its siblings, with
+        // everything under it replaced by what the markup says. The root element keeps the id it is
+        // replacing whatever the markup claims — you are editing this node, not describing a
+        // different one, and a changed id is a node the rest of the document has lost track of.
+        //
+        // Nothing is touched unless the markup parses, so a typo costs a message rather than the
+        // subtree.
+        static bool FromXmlSubtree(std::string_view xml, Document& out, Uuid node,
+                                   std::string* error = nullptr);
+
         static bool Save(const Document& document, const std::filesystem::path& path,
                          const LibrarySource* library = nullptr);
         // Refuses a directory by saying so, rather than by failing to parse one.

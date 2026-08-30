@@ -541,6 +541,13 @@ namespace vae::doc {
 
     }
 
+    std::string Serializer::ToXmlSubtree(const Document& document, Uuid node) {
+        if (!document.Contains(node)) return {};
+        Writer w(true);
+        WriteNode(w, document, node, {}, Uuid::Invalid(), true);
+        return w.Take();
+    }
+
     bool Serializer::FromXml(std::string_view xml, Document& out, std::string* error,
                              const LibrarySource* library, bool merge) {
         const auto Fail = [&](const std::string& message) {
@@ -787,6 +794,76 @@ namespace vae::doc {
             if (Node* node = out.Find(id)) node->children = children;
 
         if (start.Valid()) out.SetStartScreen(start);
+        return true;
+    }
+
+    bool Serializer::FromXmlSubtree(std::string_view xml, Document& out, Uuid node,
+                                    std::string* error) {
+        const auto Fail = [&](const std::string& message) {
+            if (error) *error = message;
+            return false;
+        };
+
+        const Node* existing = out.Find(node);
+        if (!existing) return Fail("that node is no longer in the document");
+        const Uuid parent = existing->parent;
+        const u32 index = out.IndexInParent(node);
+
+        // Read into a document of its own first. Splicing straight into the live one would mean a
+        // typo on the last line destroys the subtree the first line already replaced.
+        //
+        // The wrapper is put back on because the reader's job starts at <vae>: this is a view of a
+        // selection, so the file's own header is not the designer's to retype.
+        // The wrapper adds no lines of its own, on either end. A line number is the whole value of
+        // a parse error here, and a header nobody typed must not shift the line it lands on — an
+        // unterminated tag is reported at the end of the input, which would otherwise be a line the
+        // designer cannot see.
+        std::string wrapped = "<vae version=\"" + std::to_string(kFormatVersion) + "\">";
+        wrapped.append(xml);
+        wrapped += "</vae>";
+
+        Document scratch;
+        if (!FromXml(wrapped, scratch, error)) return false;
+
+        const std::vector<Uuid>& roots = scratch.Roots();
+        if (roots.empty())    return Fail("no element here — markup describing one node was expected");
+        if (roots.size() > 1) return Fail("markup describing one node was expected, not "
+                                          + std::to_string(roots.size()));
+
+        std::vector<Node> subtree;
+        for (const Uuid id : scratch.Subtree(roots.front()))
+            if (const Node* found = scratch.Find(id)) subtree.push_back(*found);
+        if (subtree.empty()) return Fail("no element here — markup describing one node was expected");
+
+        // The root answers to the id it is replacing whatever the markup claims. Deleting the `id`
+        // attribute is an easy thing to do while editing, and a new id is a node the selection, the
+        // observers and every override key have lost track of.
+        const Uuid was = subtree.front().id;
+        if (was != node)
+            for (Node& n : subtree) {
+                if (n.id == was)     n.id = node;
+                if (n.parent == was) n.parent = node;
+                for (Uuid& child : n.children)
+                    if (child == was) child = node;
+            }
+        subtree.front().parent = parent;
+
+        out.DeleteNode(node);
+
+        // Parents before children, each list restored verbatim afterwards — InsertNode appends to
+        // the parent as it goes, so carrying the lists in would give every child twice. The same
+        // shape DeleteNodeCommand::Undo uses, and for the same reason.
+        std::vector<std::pair<Uuid, std::vector<Uuid>>> hierarchy;
+        for (std::size_t i = 0; i < subtree.size(); ++i) {
+            hierarchy.emplace_back(subtree[i].id, subtree[i].children);
+            Node inserted = subtree[i];
+            inserted.children.clear();
+            out.InsertNode(std::move(inserted), i == 0 ? index : UINT32_MAX);
+        }
+        for (const auto& [id, children] : hierarchy)
+            if (Node* restored = out.Find(id)) restored->children = children;
+
+        out.Touch(node);
         return true;
     }
 

@@ -1704,6 +1704,115 @@ TEST(xml, an_override_keeps_the_id_it_keys_on) {
     CHECK(*back->overrides.at(inner).Find("hovered:fill") == Value{ TokenRef{ "accent" } });
 }
 
+TEST(xml, a_subtree_is_written_without_the_file_around_it) {
+    Document doc;
+    const Uuid screen = doc.CreateNode(NodeKind::Screen, Uuid::Invalid(), "Home");
+    const Uuid shell = doc.CreateNode(NodeKind::Frame, screen, "Shell");
+    doc.Find(shell)->layout.mode = layout::LayoutMode::Stack;
+    doc.Find(shell)->layout.axis = layout::Axis::Row;
+    doc.Find(shell)->layout.gap = 24.0f;
+    const Uuid label = doc.CreateNode(NodeKind::Text, shell, "Title");
+    doc.SetProp(label, Prop::Text, std::string("Hello"));
+
+    const std::string markup = Serializer::ToXmlSubtree(doc, shell);
+    // What a designer edits is the frame they picked, not the file's header.
+    CHECK(markup.find("<vae") == std::string::npos);
+    CHECK(markup.starts_with("<frame"));
+    CHECK(markup.find("name=\"Shell\"") != std::string::npos);
+    CHECK(markup.find("axis=\"row\"") != std::string::npos);
+    CHECK(markup.find("Hello") != std::string::npos);
+    // Always, so a round trip does not strand the selection or an override.
+    CHECK(markup.find(shell.ToString()) != std::string::npos);
+    CHECK(markup.find(label.ToString()) != std::string::npos);
+    // The screen it sits in is not its business.
+    CHECK(markup.find("<screen") == std::string::npos);
+}
+
+TEST(xml, markup_read_back_over_a_node_keeps_the_node) {
+    Document doc;
+    const Uuid screen = doc.CreateNode(NodeKind::Screen, Uuid::Invalid(), "Home");
+    doc.CreateNode(NodeKind::Frame, screen, "Before");
+    const Uuid shell = doc.CreateNode(NodeKind::Frame, screen, "Shell");
+    doc.CreateNode(NodeKind::Frame, screen, "After");
+    doc.CreateNode(NodeKind::Text, shell, "Old");
+
+    std::string error;
+    CHECK_MESSAGE(Serializer::FromXmlSubtree(
+        "<frame name=\"Shell\" mode=\"stack\" axis=\"row\" gap=\"12\">\n"
+        "  <text name=\"One\" text=\"a\"/>\n"
+        "  <text name=\"Two\" text=\"b\"/>\n"
+        "</frame>", doc, shell, &error), error);
+
+    const Node* after = doc.Find(shell);
+    CHECK(after != nullptr);
+    CHECK_EQ(after->parent, screen);
+    CHECK_EQ(doc.IndexInParent(shell), 1u);            // still between Before and After
+    CHECK_EQ(doc.Find(screen)->children.size(), std::size_t(3));
+    CHECK(after->layout.axis == layout::Axis::Row);
+    CHECK_EQ(after->layout.gap, 12.0f);
+    CHECK_EQ(after->children.size(), std::size_t(2));
+    CHECK_EQ(doc.Find(after->children[1])->name, std::string("Two"));
+    // The old child is gone, not orphaned somewhere in the map.
+    CHECK_EQ(doc.Roots().size(), std::size_t(1));
+}
+
+TEST(xml, an_edited_node_answers_to_the_id_it_had_whatever_the_markup_says) {
+    // Deleting the id attribute is an easy thing to do while editing, and a new id is a node the
+    // selection, the observers and every override key have lost track of.
+    Document doc;
+    const Uuid screen = doc.CreateNode(NodeKind::Screen, Uuid::Invalid(), "Home");
+    const Uuid card = doc.CreateNode(NodeKind::Frame, screen, "Card");
+
+    std::string error;
+    CHECK_MESSAGE(Serializer::FromXmlSubtree("<frame name=\"Renamed\"/>", doc, card, &error), error);
+    CHECK(doc.Contains(card));
+    CHECK_EQ(doc.Find(card)->name, std::string("Renamed"));
+    CHECK_EQ(doc.Find(screen)->children.size(), std::size_t(1));
+    CHECK_EQ(doc.Find(screen)->children[0], card);
+}
+
+TEST(xml, markup_that_does_not_parse_costs_a_message_rather_than_the_subtree) {
+    Document doc;
+    const Uuid screen = doc.CreateNode(NodeKind::Screen, Uuid::Invalid(), "Home");
+    const Uuid shell = doc.CreateNode(NodeKind::Frame, screen, "Shell");
+    doc.CreateNode(NodeKind::Text, shell, "Kept");
+
+    std::string error;
+    CHECK(!Serializer::FromXmlSubtree("<frame name=\"Shell\">\n  <text\n", doc, shell, &error));
+    CHECK(!error.empty());
+    // The line the designer sees, not the line the reader read: the <vae> header put back on for
+    // the parse is not a line anyone typed, so it must not shift the count.
+    CHECK_MESSAGE(error.starts_with("line 3:"), error);
+    // Untouched: the read happens into a document of its own first.
+    CHECK_EQ(doc.Find(shell)->children.size(), std::size_t(1));
+    CHECK_EQ(doc.Find(doc.Find(shell)->children[0])->name, std::string("Kept"));
+
+    // And two roots is not one node, however well each of them parses.
+    CHECK(!Serializer::FromXmlSubtree("<frame name=\"A\"/><frame name=\"B\"/>", doc, shell, &error));
+    CHECK_EQ(doc.Find(shell)->children.size(), std::size_t(1));
+}
+
+TEST(xml, editing_markup_is_one_undo) {
+    Document doc;
+    const Uuid screen = doc.CreateNode(NodeKind::Screen, Uuid::Invalid(), "Home");
+    const Uuid shell = doc.CreateNode(NodeKind::Frame, screen, "Shell");
+    doc.CreateNode(NodeKind::Text, shell, "One");
+
+    CommandStack stack;
+    stack.Execute(doc, CreateScope<ReplaceSubtreeCommand>(
+        shell, "<frame name=\"Shell\" gap=\"8\"><text name=\"A\"/><text name=\"B\"/></frame>"));
+    CHECK_EQ(doc.Find(shell)->children.size(), std::size_t(2));
+    CHECK_EQ(doc.Find(shell)->layout.gap, 8.0f);
+
+    stack.Undo(doc);
+    CHECK_EQ(doc.Find(shell)->children.size(), std::size_t(1));
+    CHECK_EQ(doc.Find(doc.Find(shell)->children[0])->name, std::string("One"));
+    CHECK_EQ(doc.Find(shell)->layout.gap, 0.0f);
+
+    stack.Redo(doc);
+    CHECK_EQ(doc.Find(shell)->children.size(), std::size_t(2));
+}
+
 TEST(xml, a_malformed_document_says_which_line_and_loads_nothing) {
     Document loaded;
     loaded.CreateNode(NodeKind::Screen);

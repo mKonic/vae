@@ -305,6 +305,28 @@ namespace vae::doc {
         bool m_Existed = false, m_Captured = false;
     };
 
+    // A node's markup, rewritten. What the XML tab applies.
+    //
+    // Both directions are the same operation — write this markup over this node — so the undo is
+    // the snapshot taken on the way in rather than an inverse that has to be derived. Markup is the
+    // document's own serialisation, which makes that snapshot exact rather than approximate.
+    class ReplaceSubtreeCommand final : public Command {
+    public:
+        ReplaceSubtreeCommand(Uuid node, std::string markup)
+            : m_Node(node), m_New(std::move(markup)) {}
+
+        void Apply(Document& document) override;
+        void Undo(Document& document) override;
+        std::string_view Name() const override { return "Edit markup"; }
+        // Deliberately none. An apply is a button press, not a drag, and two of them are two edits
+        // a designer will want back one at a time.
+
+    private:
+        Uuid m_Node;
+        std::string m_New, m_Old;
+        bool m_Captured = false;
+    };
+
     // The widths the project designs for. A document-level edit like a token, and undoable for the
     // same reason: dragging a breakpoint's width restyles every node that overlays at it.
     class SetBreakpointsCommand final : public Command {

@@ -24,6 +24,10 @@ namespace vae {
     // Takes the editor state as well as the session: completion that knows the names on
     // the screen being edited is the half a generic code editor cannot have.
     void DrawScriptPanel(ScriptSession& session, EditorState& state);
+    // The selection as markup: the same XML the file holds, scoped to one node. Explicit Apply
+    // rather than the Script panel's continuous sync, because this is a second writer for a model
+    // the canvas and the Inspector are already writing.
+    void DrawMarkupPanel(EditorState& state);
     // The app's insides while it is running: what is mounted, what it holds, what reached it.
     void DrawRuntimePanel(ScriptSession& session, Canvas& canvas);
     // The project's files. Returns a project to open when one was clicked, empty otherwise — the

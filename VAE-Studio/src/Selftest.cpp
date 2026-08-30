@@ -564,6 +564,47 @@ namespace vae {
                   "and editing the set undoes like any other change");
         }
 
+        // The XML tab is a second writer for a model the canvas and the Inspector already write,
+        // so what matters is that an apply is one edit, that the node it edited is still the node
+        // everything else is holding, and that a refusal costs nothing.
+        void TestMarkupEditing() {
+            Section("editing markup");
+            Driver driver;
+            EditorState& state = driver.State();
+
+            const Uuid card = PlaceFixed(state, "Card", { 40.0f, 40.0f }, { 320.0f, 200.0f });
+            state.Select(card);
+            state.Commands().Clear();
+
+            const std::string before = doc::Serializer::ToXmlSubtree(state.Doc(), card);
+            Check(!before.empty() && before.find("<vae") == std::string::npos,
+                  "a selection reads as markup without the file around it");
+            Check(before.find(card.ToString()) != std::string::npos,
+                  "and always with its id, so a round trip does not strand the selection");
+
+            state.Execute(CreateScope<doc::ReplaceSubtreeCommand>(
+                card, "<instance name=\"Card\" of=\"" + state.Doc().Find(card)->componentId.ToString()
+                      + "\" mode=\"stack\" width=\"500\" gap=\"7\"/>"));
+            state.EndGesture();
+
+            Check(state.Doc().Contains(card), "an apply edits the node rather than replacing it");
+            Check(state.Primary() == card, "so the selection is still on it");
+            Check(state.Doc().Find(card)->layout.gap == 7.0f, "and what the markup said has landed");
+
+            state.Undo();
+            Check(state.Doc().Find(card)->layout.gap != 7.0f, "one undo puts the whole edit back");
+            Check(state.Primary() == card, "with the selection still where it was");
+
+            // A refusal is validated against a copy, so it never reaches the undo stack.
+            doc::Document trial;
+            doc::Serializer::FromXml(doc::Serializer::ToXml(state.Doc(), false, nullptr, true), trial);
+            std::string error;
+            Check(!doc::Serializer::FromXmlSubtree("<frame", trial, card, &error),
+                  "markup that does not parse is refused");
+            Check(error.starts_with("line 1:"), "at the line the designer typed it on");
+            Check(trial.Contains(card), "and the subtree it was refused over is untouched");
+        }
+
         void TestSaveLoad() {
             Section("save and load");
             Driver driver;
@@ -2488,6 +2529,7 @@ namespace vae {
         TestMarquee();
         TestInspectorRoundTrip();
         TestBreakpointAuthoring();
+        TestMarkupEditing();
         TestSaveLoad();
         TestViewport();
         TestDeleteAndDuplicate();
