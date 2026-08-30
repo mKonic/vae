@@ -501,6 +501,77 @@ TEST(layout, wrap_off_keeps_everything_on_one_line_even_when_it_overflows) {
     CHECK_NEAR(tree.NodeRect(kids[3]).pos.y, 0.0f);
 }
 
+TEST(layout, shrink_squeezes_a_line_that_does_not_fit_instead_of_overflowing) {
+    // `flex-shrink: 1`. Four 100-wide boxes and three 10-wide gaps want 430 in a 220-wide row, so
+    // each gives back its share: (220 - 30) / 4 = 47.5.
+    LayoutTree tree;
+    LayoutStyle rootStyle = Stack(Axis::Row, 10.0f);
+    rootStyle.width = Size::Px(220.0f);
+    rootStyle.shrink = true;
+    const u32 root = tree.Add(rootStyle);
+    for (int i = 0; i < 4; ++i) tree.Add(Box(Size::Px(100.0f), Size::Px(30.0f)), root);
+    tree.Compute(root, { 1000.0f, 1000.0f });
+
+    const auto& kids = tree.Children(root);
+    for (const u32 kid : kids) CHECK_NEAR(tree.NodeRect(kid).size.x, 47.5f);
+    CHECK_NEAR(tree.NodeRect(kids[3]).pos.x, 172.5f);
+    // The height is untouched: only the axis the line runs along is short of room.
+    CHECK_NEAR(tree.NodeRect(kids[0]).size.y, 30.0f);
+}
+
+TEST(layout, a_minimum_size_is_the_floor_a_child_cannot_be_squeezed_past) {
+    // `flex-shrink: 0` spelled as what it actually means. The first box refuses to go below 100,
+    // so the other three absorb the whole overflow: (220 - 30 - 100) / 3 = 30.
+    LayoutTree tree;
+    LayoutStyle rootStyle = Stack(Axis::Row, 10.0f);
+    rootStyle.width = Size::Px(220.0f);
+    rootStyle.shrink = true;
+    const u32 root = tree.Add(rootStyle);
+    LayoutStyle pinned = Box(Size::Px(100.0f), Size::Px(30.0f));
+    pinned.minSize = { 100.0f, 0.0f };
+    tree.Add(pinned, root);
+    for (int i = 0; i < 3; ++i) tree.Add(Box(Size::Px(100.0f), Size::Px(30.0f)), root);
+    tree.Compute(root, { 1000.0f, 1000.0f });
+
+    const auto& kids = tree.Children(root);
+    CHECK_NEAR(tree.NodeRect(kids[0]).size.x, 100.0f);
+    CHECK_NEAR(tree.NodeRect(kids[1]).size.x, 30.0f);
+    CHECK_NEAR(tree.NodeRect(kids[3]).size.x, 30.0f);
+}
+
+TEST(layout, nothing_shrinks_unless_it_was_asked_to) {
+    // Off by default, unlike CSS. A scroll container full of fixed-height rows is a stack too, and
+    // squeezing every row to fit the box is how a scroller stops having anything to scroll.
+    LayoutTree tree;
+    LayoutStyle rootStyle = Stack(Axis::Column, 0.0f);
+    rootStyle.height = Size::Px(100.0f);
+    const u32 root = tree.Add(rootStyle);
+    for (int i = 0; i < 8; ++i) tree.Add(Box(Size::Px(50.0f), Size::Px(40.0f)), root);
+    tree.Compute(root, { 1000.0f, 1000.0f });
+
+    const auto& kids = tree.Children(root);
+    for (const u32 kid : kids) CHECK_NEAR(tree.NodeRect(kid).size.y, 40.0f);
+    CHECK_NEAR(tree.NodeRect(kids[7]).pos.y, 280.0f);   // 320 of rows in a 100-tall box: it scrolls
+}
+
+TEST(layout, wrapping_beats_shrinking_when_both_are_asked_for) {
+    // The same order CSS resolves them in: lines are broken first, and only a line that still does
+    // not fit is squeezed. Two 100s and a 10 gap fit in 220, so nothing is squeezed.
+    LayoutTree tree;
+    LayoutStyle rootStyle = Stack(Axis::Row, 10.0f);
+    rootStyle.width = Size::Px(220.0f);
+    rootStyle.wrap = true;
+    rootStyle.shrink = true;
+    const u32 root = tree.Add(rootStyle);
+    for (int i = 0; i < 4; ++i) tree.Add(Box(Size::Px(100.0f), Size::Px(30.0f)), root);
+    tree.Compute(root, { 1000.0f, 1000.0f });
+
+    const auto& kids = tree.Children(root);
+    for (const u32 kid : kids) CHECK_NEAR(tree.NodeRect(kid).size.x, 100.0f);
+    CHECK_NEAR(tree.NodeRect(kids[2]).pos.x, 0.0f);
+    CHECK(tree.NodeRect(kids[2]).pos.y > 0.0f);
+}
+
 TEST(layout, fill_children_divide_the_line_they_land_on) {
     LayoutTree tree;
     LayoutStyle rootStyle = Stack(Axis::Row, 0.0f);

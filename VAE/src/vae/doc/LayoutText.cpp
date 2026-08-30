@@ -204,7 +204,7 @@ namespace vae::doc {
         std::string NumberText(f32 v) { return Number(v); }
 
         // In the order LayoutStyle declares them.
-        constexpr std::size_t kFieldCount = 19;
+        constexpr std::size_t kFieldCount = 20;
         const std::array<LayoutField, kFieldCount>& Table() {
             static const std::array<LayoutField, kFieldCount> kFields{
                 VAE_LAYOUT_FIELD("mode",        mode,        LayoutModeName,  LayoutModeFromName),
@@ -216,6 +216,7 @@ namespace vae::doc {
                 VAE_LAYOUT_FIELD("align",       align,       AlignName,       AlignFromName),
                 VAE_LAYOUT_FIELD("justify",     justify,     JustifyName,     JustifyFromName),
                 VAE_LAYOUT_FIELD("wrap",        wrap,        BoolText,        BoolFromText),
+                VAE_LAYOUT_FIELD("shrink",      shrink,      BoolText,        BoolFromText),
                 VAE_LAYOUT_FIELD("columns",     columns,     ColumnsText,     ColumnsFromText),
                 VAE_LAYOUT_FIELD("minColumn",   minColumn,   NumberText,      ParseNumber),
                 VAE_LAYOUT_FIELD("rowGap",      rowGap,      NumberText,      ParseNumber),

@@ -1108,6 +1108,7 @@ namespace {
         s.align       = layout::Align::Stretch;
         s.justify     = layout::Justify::SpaceEvenly;
         s.wrap        = true;
+        s.shrink      = true;
         s.columns     = 4;
         s.minColumn   = 123.0f;
         s.rowGap      = 9.0f;
@@ -1131,7 +1132,7 @@ TEST(layout_fields, the_table_knows_every_field_and_each_one_round_trips) {
     const layout::LayoutStyle full = EverythingSet();
     const layout::LayoutStyle defaults;
 
-    CHECK_EQ(LayoutFields().size(), std::size_t(19));
+    CHECK_EQ(LayoutFields().size(), std::size_t(20));
 
     std::size_t moved = 0;
     for (const LayoutField& field : LayoutFields()) {

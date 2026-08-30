@@ -65,6 +65,12 @@ namespace vae::layout {
         Align   align = Align::Start;
         Justify justify = Justify::Start;
         bool    wrap = false;
+        // Whether a line that does not fit gives the overflow back, proportionally to what each
+        // child asked for. This is `flex-shrink: 1`, and it is off by default where CSS has it on:
+        // a scroll container full of fixed-height rows is the case where shrinking silently
+        // destroys the thing being built, and it is the case CSS is famous for getting wrong.
+        // `minSize` is the floor a child cannot be squeezed past.
+        bool    shrink = false;
 
         // --- grid ---------------------------------------------------------------------------
         // How many columns. Zero means as many as fit at `minColumn`, which is the version that

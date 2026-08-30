@@ -256,7 +256,10 @@ namespace vae {
         const Uuid figures = kit.Place(body, "Grid", "Figures");
         {
             LayoutStyle& style = Lay(d, figures);
-            style.columns = 4;
+            // As many columns as fit at 240 rather than four whatever the width — a hard column
+            // count is `repeat(4, ...)`, and it runs off the edge of a narrow window exactly the
+            // way it does in a browser. The cards fill their track, so the row stays even.
+            style.minColumn = 240.0f;
             style.gap = 16.0f;
         }
         struct Figure { const char* caption; const char* value; const char* delta; const char* note; };
@@ -268,6 +271,7 @@ namespace vae {
         };
         for (const Figure& figure : kFigures) {
             const Uuid card = kit.Place(figures, "Card", figure.caption);
+            Lay(d, card).width = Size::Fill();
             kit.Text(card, "Title", figure.value);
             kit.Over(card, "Title", doc::Prop::FontSize, 26.0f);
             kit.Text(card, "Description", figure.caption);

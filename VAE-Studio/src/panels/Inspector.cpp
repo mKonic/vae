@@ -98,6 +98,17 @@ namespace vae {
                 }
                 fields::Label("Wrap");
                 changed |= ImGui::Checkbox("##wrap", &style.wrap);
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("Children that do not fit start a new line");
+
+                // CSS has this on by default and every web developer has been bitten by it, so
+                // here it is asked for: a scroller full of rows would otherwise squeeze them all
+                // to fit its box instead of scrolling.
+                fields::Label("Shrink");
+                changed |= ImGui::Checkbox("##shrink", &style.shrink);
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("Children that do not fit are squeezed rather than "
+                                      "overflowing, down to their minimum size");
             }
 
             changed |= fields::SizeField("Width", style.width);

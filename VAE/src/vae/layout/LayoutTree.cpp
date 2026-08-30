@@ -339,6 +339,48 @@ namespace vae::layout {
                             : mainSizes[i];
             }
 
+            // A line that does not fit gives the overflow back, proportionally to what each child
+            // asked for — `flex-shrink: 1`. A stated size becomes a preference rather than a
+            // promise, and `minSize` is the promise: setting it to the width is `flex-shrink: 0`.
+            //
+            // Asked for rather than assumed, unlike CSS. A scroll container full of fixed-height
+            // rows is a flex container too, and shrinking there squeezes every row to fit the box
+            // instead of letting the box scroll — which is exactly the surprise every web developer
+            // has met and fixed with `flex-shrink: 0` on everything.
+            if (style.shrink && std::isfinite(mainAvailable)) {
+                f32 wanted = gapTotal;
+                for (const f32 size : resolved) wanted += size;
+
+                // Each pass freezes whatever hit its floor and shares the rest out again; a child
+                // pinned at its minimum cannot absorb any more, so what it refused has to go
+                // somewhere. Bounded by the child count, which is when everything is frozen.
+                std::vector<bool> frozen(line.count, false);
+                for (u32 pass = 0; pass < line.count && wanted > mainAvailable + 0.01f; ++pass) {
+                    f32 shrinkable = 0.0f;
+                    for (u32 k = 0; k < line.count; ++k)
+                        if (!frozen[k]) shrinkable += resolved[k];
+                    if (shrinkable <= 0.0f) break;
+
+                    const f32 scale = std::max(1.0f - (wanted - mainAvailable) / shrinkable, 0.0f);
+                    bool froze = false;
+                    for (u32 k = 0; k < line.count; ++k) {
+                        if (frozen[k]) continue;
+                        const f32 floor_ = Main(m_Nodes[kids[line.first + k]].style.minSize, axis);
+                        const f32 shrunk = resolved[k] * scale;
+                        if (shrunk < floor_) {
+                            wanted -= resolved[k] - floor_;
+                            resolved[k] = floor_;
+                            frozen[k] = true;
+                            froze = true;
+                        } else {
+                            wanted -= resolved[k] - shrunk;
+                            resolved[k] = shrunk;
+                        }
+                    }
+                    if (!froze) break;
+                }
+            }
+
             const f32 slack = line.fillWeight > 0.0f ? 0.0f : leftover;
             f32 cursor = 0.0f;
             f32 spacing = style.gap;
