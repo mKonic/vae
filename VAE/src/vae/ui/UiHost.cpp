@@ -162,6 +162,15 @@ namespace vae::ui {
         if (m_Dirty) Rebuild();
         else Settle();
 
+        // A virtualized list scrolled past the rows that were built for it. Rebuilding is what
+        // creates them, and it is cheap for exactly the reason the list is virtualized — the
+        // flatten is a screenful of rows, not a document. Once: the second solve is against the
+        // same box and the same offset, so its window is the one just built.
+        if (NeedsRowRebuild()) {
+            Rebuild();
+            Settle();
+        }
+
         // Toasts expire on their own. Walk a copy of the ids: closing mutates the stack.
         std::vector<WidgetId> expired;
         for (auto& overlay : m_Overlays) {
@@ -185,6 +194,13 @@ namespace vae::ui {
         m_Animating = m_Tree->Animate(dt);
         for (auto& overlay : m_Overlays) m_Animating = overlay->tree->Animate(dt) || m_Animating;
         m_Animating = m_Animating || m_AnimationRequested;
+    }
+
+    bool UiHost::NeedsRowRebuild() const {
+        if (m_Tree && m_Tree->NeedsRebuild()) return true;
+        for (const auto& overlay : m_Overlays)
+            if (overlay->tree->NeedsRebuild()) return true;
+        return false;
     }
 
     bool UiHost::NeedsFrame() const {

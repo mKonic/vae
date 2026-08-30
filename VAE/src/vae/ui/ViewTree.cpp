@@ -70,12 +70,29 @@ namespace vae::ui {
         // a repeated container has and what each one draws. Real rows first, then the sample ones
         // the designer typed: a list that has been handed data shows the data, on the canvas as
         // much as anywhere else.
+        // What each repeated container is asked to build. `m_RowMetrics` is last frame's
+        // measurements — the extent of a row, the box that clips it, how far that box is scrolled —
+        // and it is rewritten here with what this flatten actually decided, so the next solve can
+        // check whether the window still covers what is on screen.
+        std::map<WidgetId, RowMetrics> measured;
         const auto flat = m_Document->Flatten(m_RootId,
             [this](Uuid node, Uuid instance) -> const doc::RowTable* {
                 const auto it = m_Rows.find(WidgetId{ node, instance });
                 if (it != m_Rows.end()) return &it->second;
                 return SampleRowsFor(node);
+            },
+            [this, &measured](Uuid node, Uuid instance, u32 total) {
+                const WidgetId id{ node, instance };
+                const doc::RowWindow window = WindowFor(node, instance, total);
+                RowMetrics metrics;
+                if (const auto it = m_RowMetrics.find(id); it != m_RowMetrics.end()) metrics = it->second;
+                metrics.total = total;
+                metrics.first = window.count == 0 ? 0 : window.first;
+                metrics.count = window.count == 0 ? total : window.count;
+                measured[id] = metrics;
+                return window;
             });
+        m_RowMetrics = std::move(measured);
         m_Views.reserve(flat.size());
 
         for (const auto& node : flat) {
@@ -300,6 +317,9 @@ namespace vae::ui {
 
         m_LayoutDirty = false;
         ComputeFrames();
+
+        // The boxes are real now, so a virtualized list can be told what it actually shows.
+        RecordRowMetrics();
 
         // Now that the boxes are real, so is "fills from the bottom".
         ApplyStickToEnd();
@@ -761,6 +781,95 @@ namespace vae::ui {
         return empty ? nullptr : &stored;
     }
 
+    // --------------------------------------------------------------------------- virtualized lists
+
+    // The window a container gets, from what the last frame measured about it.
+    //
+    // Nothing is guessed. Until a frame has built a copy and laid it out there is no row extent, so
+    // the answer is "all of them" — which is what a list short enough to fit wanted anyway, and
+    // which gives the next frame the measurement it needs for a list that is not.
+    doc::RowWindow ViewTree::WindowFor(Uuid node, Uuid instance, u32 total) const {
+        // Short lists are not worth the machinery, and keeping them off this path means every
+        // design that already worked keeps behaving exactly as it did.
+        if (total <= kVirtualizeAbove) return {};
+
+        // Nothing has been laid out yet, so there is nothing to window against — but building a
+        // million rows to find out how tall one of them is would be the whole problem again. A
+        // screenful is built, measured, and replaced on the next frame by the real answer.
+        const auto it = m_RowMetrics.find(WidgetId{ node, instance });
+        if (it == m_RowMetrics.end() || it->second.rowExtent <= 0.0f)
+            return { 0, std::min(kBootstrapRows, total), 0.0f, 0.0f, false };
+        const RowMetrics& metrics = it->second;
+        // ...and the evidence says nothing clips it, so every copy really is on screen.
+        if (metrics.viewport <= 0.0f) return { 0, 0, 0.0f, 0.0f, true };
+
+        // A margin either side, so a scroll of a few rows does not need a rebuild and a fast one
+        // has already-built rows to land on.
+        const f32 margin = static_cast<f32>(kOverscan) * metrics.rowExtent;
+        const f32 top = std::max(metrics.offset - margin, 0.0f);
+        const u32 first = std::min(static_cast<u32>(top / metrics.rowExtent), total);
+        const f32 span = metrics.viewport + 2.0f * margin;
+        const u32 count = std::min(static_cast<u32>(span / metrics.rowExtent) + 2, total - first);
+
+        // A spacer stands where `first` copies would have been, and a stack puts a gap after it —
+        // so it is that much shorter than the space it stands for, or every row below it is one
+        // gap too low.
+        const u32 rest = total - first - count;
+        doc::RowWindow window;
+        window.measured = true;
+        window.first = first;
+        window.count = count;
+        window.before = first == 0 ? 0.0f : static_cast<f32>(first) * metrics.rowExtent - metrics.gap;
+        window.after  = rest == 0  ? 0.0f : static_cast<f32>(rest) * metrics.rowExtent - metrics.gap;
+        return window;
+    }
+
+    void ViewTree::RecordRowMetrics() {
+        if (m_RowMetrics.empty()) return;
+
+        // Every container the flatten windowed, found by the copies it produced. One pass over the
+        // views rather than a lookup per container, because a screen has few of either and this
+        // runs after a solve rather than per frame.
+        for (u32 i = 0; i < m_Views.size(); ++i) {
+            const View& view = m_Views[i];
+            if (!view.rowRoot || view.parent == kInvalid) continue;
+            const View& container = m_Views[view.parent];
+            const auto it = m_RowMetrics.find(WidgetId{ container.sourceId, container.instanceId });
+            if (it == m_RowMetrics.end()) continue;
+            RowMetrics& metrics = it->second;
+
+            const layout::LayoutStyle& style = m_Layout.Style(container.layoutNode);
+            const bool horizontal = style.axis == layout::Axis::Row;
+            const Rect box = m_Layout.NodeRect(view.layoutNode);
+            const f32 extent = (horizontal ? box.size.x : box.size.y) + style.gap;
+            if (extent > 0.0f) { metrics.rowExtent = extent; metrics.gap = style.gap; }
+
+            // The box that decides what can be seen: the nearest ancestor that clips, or the
+            // container itself when it is the scroller. Nothing clipping means every copy is
+            // genuinely on screen and there is no window to build.
+            metrics.viewport = 0.0f;
+            metrics.offset = 0.0f;
+            for (u32 up = view.parent; up != kInvalid; up = m_Views[up].parent) {
+                if (!m_Views[up].clip) continue;
+                const Rect clipBox = m_Layout.NodeRect(m_Views[up].layoutNode);
+                metrics.viewport = horizontal ? clipBox.size.x : clipBox.size.y;
+                metrics.offset = horizontal ? m_Views[up].scroll.x : m_Views[up].scroll.y;
+                break;
+            }
+        }
+
+    }
+
+    bool ViewTree::WindowMoved() const {
+        for (const auto& [widget, metrics] : m_RowMetrics) {
+            const doc::RowWindow window = WindowFor(widget.node, widget.instance, metrics.total);
+            const u32 first = window.count == 0 ? 0 : window.first;
+            const u32 count = window.count == 0 ? metrics.total : window.count;
+            if (first != metrics.first || count != metrics.count) return true;
+        }
+        return false;
+    }
+
     void ViewTree::KeepAtEnd(WidgetId widget) {
         m_ScrollToEnd.insert(widget);
         // The scroll that answers this happens inside Layout, so Layout has to run.
@@ -835,6 +944,10 @@ namespace vae::ui {
     void ViewTree::SetScroll(u32 view, Vec2 scroll) {
         if (!Valid(view)) return;
         Touched();
+        // Scrolling a virtualized list moves its window, and the window is decided from settled
+        // boxes — so the solve has to run again to notice. Only when there is a virtualized list
+        // at all; an ordinary scroller still scrolls without one.
+        if (!m_RowMetrics.empty()) m_NeedsSolve = true;
         m_Views[view].scroll = scroll;
         m_Views[view].props.Set(doc::Prop::ScrollX, scroll.x);
         m_Views[view].props.Set(doc::Prop::ScrollY, scroll.y);

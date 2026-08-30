@@ -35,7 +35,10 @@ namespace {
         Uuid screen, list, row, label;
         Vec2 size{ 1200.0f, 800.0f };
 
-        explicit Rows(int rows, bool distinctText = false) {
+        // `clip` is what decides whether the list is virtualized: a container something clips has
+        // a box to window against, and one nothing clips is as tall as it is long. Both are real
+        // cases and the tests below want one each.
+        explicit Rows(int rows, bool distinctText = false, bool clip = true) {
             static const bool fonts = [] {
                 text::FontDB::Get().RegisterDirectory(FileSystem::Asset("VAE/assets/fonts"),
                                                       true, true);
@@ -60,7 +63,7 @@ namespace {
             box->layout.height = layout::Size::Fill();
             box->layout.gap = 4.0f;
             box->props.Set(doc::Prop::Repeat, static_cast<f32>(rows));
-            box->props.Set(doc::Prop::ClipContent, true);
+            box->props.Set(doc::Prop::ClipContent, clip);
 
             row = document.CreateNode(doc::NodeKind::Frame, list, "Row");
             doc::Node* item = document.Find(row);
@@ -103,7 +106,7 @@ TEST(frame, a_thousand_identical_labels_are_shaped_once) {
     // copy of the same sentence, which is what the 38 ms was.
     text::TextCache::Clear();
     const u64 before = Misses();
-    Rows app(1000);
+    Rows app(1000, false, false);                         // unclipped, so every row is built
     app.Frame();
 
     CHECK(app.host.Tree().ViewCount() > 2000u);           // the rows really were flattened
@@ -118,7 +121,7 @@ TEST(frame, a_thousand_different_labels_are_shaped_a_thousand_times) {
     // text that actually differs.
     text::TextCache::Clear();
     const u64 before = Misses();
-    Rows app(1000, true);
+    Rows app(1000, true, false);
     app.Frame();
 
     const u64 shaped = Misses() - before;
@@ -126,11 +129,12 @@ TEST(frame, a_thousand_different_labels_are_shaped_a_thousand_times) {
 }
 
 TEST(frame, only_what_is_on_screen_is_painted) {
-    // Culling. Four thousand views, a screen that can show sixteen rows, and a draw list that is
-    // the size of what is visible rather than the size of the document.
-    Rows app(2000);
+    // Culling, on a list short enough that nothing windows it — the two mechanisms are separate
+    // and this is the one that has to work for a list built whole. Three hundred views, a screen
+    // that can show sixteen rows, and a draw list the size of what is visible.
+    Rows app(150);
     app.Frame();
-    CHECK(app.host.Tree().ViewCount() > 4000u);
+    CHECK(app.host.Tree().ViewCount() > 300u);
 
     draw::DrawList list;
     PaintContext paint;
@@ -140,6 +144,136 @@ TEST(frame, only_what_is_on_screen_is_painted) {
     CHECK(!list.Quads().empty());                          // it did draw something
     CHECK_MESSAGE(list.Quads().size() < 200,
                   std::to_string(list.Quads().size()) + " quads for a screen that holds ~16 rows");
+}
+
+TEST(frame, a_long_list_builds_a_window_rather_than_a_document) {
+    // The whole of L1. Fifty thousand rows used to be impossible — the flatten capped every list
+    // at two thousand and said so in a warning. Now the list is as long as it says it is, and the
+    // tree holds the rows the box can show plus a margin either side.
+    Rows app(50000);
+    app.Frame();
+    app.Frame();   // the first frame measures a row; the second windows against it
+
+    const u32 views = app.host.Tree().ViewCount();
+    CHECK_MESSAGE(views < 400, std::to_string(views) + " views for a 50,000-row list");
+    CHECK(views > 20);   // and it did build the rows that are actually on screen
+}
+
+TEST(frame, a_windowed_list_is_still_as_tall_as_it_is_long) {
+    // The half that is easy to get wrong. Building thirty rows out of fifty thousand is only
+    // correct if the container is still fifty thousand rows tall — otherwise the scrollbar lies,
+    // the offset means nothing, and scrolling stops at the bottom of the window.
+    Rows app(50000);
+    app.Frame();
+    app.Frame();
+
+    const ui::ViewTree& tree = app.host.Tree();
+    u32 list = ui::ViewTree::kInvalid;
+    for (u32 i = 0; i < tree.ViewCount(); ++i)
+        if (tree.At(i).sourceId == app.list) { list = i; break; }
+    CHECK(list != ui::ViewTree::kInvalid);
+
+    // Its *content*, not its box: this list is the scroller, so its box is the viewport and the
+    // length of the list is what a scrollbar would be drawn from. 48 per row plus the 4 gap, fifty
+    // thousand times, less the last gap.
+    const f32 content = tree.ContentSize(list).y;
+    CHECK_MESSAGE(content > 2'000'000.0f, std::to_string(content) + " of content for 50,000 rows");
+    CHECK_NEAR(content, 50000.0f * 52.0f - 4.0f);
+    // And the box really is only a screenful, so the rows were not all laid out somewhere.
+    CHECK_NEAR(tree.Bounds(list).size.y, 800.0f);
+}
+
+TEST(frame, scrolling_a_long_list_brings_the_rows_it_reaches) {
+    // A window that never moves is just a shorter list. Scrolling past the rows that were built
+    // has to build the ones it lands on — and the copies keep the identity their widget state is
+    // filed under, which is why the row index travels rather than the position in the window.
+    Rows app(50000);
+    app.Frame();
+    app.Frame();
+
+    const auto rowsOnScreen = [&app] {
+        std::vector<i32> out;
+        const ui::ViewTree& tree = app.host.Tree();
+        for (u32 i = 0; i < tree.ViewCount(); ++i)
+            if (tree.At(i).rowRoot) out.push_back(tree.At(i).row);
+        return out;
+    };
+
+    const std::vector<i32> before = rowsOnScreen();
+    CHECK(!before.empty());
+    CHECK_EQ(before.front(), 0);
+
+    // A long way down: row 20,000 of 50,000.
+    u32 list = ui::ViewTree::kInvalid;
+    const ui::ViewTree& tree = app.host.Tree();
+    for (u32 i = 0; i < tree.ViewCount(); ++i)
+        if (tree.At(i).sourceId == app.list) { list = i; break; }
+    app.host.Tree().SetScroll(list, { 0.0f, 20000.0f * 52.0f });
+    app.Frame();
+    app.Frame();
+
+    const std::vector<i32> after = rowsOnScreen();
+    CHECK(!after.empty());
+    CHECK_MESSAGE(after.front() > 19000, "first row on screen is " + std::to_string(after.front()));
+    CHECK_MESSAGE(after.front() < 21000, "first row on screen is " + std::to_string(after.front()));
+    CHECK(after.size() < 400);
+}
+
+TEST(frame, a_row_sits_exactly_where_its_index_says_however_the_window_moved) {
+    // The arithmetic that makes virtualization invisible. A spacer stands where the copies above
+    // the window would have been, and a stack puts a gap after it — so the spacer is one gap
+    // shorter than the space it stands for. Get that wrong by one gap and every row below sits
+    // four pixels off, which reads as the list jumping each time the window slides.
+    Rows app(50000);
+    app.Frame();
+    app.Frame();
+
+    const ui::ViewTree& tree = app.host.Tree();
+    u32 list = ui::ViewTree::kInvalid;
+    for (u32 i = 0; i < tree.ViewCount(); ++i)
+        if (tree.At(i).sourceId == app.list) { list = i; break; }
+    CHECK(list != ui::ViewTree::kInvalid);
+
+    constexpr f32 kRow = 48.0f + 4.0f;   // the fixture's row height plus its gap
+    const auto checkRows = [&](const char* when) {
+        const ui::ViewTree& views = app.host.Tree();
+        const f32 top = views.Bounds(list).pos.y - views.ScrollOffset(list).y;
+        u32 checked = 0;
+        for (u32 i = 0; i < views.ViewCount(); ++i) {
+            if (!views.At(i).rowRoot) continue;
+            const f32 want = top + static_cast<f32>(views.At(i).row) * kRow;
+            const f32 got = views.Bounds(i).pos.y;
+            CHECK_MESSAGE(std::abs(got - want) < 0.5f,
+                          std::string(when) + ": row " + std::to_string(views.At(i).row)
+                          + " is at " + std::to_string(got) + ", not " + std::to_string(want));
+            ++checked;
+        }
+        CHECK(checked > 4);
+    };
+
+    checkRows("at the top");
+
+    // Every offset a scroll can land on: exactly on a row, halfway through one, and far enough
+    // that the window has been rebuilt several times over.
+    for (const f32 offset : { 26.0f, 52.0f, 1000.0f, 1026.0f, 500000.0f, 500026.0f }) {
+        app.host.Tree().SetScroll(list, { 0.0f, offset });
+        app.Frame();
+        app.Frame();
+        checkRows("scrolled");
+    }
+}
+
+TEST(frame, a_short_list_is_built_whole_and_pays_for_none_of_this) {
+    // The threshold, asserted rather than assumed: every design that already worked keeps behaving
+    // exactly as it did, and a list of thirty rows has thirty rows in the tree.
+    Rows app(30);
+    app.Frame();
+    app.Frame();
+
+    u32 rows = 0;
+    const ui::ViewTree& tree = app.host.Tree();
+    for (u32 i = 0; i < tree.ViewCount(); ++i) if (tree.At(i).rowRoot) ++rows;
+    CHECK_EQ(rows, 30u);
 }
 
 TEST(frame, a_settled_screen_asks_for_no_more_frames) {

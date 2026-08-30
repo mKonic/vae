@@ -5,8 +5,13 @@
 
 namespace vae::doc {
 
-    // A typo in a bound number should not try to build a hundred thousand nodes.
-    static constexpr u32 kMaxRepeat = 2000;
+    // A list nothing can scroll is as tall as it is long, so there is no window to build against
+    // and every copy is real. This is the backstop for that case only — a typo in a bound number
+    // should not try to build a hundred thousand nodes that all draw off the bottom of the screen.
+    //
+    // It is no longer the ceiling on what VAE can hold: a repeated container that something clips
+    // gets a window instead, and a window has no limit. See `RowWindow`.
+    static constexpr u32 kMaxUnwindowedRepeat = 2000;
 
     namespace {
         // A component that (transitively) instantiates itself would expand forever. The depth cap
@@ -858,7 +863,7 @@ namespace vae::doc {
     void Document::FlattenInto(std::vector<FlatNode>& out, Uuid id, u32 parent,
                                std::vector<Uuid>& chain, Uuid pathContext, u32 depth,
                                const SlotContent* slot, const RowLookup* rows,
-                               const RowBinding* row) const {
+                               const RowBinding* row, const WindowLookup* windows) const {
         const Node* node = Find(id);
         if (!node) return;
 
@@ -905,7 +910,7 @@ namespace vae::doc {
             // and they stay in the page's scope, which is why the chain is not pushed here.
             if (fills && slotNode == component->id) {
                 for (Uuid child : node->children)
-                    FlattenInto(out, child, index, chain, pathContext, depth, nullptr, rows, row);
+                    FlattenInto(out, child, index, chain, pathContext, depth, nullptr, rows, row, windows);
                 return;
             }
 
@@ -922,7 +927,7 @@ namespace vae::doc {
             chain.push_back(id);
             for (Uuid child : component->children)
                 FlattenInto(out, child, index, chain, path, depth + 1, fills ? &content : nullptr,
-                            rows, row);
+                            rows, row, windows);
             chain.pop_back();
             return;
         }
@@ -952,7 +957,7 @@ namespace vae::doc {
         if (node->slot && slot && slot->children && !slot->children->empty()) {
             std::vector<Uuid> outer = slot->chain;
             for (Uuid child : *slot->children)
-                FlattenInto(out, child, index, outer, slot->pathContext, depth, nullptr, rows, row);
+                FlattenInto(out, child, index, outer, slot->pathContext, depth, nullptr, rows, row, windows);
             return;
         }
 
@@ -971,19 +976,60 @@ namespace vae::doc {
         const f32 authored = out[index].props.Number(Prop::Repeat, 0.0f);
         const f32 repeats = table ? static_cast<f32>(table->Count()) : authored;
         if ((table || repeats >= 1.0f) && !node->children.empty()) {
-            const u32 count = std::min(static_cast<u32>(std::max(repeats, 0.0f)), kMaxRepeat);
-            if (static_cast<f32>(count) < repeats)
-                VAE_CORE_WARN("'{}' asked to repeat {} times; {} is the limit", node->name,
-                              static_cast<u32>(repeats), kMaxRepeat);
+            const u32 total = static_cast<u32>(std::max(repeats, 0.0f));
+
+            // What to build, and what to leave as space. A container something clips is asked; one
+            // nothing clips is as tall as it is long, so every copy is real and the backstop
+            // applies instead.
+            RowWindow window;
+            if (windows && *windows) window = (*windows)(id, pathContext, total);
+            u32 first = std::min(window.first, total);
+            u32 count = window.count == 0 ? total - first
+                                          : std::min(window.count, total - first);
+            if (window.count == 0 && count > kMaxUnwindowedRepeat) {
+                if (window.measured)
+                    VAE_CORE_WARN("'{}' repeats {} times and nothing clips it, so every copy is on "
+                                  "screen at once; {} of them were built", node->name, total,
+                                  kMaxUnwindowedRepeat);
+                count = kMaxUnwindowedRepeat;
+            }
 
             const Uuid templateId = node->children.front();
+
+            // The copies that were not built, as the room they would have taken. Along the
+            // container's own axis, so a row of cards windows sideways the same way a list of
+            // messages windows down. Ids derived from the template the same way a copy's is, with
+            // the two offsets a copy never uses, so a spacer keeps its identity across a rebuild.
+            const bool horizontal = out[index].layout.axis == layout::Axis::Row;
+            const auto spacer = [&](f32 extent, u64 salt) {
+                if (extent <= 0.0f) return;
+                FlatNode gap;
+                gap.sourceId = id;
+                gap.instanceId = Uuid::Derive(pathContext, Uuid(templateId.Value() + salt));
+                gap.overrideId = out[index].overrideId;
+                gap.overrideKey = id;
+                gap.authoredId = id;
+                gap.parent = index;
+                gap.kind = NodeKind::Frame;
+                gap.name = {};
+                // Fills the cross axis and takes exactly its share of the main one. Nothing is set
+                // on it, so it draws nothing, answers to nothing and is announced as nothing — it
+                // is the space itself, not a placeholder for a row.
+                gap.layout.width  = horizontal ? layout::Size::Px(extent) : layout::Size::Fill();
+                gap.layout.height = horizontal ? layout::Size::Fill() : layout::Size::Px(extent);
+                out.push_back(std::move(gap));
+            };
+            spacer(window.before, 0);
             const std::string base = Find(templateId) ? Find(templateId)->name : std::string("Item");
-            for (u32 i = 0; i < count; ++i) {
+            for (u32 i = first; i < first + count; ++i) {
                 const std::size_t at = out.size();
                 const RowBinding binding{ table, i };
+                // Derived from the row's real index, not its place in the window, so a copy keeps
+                // the identity its widget state and its script name are filed under while the
+                // window slides past it.
                 FlattenInto(out, templateId, index, chain,
                             Uuid::Derive(pathContext, Uuid(templateId.Value() + i + 1)), depth,
-                            slot, rows, table ? &binding : row);
+                            slot, rows, table ? &binding : row, windows);
                 // Named for its place, so a script can address the third one by saying so.
                 if (out.size() > at) out[at].name = base + " " + std::to_string(i + 1);
                 for (std::size_t k = at; k < out.size(); ++k) {
@@ -992,20 +1038,24 @@ namespace vae::doc {
                 }
                 if (out.size() > at) out[at].rowRoot = true;
             }
+            spacer(window.after, 0xffffffffull);
+
             for (std::size_t c = 1; c < node->children.size(); ++c)
                 FlattenInto(out, node->children[c], index, chain, pathContext, depth, slot, rows,
-                            row);
+                            row, windows);
             return;
         }
 
         for (Uuid child : node->children)
-            FlattenInto(out, child, index, chain, pathContext, depth, slot, rows, row);
+            FlattenInto(out, child, index, chain, pathContext, depth, slot, rows, row, windows);
     }
 
-    std::vector<Document::FlatNode> Document::Flatten(Uuid root, const RowLookup& rows) const {
+    std::vector<Document::FlatNode> Document::Flatten(Uuid root, const RowLookup& rows,
+                                                      const WindowLookup& windows) const {
         std::vector<FlatNode> out;
         std::vector<Uuid> chain;
-        FlattenInto(out, root, UINT32_MAX, chain, Uuid::Invalid(), 0, nullptr, &rows);
+        FlattenInto(out, root, UINT32_MAX, chain, Uuid::Invalid(), 0, nullptr, &rows, nullptr,
+                    &windows);
         return out;
     }
 

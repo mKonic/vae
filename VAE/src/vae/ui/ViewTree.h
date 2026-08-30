@@ -271,6 +271,10 @@ namespace vae::ui {
         // True once since the last layout: a behavior moved something. Lets the host re-solve only
         // when a knob or a thumb actually moved rather than laying out twice every frame.
         bool ConsumeLayoutDirty();
+        // A virtualized list scrolled far enough that the copies it now needs were never built.
+        // The host answers this by rebuilding, which is cheap precisely because the list is
+        // virtualized — it is a screenful of rows, not a document.
+        bool NeedsRebuild() const { return WindowMoved(); }
         // Whether a solve is owed. A script that changes something after the frame's layout has
         // already run needs the next frame to happen, or what it changed is never drawn.
         bool NeedsLayout() const { return m_NeedsSolve; }
@@ -322,6 +326,43 @@ namespace vae::ui {
         // list that jumped back to the top because something unrelated changed is a bug the user
         // sees immediately.
         std::map<WidgetId, Vec2> m_ScrollState;
+
+        // --- virtualized lists ---------------------------------------------------------------
+        // What the last frame learned about a repeated container, so the next flatten can build
+        // only the copies that will be seen. Everything here is measured, not guessed: the extent
+        // of one built row, the extent of the box that clips it, and how far that box is scrolled.
+        struct RowMetrics {
+            f32 rowExtent = 0.0f;    // one copy plus the gap after it, along the container's axis
+            f32 gap = 0.0f;          // that gap on its own, which a spacer has to give back
+            f32 viewport = 0.0f;     // the clipping box, along the same axis; 0 when nothing clips
+            f32 offset = 0.0f;       // how far that box is scrolled
+            u32 total = 0;           // how many copies the container turned out to have
+            u32 first = 0, count = 0;// the window that was actually built
+        };
+        // Below this a list is built whole. The machinery costs a rebuild whenever the window
+        // moves, and thirty rows of it buys nothing — so every design that already worked keeps
+        // behaving exactly as it did, and only a list big enough to need this pays for it.
+        static constexpr u32 kVirtualizeAbove = 200;
+        // Rows built either side of the box, so a scroll of a few rows needs no rebuild and a fast
+        // one lands on rows that already exist.
+        static constexpr u32 kOverscan = 12;
+        // What a long list builds on the very first frame, before a row has been laid out and
+        // there is anything to window against. Generous enough to fill a tall box at a small row
+        // height, and corrected on the next frame either way — so the alternative was building the
+        // whole list once, which is the cost this exists to avoid.
+        static constexpr u32 kBootstrapRows = 64;
+        std::map<WidgetId, RowMetrics> m_RowMetrics;
+
+        // The window for one container, from what the last frame measured. Empty — meaning "all of
+        // them" — until there is something to measure against.
+        doc::RowWindow WindowFor(Uuid node, Uuid instance, u32 total) const;
+        // Re-measures every repeater against the boxes the solve just settled: how tall one copy
+        // came out, what box clips it, how far that box is scrolled.
+        void RecordRowMetrics();
+        // Whether any window no longer covers what its box can show. A window that moved is a
+        // rebuild — the copies it names do not exist yet. Cheap, and checked every frame, because
+        // scrolling moves a window without anything else having changed.
+        bool WindowMoved() const;
         // What a widget changed about a repeated copy. Keyed the same way scroll is, and kept for
         // the same reason: the copy has no node of its own, and a rebuild must not forget it.
         std::map<WidgetId, doc::PropBag> m_RuntimeProps;

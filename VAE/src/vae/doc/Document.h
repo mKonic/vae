@@ -77,6 +77,36 @@ namespace vae::doc {
     // the runtime lending its rows for the length of one flatten.
     using RowLookup = std::function<const RowTable*(Uuid node, Uuid instance)>;
 
+    // How much of a repeated container is worth building, and how much room the rest of it takes.
+    //
+    // A list of fifty thousand rows inside a box that shows thirty needs thirty copies, not fifty
+    // thousand — but it still has to be fifty thousand rows tall, or the scrollbar lies and the
+    // scroll offset means nothing. So the copies outside the window are represented by the space
+    // they would have taken: one empty node above the window and one below, sized along the
+    // container's own axis.
+    //
+    // Nodes rather than padding, which was the first attempt: a repeated container is very often
+    // the scroller itself, and padding on a scroller is inside its box — it makes the viewport
+    // smaller instead of the content taller, and the content size a scrollbar is drawn from is
+    // measured off the children. A spacer is a child, so it is right in both shapes.
+    struct RowWindow {
+        u32 first = 0;      // the first copy to build
+        u32 count = 0;      // how many; zero means all of them, which is what a short list wants
+        // The extents of the two spacers, gaps already taken off — the caller knows the gap and
+        // this keeps the arithmetic in the one place that measured the rows.
+        f32 before = 0.0f;
+        f32 after = 0.0f;
+        // Whether the answer is "all of them, because nothing clips this" or "all of them, because
+        // nothing has been measured yet". The first is worth a warning at fifty thousand rows; the
+        // second is just the first frame, and happens to every list before it has been laid out.
+        bool measured = false;
+    };
+
+    // Asked once per repeated container, with how many copies it turned out to have. Absent — on
+    // the designer's canvas, in a test, on the first frame before anything has been measured —
+    // every copy is built, which is exactly what it used to do.
+    using WindowLookup = std::function<RowWindow(Uuid node, Uuid instance, u32 total)>;
+
     // The design document: a flat map of nodes addressed by Uuid, plus tokens.
     //
     // Flat and id-addressed rather than a pointer tree, because every other system needs stable
@@ -255,7 +285,8 @@ namespace vae::doc {
         };
         // `rows` answers with what a repeated container was handed, if anything. Without it a
         // repeat is still a repeat — it just draws the template's own text N times.
-        std::vector<FlatNode> Flatten(Uuid root, const RowLookup& rows = {}) const;
+        std::vector<FlatNode> Flatten(Uuid root, const RowLookup& rows = {},
+                                      const WindowLookup& windows = {}) const;
 
         // --- change notification ---------------------------------------------------------------
         // Studio, the renderer and hot reload all watch the same stream, so there is exactly one
@@ -293,7 +324,8 @@ namespace vae::doc {
         void FlattenInto(std::vector<FlatNode>& out, Uuid id, u32 parent,
                          std::vector<Uuid>& chain, Uuid pathContext, u32 depth,
                          const SlotContent* slot = nullptr, const RowLookup* rows = nullptr,
-                         const RowBinding* row = nullptr) const;
+                         const RowBinding* row = nullptr,
+                         const WindowLookup* windows = nullptr) const;
 
         std::string m_IdScope;      // empty except while the standard library is being built
         u32 m_IdCounter = 0;

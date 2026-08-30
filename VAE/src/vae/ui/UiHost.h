@@ -198,6 +198,7 @@ namespace vae::ui {
         void   LayoutAll();
         void   ArrangeAll();
         void   SyncBehaviors(ViewTree& tree);
+        bool   NeedsRowRebuild() const;
         void   TickTree(ViewTree& tree, f32 dt);
         void   PaintScrim(draw::DrawList& list) const;
 
