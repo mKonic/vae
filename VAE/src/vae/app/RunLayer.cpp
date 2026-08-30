@@ -234,11 +234,23 @@ namespace vae::app {
             if (!m_Bridge) return;
         }
 
-        // Built every frame and sent only when it differs. Building is a walk of the view tree;
-        // telling a screen reader that the whole screen is new makes it read the screen out again,
-        // so the second is the one worth being careful about.
+        // Built only when something a screen reader would notice has moved, and sent only when the
+        // result differs. Two gates rather than one: building is a walk of every view, and telling
+        // a screen reader that the whole screen is new makes it read the screen out again.
+        //
+        // The stamp is conservative — it moves for changes the built tree turns out not to care
+        // about, and the signature below catches those. What it must never do is fail to move, so
+        // it is derived from the trees themselves rather than maintained at each call site.
+        const u64 stamp = m_Host.AccessibilityStamp();
+        if (stamp == m_AccessibilityStamp && m_PublishedRevision != 0) {
+            m_Bridge->Pump();
+            return;
+        }
+        m_AccessibilityStamp = stamp;
+
         // The caret comes from the host rather than the view tree: an edit state has to survive
-        // the tree being rebuilt, so that is where it lives.
+        // the tree being rebuilt, so that is where it lives — and it is in the stamp above for the
+        // same reason.
         m_Accessibility.Build(m_Host.Tree(), ScreenName(), [this](u32 view, u32& caret, u32& anchor) {
             const ui::ViewTree& views = m_Host.Tree();
             if (!views.Valid(view)) return false;

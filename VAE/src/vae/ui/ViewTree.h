@@ -131,6 +131,20 @@ namespace vae::ui {
         // Walks up from `view` to the first ancestor (or itself) that owns a behavior.
         u32 BehaviorOwner(u32 view) const;
 
+        // Moves whenever anything a reader of this tree could notice has changed: a rebuild, a
+        // solve, a state change, a prop written at runtime, a scroll, a row table, a locale.
+        //
+        // The one caller is the accessibility publisher, which used to rebuild a screen reader's
+        // whole tree sixty times a second to find out whether anything had. **A new mutating method
+        // on this class bumps it** — a missed bump does not corrupt anything, it leaves a screen
+        // reader describing a screen that has moved on, which is worse.
+        u64 Stamp() const { return m_Stamp; }
+
+        // The views that own a behaviour, which on a real screen is a few dozen out of thousands.
+        // Three per-frame passes used to find them by walking everything; the list is built once,
+        // where the behaviours are attached.
+        const std::vector<u32>& BehaviorViews() const { return m_BehaviorViews; }
+
         u32 Root() const { return m_Root; }
         u32 ViewCount() const { return static_cast<u32>(m_Views.size()); }
         // Asserted rather than clamped: unlike Bounds, there is no sensible empty View to hand
@@ -349,6 +363,9 @@ namespace vae::ui {
         bool m_HasBreakpoints = false;
         f32 m_PreviewWidth = 0.0f;   // design-time only; 0 is the root's own width
         u64 m_Solves = 0;
+        std::vector<u32> m_BehaviorViews;
+        u64 m_Stamp = 0;
+        void Touched() { ++m_Stamp; }
         // Reads every view's settled width, works out which breakpoints it is inside, and restyles
         // the ones that changed. True when anything moved, which is when the solve has to run again.
         bool ApplyBreakpoints();

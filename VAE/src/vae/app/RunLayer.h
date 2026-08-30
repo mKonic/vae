@@ -66,6 +66,7 @@ namespace vae::app {
         void OnUpdate(Timestep ts) override;
         // Rebuilds what a screen reader sees and sends it, when the screen has actually changed.
         void PublishAccessibility();
+        u64 m_AccessibilityStamp = 0;
         std::string ScreenName() const;
         void OnUiRender(gpu::CommandList& cmd) override;
         void OnEvent(Event& e) override;

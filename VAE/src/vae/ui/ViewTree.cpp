@@ -196,12 +196,15 @@ namespace vae::ui {
     }
 
     void ViewTree::AttachBehaviors() {
+        Touched();
+        m_BehaviorViews.clear();
         for (u32 i = 0; i < m_Views.size(); ++i) {
             View& view = m_Views[i];
             if (view.role == Role::None) continue;
             Scope<Behavior> behavior = MakeBehavior(view.role);
             if (!behavior) continue;
             view.behavior = behavior.get();
+            m_BehaviorViews.push_back(i);
             m_Behaviors.push_back(std::move(behavior));
         }
         // Disabled is a document property, not an interaction outcome, so it is true before the
@@ -265,6 +268,7 @@ namespace vae::ui {
         m_Available = available;
         m_NeedsSolve = false;
         ++m_Solves;
+        Touched();
 
         for (u32 i = 0; i < m_Views.size(); ++i) {
             const View& view = m_Views[i];
@@ -536,6 +540,7 @@ namespace vae::ui {
 
     void ViewTree::SetViewPropLocal(u32 view, doc::Prop prop, doc::Value value) {
         if (!Valid(view)) return;
+        Touched();
         View& node = m_Views[view];
         if (const doc::Value* existing = node.props.Find(prop); existing && *existing == value)
             return;
@@ -548,6 +553,7 @@ namespace vae::ui {
 
     void ViewTree::SetViewProp(u32 view, doc::Prop prop, doc::Value value) {
         if (!Valid(view) || !m_Document) return;
+        Touched();
         View& node = m_Views[view];
 
         // A repeated copy has no node of its own — every copy is the one node the designer drew —
@@ -651,6 +657,7 @@ namespace vae::ui {
         }
 
         m_Views[view].state = after;
+        Touched();
         // A state overlay can name a property that decides a box — `hovered:fontSize` is a label
         // that grows — so a state change is a reason to lay out again.
         m_NeedsSolve = true;
@@ -694,6 +701,7 @@ namespace vae::ui {
     void ViewTree::SetLayoutStyle(u32 view, const layout::LayoutStyle& style) {
         if (!Valid(view)) return;
         if (m_Layout.Style(m_Views[view].layoutNode) == style) return;
+        Touched();
         m_Layout.SetStyle(m_Views[view].layoutNode, style);
         m_LayoutDirty = true;
         m_NeedsSolve = true;
@@ -705,12 +713,14 @@ namespace vae::ui {
 
     void ViewTree::SetRuntimeVisible(u32 view, bool visible) {
         if (!Valid(view) || m_Views[view].visible == visible) return;
+        Touched();
         m_Views[view].visible = visible;
         m_LayoutDirty = true;
         m_NeedsSolve = true;
     }
 
     void ViewTree::SetRows(WidgetId widget, doc::RowTable rows) {
+        Touched();
         m_Rows[widget] = std::move(rows);
         m_NeedsSolve = true;
     }
@@ -722,6 +732,7 @@ namespace vae::ui {
 
     void ViewTree::SetStrings(const doc::StringTable* strings) {
         if (m_Strings == strings) return;
+        Touched();
         m_Strings = strings;
         // Every label with a key says something different now, and text decides layout.
         m_LayoutDirty = true;
@@ -823,6 +834,7 @@ namespace vae::ui {
 
     void ViewTree::SetScroll(u32 view, Vec2 scroll) {
         if (!Valid(view)) return;
+        Touched();
         m_Views[view].scroll = scroll;
         m_Views[view].props.Set(doc::Prop::ScrollX, scroll.x);
         m_Views[view].props.Set(doc::Prop::ScrollY, scroll.y);

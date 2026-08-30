@@ -86,6 +86,70 @@ namespace {
 
 }
 
+// The publisher no longer rebuilds a screen reader's whole tree sixty times a second to find out
+// whether anything changed — it asks the host for a stamp first. That is a cache, and the failure a
+// cache has is the quiet one: a change nobody is told about leaves a screen reader describing a
+// screen that has moved on.
+//
+// So this is the guard. Every kind of change that reaches the built tree has to move the stamp; a
+// frame in which nothing happened must not.
+TEST(a11y, a_quiet_frame_does_not_move_the_stamp) {
+    A11yUi ui;
+    ui.Place("Button");
+    for (int i = 0; i < 4; ++i) ui.Frame();
+
+    const u64 settled = ui.host.AccessibilityStamp();
+    ui.Frame();
+    ui.Frame();
+    CHECK_EQ(ui.host.AccessibilityStamp(), settled);
+}
+
+TEST(a11y, everything_a_reader_would_notice_moves_the_stamp) {
+    A11yUi ui;
+    const Uuid button = ui.Place("Button");
+    const Uuid box = ui.Place("Checkbox", { 40.0f, 200.0f });
+    ui.Frame();
+
+    const auto moved = [&ui](u64 before, const char* what) {
+        const u64 now = ui.host.AccessibilityStamp();
+        CHECK_MESSAGE(now != before, std::string(what) + " did not move the stamp");
+        return now;
+    };
+
+    // What it says.
+    u64 stamp = ui.host.AccessibilityStamp();
+    ui.SetOn(button, "Button", doc::Prop::Text, std::string("Send"));
+    stamp = moved(stamp, "changing a label");
+
+    // What state it is in — a checkbox that is now checked is announced differently.
+    const u32 view = [&] {
+        const ui::ViewTree& tree = ui.host.Tree();
+        for (u32 i = 0; i < tree.ViewCount(); ++i)
+            if (tree.At(i).instanceId == box && tree.At(i).behavior) return i;
+        return ui::ViewTree::kInvalid;
+    }();
+    CHECK(view != ui::ViewTree::kInvalid);
+    ui.host.Tree().SetState(view, ui::StateBit::Checked, true);
+    stamp = moved(stamp, "checking a box");
+
+    // Where it is. A screen reader draws a box around what it is reading.
+    ui.document.Find(button)->layout.offsetStart = { 300.0f, 300.0f };
+    ui.document.Touch(button);
+    ui.Frame();
+    stamp = moved(stamp, "moving a widget");
+
+    // Whether it is there at all.
+    ui.host.Tree().SetRuntimeVisible(view, false);
+    stamp = moved(stamp, "hiding a widget");
+
+    // And the caret, which lives on the host rather than in a tree because an edit survives the
+    // tree being rebuilt — the one input a tree's own stamp cannot speak for.
+    ui.host.EditState(ui::WidgetId{ button }).caret = 3;
+    stamp = moved(stamp, "moving the caret");
+    ui.host.EditState(ui::WidgetId{ button }).anchor = 1;
+    moved(stamp, "extending a selection");
+}
+
 TEST(a11y, the_tree_starts_at_a_window) {
     A11yUi ui;
     const a11y::Tree tree = ui.Build();

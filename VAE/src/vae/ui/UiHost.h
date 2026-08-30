@@ -55,6 +55,11 @@ namespace vae::ui {
         // script changed the tree after it was laid out. What an idle loop asks before going back
         // to sleep.
         bool NeedsFrame() const;
+
+        // A stamp for everything a screen reader would notice: what every tree says, which widget
+        // has focus, and where the carets are. Derived from what the frame actually did rather
+        // than maintained here, so the only place that has to remember to move it is ViewTree.
+        u64 AccessibilityStamp() const;
         // A behavior saying "I am moving, keep drawing". A spinner is not a transition — nothing
         // changed state and nothing is easing — so without this the frame loop sleeps and the one
         // widget whose whole job is to move stops moving. Cleared and re-asked every frame.

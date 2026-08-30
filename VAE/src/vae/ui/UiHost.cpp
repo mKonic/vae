@@ -128,12 +128,12 @@ namespace vae::ui {
     }
 
     void UiHost::ArrangeAll() {
+        // The views that own a behaviour, not every view: a list of 2,000 rows has 4,002 views and
+        // a couple of dozen behaviours, and this used to look at all of them three times a frame.
         auto arrange = [this](ViewTree& tree) {
-            for (u32 i = 0; i < tree.ViewCount(); ++i) {
-                Behavior* behavior = tree.At(i).behavior;
-                if (!behavior) continue;
+            for (const u32 i : tree.BehaviorViews()) {
                 WidgetContext context{ tree, *this, i };
-                behavior->Arrange(context);
+                tree.At(i).behavior->Arrange(context);
             }
         };
         arrange(*m_Tree);
@@ -150,11 +150,9 @@ namespace vae::ui {
     }
 
     void UiHost::SyncBehaviors(ViewTree& tree) {
-        for (u32 i = 0; i < tree.ViewCount(); ++i) {
-            Behavior* behavior = tree.At(i).behavior;
-            if (!behavior) continue;
+        for (const u32 i : tree.BehaviorViews()) {
             WidgetContext context{ tree, *this, i };
-            behavior->Sync(context);
+            tree.At(i).behavior->Sync(context);
         }
     }
 
@@ -197,12 +195,24 @@ namespace vae::ui {
         return false;
     }
 
+    u64 UiHost::AccessibilityStamp() const {
+        const auto mix = [](u64 stamp, u64 value) { return (stamp ^ value) * 0x100000001B3ull; };
+        u64 stamp = m_Tree ? mix(0xcbf29ce484222325ull, m_Tree->Stamp()) : 0xcbf29ce484222325ull;
+        for (const auto& overlay : m_Overlays) stamp = mix(stamp, overlay->tree->Stamp());
+        stamp = mix(stamp, m_Overlays.size());
+        stamp = mix(stamp, std::hash<Uuid>{}(m_FocusedId.node));
+        stamp = mix(stamp, std::hash<Uuid>{}(m_FocusedId.instance));
+        // The carets live here rather than in a tree — an edit survives the tree being rebuilt —
+        // so they are the one input the trees' own stamps cannot speak for.
+        for (const auto& [id, edit] : m_EditStates)
+            stamp = mix(mix(stamp, edit.caret), edit.anchor);
+        return stamp;
+    }
+
     void UiHost::TickTree(ViewTree& tree, f32 dt) {
-        for (u32 i = 0; i < tree.ViewCount(); ++i) {
-            Behavior* behavior = tree.At(i).behavior;
-            if (!behavior) continue;
+        for (const u32 i : tree.BehaviorViews()) {
             WidgetContext context{ tree, *this, i };
-            behavior->OnTick(context, dt);
+            tree.At(i).behavior->OnTick(context, dt);
         }
     }
 
