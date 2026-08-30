@@ -419,12 +419,15 @@ namespace vae::text {
             record.first  = Be16(m_Data, at);
             record.last   = Be16(m_Data, at + 2);
             // Both are from the start of the document *list*, not of the table — the one offset in
-            // this format that is not relative to the thing you would expect.
-            record.offset = static_cast<u32>(base) + Be32(m_Data, at + 4);
-            record.length = Be32(m_Data, at + 8);
-            if (record.last < record.first || record.length == 0) continue;
-            if (record.offset > m_Data.size() || record.length > m_Data.size() - record.offset)
-                continue;
+            // this format that is not relative to the thing you would expect. Added in 64 bits
+            // because a corrupt record is allowed to say four billion, and a u32 that wrapped
+            // would land back inside the file and read the wrong bytes as XML.
+            const u64 offset = static_cast<u64>(base) + Be32(m_Data, at + 4);
+            const u64 length = Be32(m_Data, at + 8);
+            if (record.last < record.first || length == 0) continue;
+            if (offset > m_Data.size() || length > m_Data.size() - offset) continue;
+            record.offset = static_cast<u32>(offset);
+            record.length = static_cast<u32>(length);
             table->records.push_back(record);
         }
         if (table->records.empty()) return false;
