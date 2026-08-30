@@ -4,6 +4,7 @@
 #include <charconv>
 #include <cmath>
 #include <map>
+#include <set>
 
 namespace vae::vector {
 
@@ -297,15 +298,17 @@ namespace vae::vector {
 
         // Presentation attributes and `style` say the same things, so they are read into the same
         // place: whichever comes later in the element wins, which is what a browser does too.
-        void ReadStyle(std::string_view style, Attributes& into) {
+        void ReadStyle(std::string_view style, Attributes& into,
+                       std::set<std::string>* record = nullptr) {
             std::size_t at = 0;
             while (at < style.size()) {
                 const std::size_t colon = style.find(':', at);
                 if (colon == std::string_view::npos) break;
                 std::size_t end = style.find(';', colon);
                 if (end == std::string_view::npos) end = style.size();
-                into.values[std::string(Trim(style.substr(at, colon - at)))] =
-                    std::string(Trim(style.substr(colon + 1, end - colon - 1)));
+                std::string key(Trim(style.substr(at, colon - at)));
+                into.values[key] = std::string(Trim(style.substr(colon + 1, end - colon - 1)));
+                if (record) record->insert(std::move(key));
                 at = end + 1;
             }
         }
@@ -313,9 +316,140 @@ namespace vae::vector {
         struct Element {
             std::string name;
             Attributes attributes;
+            // Which of those came from this element's own `style="…"`. A presentation attribute
+            // loses to a stylesheet rule and inline style beats one, and once all three are in the
+            // same map there is nothing else left to tell them apart by.
+            std::set<std::string> inlineStyle;
             bool closing = false;
             bool selfClosing = false;
         };
+
+        // A `<style>` block: how every Illustrator export, and most of the OpenType-SVG glyph
+        // documents built from them, says what colour anything is. `.st0{fill:#FF0000}` at the top
+        // of the file and `class="st0"` on the shapes. Ignoring it draws the whole picture in the
+        // default black, which is the loudest wrong answer a reader can give.
+        //
+        // One simple selector is matched — a tag name, a `.class` or an `#id` — because that is
+        // the whole of what those exports write. A descendant combinator, a pseudo-class or an
+        // attribute selector is dropped by name rather than half-applied to the wrong elements.
+        struct CssRule {
+            enum class On : u8 { Element, Class, Id };
+            On on = On::Class;
+            std::string name;
+            Attributes declarations;
+        };
+
+        void ReadStylesheet(std::string_view source, std::vector<CssRule>& rules,
+                            std::string* dropped) {
+            std::size_t at = 0;
+            while (true) {
+                const std::size_t open = source.find("<style", at);
+                if (open == std::string_view::npos) return;
+                const std::size_t body = source.find('>', open);
+                if (body == std::string_view::npos) return;
+                const std::size_t close = source.find("</style", body);
+                const std::size_t end = close == std::string_view::npos ? source.size() : close;
+                std::string text(source.substr(body + 1, end - body - 1));
+                at = close == std::string_view::npos ? source.size() : close + 7;
+
+                // CDATA and comments, both of which an exporter wraps around the rules.
+                for (const std::string_view marker : { "<![CDATA[", "]]>" })
+                    for (std::size_t found = text.find(marker); found != std::string::npos;
+                         found = text.find(marker, found))
+                        text.erase(found, marker.size());
+                for (std::size_t begin = text.find("/*"); begin != std::string::npos;
+                     begin = text.find("/*", begin)) {
+                    const std::size_t stop = text.find("*/", begin + 2);
+                    text.erase(begin, (stop == std::string::npos ? text.size() : stop + 2) - begin);
+                }
+
+                std::size_t scan = 0;
+                while (scan < text.size()) {
+                    const std::size_t brace = text.find('{', scan);
+                    if (brace == std::string::npos) break;
+                    const std::size_t shut = text.find('}', brace);
+                    const std::string_view all = text;
+                    const std::string_view selectors = Trim(all.substr(scan, brace - scan));
+                    const std::string_view declarations =
+                        all.substr(brace + 1, (shut == std::string::npos ? all.size() : shut)
+                                              - brace - 1);
+                    scan = shut == std::string::npos ? text.size() : shut + 1;
+
+                    // `@media`, `@font-face` and friends wrap rules in another set of braces, so
+                    // reading them as a rule would read a selector out of the middle of one.
+                    if (selectors.empty() || selectors.front() == '@') {
+                        if (dropped && dropped->empty())
+                            *dropped = "a CSS at-rule was left out";
+                        continue;
+                    }
+
+                    Attributes declared;
+                    ReadStyle(declarations, declared);
+                    if (declared.values.empty()) continue;
+
+                    for (std::size_t from = 0; from <= selectors.size();) {
+                        const std::size_t comma = selectors.find(',', from);
+                        const std::size_t stop = comma == std::string_view::npos
+                                               ? selectors.size() : comma;
+                        const std::string_view one = Trim(selectors.substr(from, stop - from));
+                        from = stop + 1;
+                        if (one.empty()) continue;
+
+                        CssRule rule;
+                        std::string_view name = one;
+                        if (one.front() == '.')      { rule.on = CssRule::On::Class; name = one.substr(1); }
+                        else if (one.front() == '#') { rule.on = CssRule::On::Id;    name = one.substr(1); }
+                        else                           rule.on = CssRule::On::Element;
+
+                        if (name.empty()
+                            || name.find_first_of(" \t\n\r>+~:[]().*#") != std::string_view::npos) {
+                            if (dropped && dropped->empty())
+                                *dropped = "the CSS selector '" + std::string(one)
+                                         + "' is more than this reader matches";
+                            continue;
+                        }
+                        rule.name = std::string(name);
+                        rule.declarations = declared;
+                        rules.push_back(std::move(rule));
+                    }
+                }
+            }
+        }
+
+        // The stylesheet, under the element's own `style` and over its presentation attributes,
+        // which is the order CSS specificity puts them in.
+        void ApplyStylesheet(const std::vector<CssRule>& rules, Element& element) {
+            if (rules.empty()) return;
+            // Copied out: the loop below writes into the same map these point into.
+            const std::string classes(element.attributes.Get("class"));
+            const std::string id(element.attributes.Get("id"));
+
+            const auto matches = [&](const CssRule& rule) {
+                if (rule.on == CssRule::On::Element) return rule.name == element.name;
+                if (rule.on == CssRule::On::Id)      return rule.name == id;
+                // `class` is a list, and a shape in two of them takes both.
+                std::size_t at = 0;
+                while (at < classes.size()) {
+                    while (at < classes.size() && IsSpace(classes[at])) ++at;
+                    const std::size_t begin = at;
+                    while (at < classes.size() && !IsSpace(classes[at])) ++at;
+                    if (std::string_view(classes).substr(begin, at - begin) == rule.name)
+                        return true;
+                }
+                return false;
+            };
+
+            // Least specific first, so a class rule beats a tag rule and an id rule beats both.
+            // Within one level the last rule in the file wins, which is document order.
+            for (const CssRule::On level :
+                 { CssRule::On::Element, CssRule::On::Class, CssRule::On::Id })
+                for (const CssRule& rule : rules) {
+                    if (rule.on != level || !matches(rule)) continue;
+                    for (const auto& [key, value] : rule.declarations.values)
+                        if (!element.inlineStyle.contains(key))
+                            element.attributes.values[key] = value;
+                }
+        }
 
         // Enough XML for a picture: elements, attributes, comments, processing instructions and
         // doctypes. No entities beyond the five, no namespaces beyond ignoring the prefix — an SVG
@@ -381,7 +515,7 @@ namespace vae::vector {
                              found = value.find(entity, found + 1))
                             value.replace(found, entity.size(), 1, character);
 
-                    if (key == "style") ReadStyle(value, out.attributes);
+                    if (key == "style") ReadStyle(value, out.attributes, &out.inlineStyle);
                     else out.attributes.values[std::string(key)] = std::move(value);
                 }
                 if (at < source.size() && source[at] == '>') ++at;
@@ -530,6 +664,12 @@ namespace vae::vector {
         std::size_t at = 0;
         Element element;
         std::vector<Inherited> stack{ Inherited{} };
+
+        // Read up front rather than when the `<style>` element is reached: a stylesheet applies to
+        // the whole document wherever it sits in it, and a file that puts one at the bottom is
+        // still a file whose shapes are painted by it.
+        std::vector<CssRule> stylesheet;
+        ReadStylesheet(source, stylesheet, &dropped);
         // `<defs>` and friends define things for other elements to reference; drawing them where
         // they sit is the single most visible way to get an SVG wrong.
         int hidden = 0;
@@ -567,6 +707,8 @@ namespace vae::vector {
                 if (keepFrom >= 0 && depth < keepFrom) keepFrom = -1;
                 continue;
             }
+
+            ApplyStylesheet(stylesheet, element);
 
             const bool container = !element.selfClosing && name != "svg";
             if (container) ++depth;

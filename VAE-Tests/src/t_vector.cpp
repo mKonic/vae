@@ -498,3 +498,121 @@ TEST(vector, only_the_named_subtree_is_kept_when_one_is_asked_for) {
     CHECK(ParseSvg(source, missing, nullptr, "glyph9"));
     CHECK_EQ(missing.shapes.size(), std::size_t(2));
 }
+
+// --- <style> ------------------------------------------------------------------------------------
+//
+// The one part of CSS an SVG reader cannot skip. Illustrator, Inkscape's "optimised" output and
+// every OpenType-SVG glyph document built from them put the fills in a `<style>` block and name
+// them from the shapes — so a reader that ignores it draws the whole picture in the default black.
+
+TEST(vector, a_style_block_paints_the_shapes_that_name_its_class) {
+    Picture picture;
+    std::string error;
+    CHECK_MESSAGE(ParseSvg(R"SVG(<svg viewBox="0 0 20 20">
+      <style type="text/css"><![CDATA[
+        /* what an exporter writes */
+        .st0 { fill: #ff0000; }
+        .st1 { fill: #0000ff; fill-rule: evenodd; }
+      ]]></style>
+      <rect class="st0" x="0" y="0" width="10" height="20"/>
+      <rect class="st1" x="10" y="0" width="10" height="20"/>
+    </svg>)SVG", picture, &error), error);
+
+    CHECK_EQ(picture.shapes.size(), std::size_t(2));
+    CHECK_NEAR(picture.shapes[0].fill.r, 1.0f);
+    CHECK_NEAR(picture.shapes[0].fill.b, 0.0f);
+    CHECK_NEAR(picture.shapes[1].fill.b, 1.0f);
+    CHECK_NEAR(picture.shapes[1].fill.r, 0.0f);
+    // Not only paint: a rule says anything a presentation attribute could have.
+    CHECK(picture.shapes[1].rule == FillRule::EvenOdd);
+    CHECK(picture.shapes[0].rule == FillRule::NonZero);
+}
+
+TEST(vector, a_shape_in_two_classes_takes_both_of_them) {
+    Picture picture;
+    CHECK(ParseSvg(R"SVG(<svg viewBox="0 0 10 10">
+      <style>.fill{fill:#00ff00}.edge{stroke:#ff0000;stroke-width:3}</style>
+      <rect class="fill edge" x="1" y="1" width="8" height="8"/>
+    </svg>)SVG", picture));
+
+    CHECK_EQ(picture.shapes.size(), std::size_t(1));
+    CHECK_NEAR(picture.shapes[0].fill.g, 1.0f);
+    CHECK(picture.shapes[0].hasStroke);
+    CHECK_NEAR(picture.shapes[0].strokeWidth, 3.0f);
+}
+
+TEST(vector, specificity_decides_when_two_rules_disagree) {
+    // A tag rule loses to a class rule, a class rule loses to an id rule, and the element's own
+    // `style` beats all of them — while a plain `fill=` attribute loses to every rule. Getting
+    // this backwards is how a themed icon set comes out in the wrong colour and still looks fine.
+    Picture picture;
+    CHECK(ParseSvg(R"SVG(<svg viewBox="0 0 40 10">
+      <style>
+        rect { fill: #ff0000 }
+        .mid { fill: #00ff00 }
+        #top { fill: #0000ff }
+      </style>
+      <rect x="0" y="0" width="10" height="10"/>
+      <rect class="mid" x="10" y="0" width="10" height="10" fill="#ffffff"/>
+      <rect id="top" class="mid" x="20" y="0" width="10" height="10"/>
+      <rect id="top" class="mid" x="30" y="0" width="10" height="10" style="fill:#000000"/>
+    </svg>)SVG", picture));
+
+    CHECK_EQ(picture.shapes.size(), std::size_t(4));
+    CHECK_NEAR(picture.shapes[0].fill.r, 1.0f);      // the tag rule
+    CHECK_NEAR(picture.shapes[1].fill.g, 1.0f);      // the class rule, over the attribute
+    CHECK_NEAR(picture.shapes[1].fill.r, 0.0f);
+    CHECK_NEAR(picture.shapes[2].fill.b, 1.0f);      // the id rule, over the class
+    CHECK_NEAR(picture.shapes[3].fill.r, 0.0f);      // inline style, over everything
+    CHECK_NEAR(picture.shapes[3].fill.g, 0.0f);
+    CHECK_NEAR(picture.shapes[3].fill.b, 0.0f);
+}
+
+TEST(vector, a_stylesheet_below_the_shapes_still_paints_them) {
+    // A stylesheet applies to the whole document wherever it sits in it, and a one-pass reader
+    // that applied rules as it met them would paint everything above the block black.
+    Picture picture;
+    CHECK(ParseSvg(R"SVG(<svg viewBox="0 0 10 10">
+      <rect class="late" x="1" y="1" width="8" height="8"/>
+      <style>.late{fill:#00ffff}</style>
+    </svg>)SVG", picture));
+
+    CHECK_EQ(picture.shapes.size(), std::size_t(1));
+    CHECK_NEAR(picture.shapes[0].fill.g, 1.0f);
+    CHECK_NEAR(picture.shapes[0].fill.b, 1.0f);
+}
+
+TEST(vector, a_class_rule_reaches_a_shape_through_the_group_it_is_on) {
+    // Because the rule is applied to the element's attributes, inheritance down the tree is the
+    // one that was already there rather than a second mechanism.
+    Picture picture;
+    CHECK(ParseSvg(R"SVG(<svg viewBox="0 0 10 10">
+      <style>.group{fill:#ff00ff}</style>
+      <g class="group"><rect x="1" y="1" width="8" height="8"/></g>
+    </svg>)SVG", picture));
+
+    CHECK_EQ(picture.shapes.size(), std::size_t(1));
+    CHECK_NEAR(picture.shapes[0].fill.r, 1.0f);
+    CHECK_NEAR(picture.shapes[0].fill.b, 1.0f);
+    CHECK_NEAR(picture.shapes[0].fill.g, 0.0f);
+}
+
+TEST(vector, a_selector_this_reader_cannot_match_leaves_the_shape_alone) {
+    // Half-applying a descendant selector paints things that were never selected. Saying so and
+    // drawing the default is the answer; `error` is where it says so.
+    Picture picture;
+    std::string error;
+    CHECK(ParseSvg(R"SVG(<svg viewBox="0 0 10 10">
+      <style>
+        @media print { .any { fill: #ff0000 } }
+        g .deep { fill: #ff0000 }
+        .plain { stroke: #00ff00; stroke-width: 2 }
+      </style>
+      <rect class="deep plain" x="1" y="1" width="8" height="8"/>
+    </svg>)SVG", picture, &error));
+
+    CHECK_EQ(picture.shapes.size(), std::size_t(1));
+    CHECK_NEAR(picture.shapes[0].fill.r, 0.0f);      // black, the default, not the rule's red
+    CHECK(picture.shapes[0].hasStroke);              // and the simple rule beside it still applied
+    CHECK(!error.empty());
+}

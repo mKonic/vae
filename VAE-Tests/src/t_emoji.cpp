@@ -804,3 +804,18 @@ TEST(otsvg, the_rest_of_the_font_is_still_an_ordinary_font) {
     CHECK_EQ(font->Rasterize(font->GlyphIndex('M'), 24.0f).channels, 1u);
     CHECK(font->Metrics(24.0f).LineHeight() > 0.0f);
 }
+
+TEST(otsvg, a_glyph_painted_from_a_style_block_is_still_painted) {
+    // Which is how the exporters that make these fonts write them: `.c0{fill:#DC2828}` at the top
+    // of the document and `class="c0"` on the shape. A reader that skips `<style>` draws every
+    // glyph in the default black and reports nothing wrong.
+    const auto font = Svg({ .letter = 'A', .second = 'B', .gzip = true, .viaClass = true });
+    if (!font) return;
+
+    CHECK(font->HasColourGlyph(font->GlyphIndex('A')));
+    const GlyphBitmap first  = font->Rasterize(font->GlyphIndex('A'), 40.0f);
+    const GlyphBitmap second = font->Rasterize(font->GlyphIndex('B'), 40.0f);
+    CHECK(HasColour(first, 220, 40, 40));
+    CHECK(!HasColour(first, 0, 0, 0, 20));
+    CHECK(HasColour(second, 40, 80, 220));
+}

@@ -97,6 +97,7 @@ namespace vae::fixture {
         bool separateRecords = false;   // `second` gets its own document instead of sharing one
         bool currentColour = false;     // the whole drawing asks for the colour of the text
         bool anonymous = false;         // no ids at all: one document, one glyph, nothing to find
+        bool viaClass = false;          // the fill comes from a <style> block, as an export writes it
 
         PaletteEntry colour{ 220, 40, 40, 255 };
         PaletteEntry secondColour{ 40, 80, 220, 255 };

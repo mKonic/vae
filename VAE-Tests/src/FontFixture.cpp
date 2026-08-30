@@ -202,22 +202,38 @@ namespace vae::fixture {
         const u32 second = spec.second ? GlyphFor(source, spec.second) : 0;
         if (!first || (spec.second && !second)) return {};
 
-        const auto rect = [&](const PaletteEntry& colour, i32 offset) {
-            char buffer[256];
+        // Which class each colour gets, when the fill is coming from a stylesheet.
+        const auto className = [&](const PaletteEntry& colour) {
+            return "c" + std::to_string(colour.r) + "_" + std::to_string(colour.b);
+        };
+        const auto paintOf = [&](const PaletteEntry& colour) {
             char paint[32];
-            if (spec.currentColour)
-                std::snprintf(paint, sizeof(paint), "currentColor");
-            else
-                std::snprintf(paint, sizeof(paint), "#%02X%02X%02X",
-                              colour.r, colour.g, colour.b);
+            if (spec.currentColour) std::snprintf(paint, sizeof(paint), "currentColor");
+            else std::snprintf(paint, sizeof(paint), "#%02X%02X%02X", colour.r, colour.g, colour.b);
+            return std::string(paint);
+        };
+        const auto rect = [&](const PaletteEntry& colour, i32 offset) {
+            const std::string paint = spec.viaClass
+                                    ? R"(class=")" + className(colour) + '"'
+                                    : R"(fill=")" + paintOf(colour) + '"';
+            char buffer[256];
             std::snprintf(buffer, sizeof(buffer),
-                          R"(<rect x="%d" y="%d" width="%d" height="%d" fill="%s"/>)",
-                          spec.x + offset, spec.y, spec.width, spec.height, paint);
+                          R"(<rect x="%d" y="%d" width="%d" height="%d" %s/>)",
+                          spec.x + offset, spec.y, spec.width, spec.height, paint.c_str());
             return std::string(buffer);
+        };
+        const auto sheet = [&] {
+            if (!spec.viaClass) return std::string();
+            std::string css = "<style type=\"text/css\"><![CDATA[";
+            css += "." + className(spec.colour) + "{fill:" + paintOf(spec.colour) + ";}";
+            if (spec.second)
+                css += "." + className(spec.secondColour) + "{fill:"
+                     + paintOf(spec.secondColour) + ";}";
+            return css + "]]></style>";
         };
         const auto document = [&](const std::string& body) {
             return R"(<?xml version="1.0" encoding="UTF-8"?>)"
-                   R"(<svg xmlns="http://www.w3.org/2000/svg">)" + body + "</svg>";
+                   R"(<svg xmlns="http://www.w3.org/2000/svg">)" + sheet() + body + "</svg>";
         };
         const auto wrap = [&](u32 glyph, const std::string& body) {
             if (spec.anonymous) return body;
