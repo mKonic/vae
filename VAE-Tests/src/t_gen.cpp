@@ -271,7 +271,7 @@ TEST(gen, a_round_trip_through_the_serializer_and_the_emitter_agree) {
 
     doc::Document loaded;
     std::string error;
-    CHECK_MESSAGE(doc::Serializer::FromJson(doc::Serializer::ToJson(original, false), loaded, &error),
+    CHECK_MESSAGE(doc::Serializer::FromXml(doc::Serializer::ToXml(original, false, nullptr, true), loaded, &error),
                   error);
 
     // Two paths out of one document — save/load and export/compile — have to arrive at the same

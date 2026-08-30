@@ -37,34 +37,25 @@ namespace vae::doc {
         // not be written to the file. A component the designer edited is not one of these: it is a
         // fork, and a fork is written out in full.
         virtual std::vector<Uuid> Stock(const Document& document) const = 0;
-
-        // Folds a document that carries an inlined copy of the catalog (everything written before
-        // format 2) down to a reference, rewriting the instance and override ids that pointed into
-        // the copy. Returns how many components were folded. Without this the saving would only
-        // ever apply to files made from here on.
-        virtual u32 Adopt(Document& document) const = 0;
     };
 
-    // Markup, not JSON. The same 61-node app is 32 KB / 1,569 lines as JSON and 10.6 KB / 124 lines
-    // as XML, and the line count is the one that matters: a file you can read as an outline of the
-    // app beats one you can only search. The element name is the node kind, the tree is the
-    // indentation, and enums are names rather than the raw u8 JSON was writing.
+    // Markup. One codec, one extension, one thing a file can be — see D14.
     //
-    // What the encoder does NOT write is most of the format: a layout field equal to its default,
-    // a value's type where the property already declares it, an id nothing references, and any
-    // component the library above can rebuild. design/xml-format.md has the measurements.
+    // The element name is the node kind, the tree is the indentation, and enums are names. What the
+    // encoder does NOT write is most of the format: a layout field equal to its default, a value's
+    // type where the property already declares it, an id nothing references, and any component the
+    // library above can rebuild. `design/xml-format.md` has the measurements.
     class Serializer {
     public:
-        // Bumped when the on-disk shape changes in a way an older reader could misread. Documents
-        // written by a NEWER version are refused rather than half-read.
-        static constexpr u32 kFormatVersion = 3;
-        // What the JSON encoder stamps, and the highest it will read. Format 3 is markup, so a JSON
-        // file is by definition format 2 or older; the two numbers are separate because the JSON
-        // codec is now a reader for old files rather than the current format.
-        static constexpr u32 kJsonFormatVersion = 2;
+        // Every file VAE authors carries this. Documents written by a NEWER version are refused
+        // rather than half-read; older ones are refused too, because there is nothing older left to
+        // read — format 4 is the only format.
+        static constexpr u32 kFormatVersion = 4;
 
-        // XML, format 3. This is what a project saves as.
-        //
+        // The extension, and the only one. What a file holds is what is inside it and which folder
+        // it sits in — a screen and a component are the same kind of file.
+        static constexpr std::string_view kExtension = ".vae";
+
         // `keepIds` writes an id on every node instead of only on the ones something references.
         // A file does not want them — 6 of Vaecord's 540 ids are ever referred to, and the rest are
         // noise in a diff — but an in-memory round trip does: the Play/Stop snapshot restores the
@@ -76,26 +67,16 @@ namespace vae::doc {
         static bool FromXml(std::string_view xml, Document& out, std::string* error = nullptr,
                             const LibrarySource* library = nullptr, bool merge = false);
 
-        // JSON, format 2 and older. Kept as the migration path for every file that already exists,
-        // and as the shape a Figma import arrives in.
-        static std::string ToJson(const Document& document, bool pretty = true,
-                                  const LibrarySource* library = nullptr);
-        static bool FromJson(std::string_view json, Document& out, std::string* error = nullptr,
-                             const LibrarySource* library = nullptr);
-
-        // Reads either, by looking at the first non-space character: '<' is markup, '{' is JSON.
-        static bool FromText(std::string_view text, Document& out, std::string* error = nullptr,
-                             const LibrarySource* library = nullptr);
-
         static bool Save(const Document& document, const std::filesystem::path& path,
                          const LibrarySource* library = nullptr);
+        // Refuses a directory by saying so, rather than by failing to parse one.
         static bool Load(const std::filesystem::path& path, Document& out,
                          std::string* error = nullptr, const LibrarySource* library = nullptr);
 
         // Reads a file into a document that already holds something, rather than replacing it.
         // This is how a project split across files is put back together: its parts are ordinary
-        // format 3 documents, and a screen whose `of=` names a component from another file simply
-        // resolves once that file has been read.
+        // documents, and a screen whose `of=` names a component from another file simply resolves
+        // once that file has been read.
         //
         // The library must already be installed in `out`. Installing it a second time would mint
         // the ids it already minted, so this never does it.
@@ -104,31 +85,37 @@ namespace vae::doc {
                              const LibrarySource* library = nullptr);
     };
 
-    // The project file: which screens exist, where assets live, which scripting language, and the
-    // font families the project registers.
+    // A project's settings, and nothing else.
+    //
+    // It deliberately does NOT list the project's files. `screens/` and `components/` are what
+    // exists; an index that also claims to know is a second answer that can disagree with the first,
+    // and the disagreement is always the index being wrong.
     struct Project {
         std::string name = "Untitled";
         std::string scriptLanguage = "lua";     // "lua" or "cpp", chosen once at creation
         std::filesystem::path root;
-        std::vector<std::string> screens;       // relative paths to .vaescreen files
-        std::vector<std::string> components;    // relative paths to .vaecomp files
         std::vector<std::string> fontDirs;
         Vec2 targetResolution{ 1280.0f, 800.0f };
+
+        // The one file that makes a folder a project. Written as markup like everything else — the
+        // writer already knows how to write a document, and a second spelling would be a second
+        // parser to keep in step.
+        static constexpr std::string_view kFileName = "project.vae";
 
         static bool Save(const Project& project, const std::filesystem::path& path);
         static bool Load(const std::filesystem::path& path, Project& out, std::string* error = nullptr);
 
         // --- a project split across files ---------------------------------------------------
         //
-        // One document in memory, many files on disk: `screens/<Name>.vaescreen` each holding one
-        // screen, `components/<Name>.vaecomp` each holding one forked component, and `tokens.vae`
-        // holding the theme and the project's own tokens. The `.vaeproj` is only an index.
+        // One document in memory, many files on disk: `screens/<Name>.vae` each holding one screen,
+        // `components/<Name>.vae` each holding one forked component, and `tokens.vae` holding the
+        // theme, the project's tokens and its assets.
         //
         // The point is the diff. A thirty-screen app in one file means every edit touches that
         // file, so a version-control history says nothing about which screen changed and two
         // people cannot edit different screens without conflicting.
         //
-        // Nothing new is serialized to make this work: every part is a format 3 document that the
+        // Nothing new is serialized to make this work: every part is an ordinary document that the
         // ordinary loader reads, which is why a screen file can also just be opened on its own.
         static bool SaveDocument(const Document& document, Project& project,
                                  const std::filesystem::path& projectFile,
@@ -137,8 +124,16 @@ namespace vae::doc {
                                  Project& outProject, std::string* error = nullptr,
                                  const LibrarySource* library = nullptr);
 
-        // True when the path names a project index rather than a single document.
+        // The documents under `root`, in the order they should be read: components before screens,
+        // because a screen's instance names a component that must already be there. Alphabetical
+        // within each, so two machines agree and a diff is stable.
+        static std::vector<std::filesystem::path> DocumentsIn(const std::filesystem::path& root);
+
+        // True when the path names the project index rather than a single document.
         static bool IsProjectFile(const std::filesystem::path& path);
+        // The project file inside `dir`, or empty when `dir` is not a project folder. This is what
+        // "open this folder" means.
+        static std::filesystem::path FileIn(const std::filesystem::path& dir);
     };
 
 }

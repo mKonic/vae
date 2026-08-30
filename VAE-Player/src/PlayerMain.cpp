@@ -43,7 +43,7 @@ namespace vae {
         }
 
         void Usage() {
-            std::cout << "usage: VAE-Player <project.vaescreen> [--screen NAME] [--locale NAME]\n"
+            std::cout << "usage: VAE-Player <project folder | file.vae> [--screen NAME] [--locale NAME]\n"
                          "                  [--headless [--frames N]]\n"
                          "       VAE-Player --version\n"
                          "\n"

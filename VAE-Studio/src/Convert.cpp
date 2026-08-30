@@ -83,7 +83,7 @@ namespace vae {
             for (int i = 0; i < m_Bench; ++i) {
                 doc::Document scratch;
                 std::string ignored;
-                doc::Serializer::FromText(*text, scratch, &ignored, &ui::StandardLibrary());
+                doc::Serializer::FromXml(*text, scratch, &ignored, &ui::StandardLibrary());
             }
             const auto elapsed = std::chrono::steady_clock::now() - start;
             const f64 ms = std::chrono::duration<f64, std::milli>(elapsed).count() / m_Bench;

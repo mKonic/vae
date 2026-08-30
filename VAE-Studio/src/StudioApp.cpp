@@ -58,7 +58,7 @@ namespace vae {
                 for (int i = 1; i < args.count; ++i) {
                     const std::string_view a = args[i];
                     // A flag that takes a value eats the token after it. Without this,
-                    // `--convert --bench 20 file.vaescreen` reads "20" as the file to convert.
+                    // `--convert --bench 20 file.vae` reads "20" as the file to convert.
                     if (a == "--bench") { ++i; continue; }
                     if (a.starts_with("--")) continue;
                     if (in.empty()) in = a; else if (out.empty()) out = a;

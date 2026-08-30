@@ -1120,7 +1120,7 @@ namespace vae {
             layer.SaveProject(state.Path());
 
             EditorState reopened;
-            Check(reopened.Load(folder / (name + ".vaeproj")), "the project reopens");
+            Check(reopened.Load(folder / doc::Project::kFileName), "the project reopens");
             Check(reopened.Doc().FindAsset(asset) != nullptr, "with its assets");
             const doc::Node* back = FindByName(reopened.Doc(), "Picture");
             Check(back != nullptr, "and the picture that used it");
@@ -1271,7 +1271,7 @@ namespace vae {
             driver.Frame();
 
             const std::filesystem::path project = FileSystem::ProjectsRoot() / "Screens example"
-                                                / "Screens example.vaeproj";
+                                                / doc::Project::kFileName;
             layer.SaveProject(project);
             Check(std::filesystem::exists(project), "the project the window will open is on disk");
 
@@ -1322,11 +1322,11 @@ namespace vae {
 
             layer.CreateProject(name);
             Check(std::filesystem::exists(folder, ec), "a project is a folder of its own");
-            Check(std::filesystem::exists(folder / (name + ".vaeproj"), ec),
+            Check(std::filesystem::exists(folder / doc::Project::kFileName, ec),
                   "with a project index inside it");
             Check(std::filesystem::exists(folder / "screens", ec),
                   "and a file per screen rather than one file holding all of them");
-            Check(state.Path() == folder / (name + ".vaeproj"),
+            Check(state.Path() == folder / doc::Project::kFileName,
                   "and that is the project the editor is now editing");
 
             // A second project of the same name would quietly overwrite the first one's document.
@@ -1367,7 +1367,7 @@ namespace vae {
             // to. Without this, opening a C++ project from a Lua session shows an empty editor and
             // says the project has no logic.
             layer.Scripts().SetLanguage(ScriptSession::Language::Lua);
-            layer.OpenProject(at / (kiosk + ".vaeproj"));
+            layer.OpenProject(at / doc::Project::kFileName);
             driver.Frame();
             Check(layer.Scripts().Lang() == ScriptSession::Language::Cpp,
                   "reopening it comes back as C++");
@@ -1390,7 +1390,7 @@ namespace vae {
             Check(layer.HoldCloseForUnsavedWork(), "closing with unsaved work is held back");
 
             const std::filesystem::path path =
-                std::filesystem::temp_directory_path() / "vae-selftest-close.vaescreen";
+                std::filesystem::temp_directory_path() / "vae-selftest-close.vae";
             layer.SaveProject(path);
             Check(!layer.HasUnsavedWork(), "saving settles it");
             Check(!layer.HoldCloseForUnsavedWork(), "and closing is no longer held back");
@@ -1615,7 +1615,7 @@ namespace vae {
             EditorState& state = layer.State();
             doc::Document& d = state.Doc();
             const std::filesystem::path project =
-                FileSystem::ProjectsRoot() / "Selftest languages" / "Selftest languages.vaescreen";
+                FileSystem::ProjectsRoot() / "Selftest languages" / "Selftest languages.vae";
             std::error_code ec;
             std::filesystem::remove_all(project.parent_path(), ec);
             std::filesystem::create_directories(project.parent_path(), ec);
@@ -1679,7 +1679,7 @@ namespace vae {
 
             EditorState& state = layer.State();
             const std::filesystem::path project =
-                FileSystem::ProjectsRoot() / "Selftest recovery" / "Selftest recovery.vaescreen";
+                FileSystem::ProjectsRoot() / "Selftest recovery" / "Selftest recovery.vae";
             std::error_code ec;
             std::filesystem::create_directories(project.parent_path(), ec);
             std::filesystem::remove(EditorState::RecoveryPathFor(project), ec);
@@ -1873,11 +1873,11 @@ namespace vae {
 
             // A document in the drop opens instead of being imported as a picture.
             const std::filesystem::path project = FileSystem::ProjectsRoot() / "Counter example"
-                                                / "Counter example.vaescreen";
+                                                / "Counter example.vae";
             if (std::filesystem::exists(project)) {
                 layer.OnFilesDropped({ project });
                 driver.Frame();
-                Check(layer.State().Path() == project, "a dropped .vaescreen opens the project");
+                Check(layer.State().Path() == project, "a dropped .vae file opens the project");
                 Check(state.Doc().Assets().size() != before + 2,
                       "rather than being imported as an asset");
             }
@@ -2267,9 +2267,9 @@ namespace vae {
                 style.height = layout::Size::Px(60.0f);
             }
             state.Doc().Touch(band);
-            layer.SaveProject(folder / (name + ".vaescreen"));
+            layer.SaveProject(folder / (name + ".vae"));
 
-            const std::filesystem::path document = folder / (name + ".vaescreen");
+            const std::filesystem::path document = folder / (name + ".vae");
 
             // The runtime, not the editor: this is the half that decides what an app does with the
             // window it is handed, and it is the half that used to overwrite the design silently.

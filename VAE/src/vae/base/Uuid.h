@@ -9,7 +9,7 @@
 namespace vae {
 
     // Stable identity for every document node, component and asset. Serialized as 16 lowercase hex
-    // digits so a .vaescreen diff stays readable.
+    // digits so a .vae diff stays readable.
     class Uuid {
     public:
         Uuid();                       // random

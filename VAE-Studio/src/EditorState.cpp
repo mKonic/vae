@@ -467,7 +467,7 @@ namespace vae {
 
         doc::Document incoming;
         std::string error;
-        if (!doc::Serializer::FromText(text, incoming, &error, &ui::StandardLibrary())) {
+        if (!doc::Serializer::FromXml(text, incoming, &error, &ui::StandardLibrary())) {
             VAE_WARN("paste: {}", error);
             return 0;
         }
@@ -561,7 +561,10 @@ namespace vae {
 
     bool EditorState::Save(const std::filesystem::path& path) {
         if (doc::Project::IsProjectFile(path)) {
-            if (m_Project.name == "Untitled") m_Project.name = path.stem().string();
+            // The folder is the project, so the folder is what it is called — `project.vae`
+            // has the same stem in every project on the disk.
+            if (m_Project.name == "Untitled")
+                m_Project.name = path.parent_path().filename().string();
             if (!doc::Project::SaveDocument(m_Document, m_Project, path, &ui::StandardLibrary()))
                 return false;
         } else if (!doc::Serializer::Save(m_Document, path, &ui::StandardLibrary())) {

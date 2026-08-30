@@ -41,7 +41,7 @@ namespace vae {
                 [this](const std::vector<std::filesystem::path>& files) { OnFilesDropped(files); });
         }
 
-        // A project named on the command line opens it. `vae-studio thing.vaescreen` is what
+        // A project named on the command line opens it. `vae-studio thing.vae` is what
         // anyone types, and it is what a file manager hands over on "open with" — being shown the
         // launcher instead is the editor ignoring what it was asked for.
         for (int i = 1; i < app.Spec().args.count; ++i) {
@@ -141,7 +141,8 @@ namespace vae {
     // projects root, never the engine's directory: an installed VAE has no business writing into
     // itself, and a checked-out one has no business filling the repository with someone's work.
     std::filesystem::path StudioLayer::DefaultProjectPath() const {
-        return FileSystem::ProjectsRoot() / "Untitled" / "Untitled.vaescreen";
+        return FileSystem::ProjectsRoot() / "Untitled"
+             / ("Untitled" + std::string(doc::Serializer::kExtension));
     }
 
     // Recent projects are the launcher's whole reason to exist, so they are persisted next to the
@@ -207,10 +208,12 @@ namespace vae {
         if (files.empty()) return;
 
         // A document wins over everything else in the drop: dropping a project and three pictures
-        // together means "open this", not "import a .vaescreen as a picture".
+        // together means "open this", not "import a .vae file as a picture".
         for (const std::filesystem::path& file : files) {
+            std::error_code ec;
             const std::string ext = file.extension().string();
-            if (ext == ".vaescreen" || ext == ".vaecomp" || ext == ".vaeproj") {
+            if (ext == doc::Serializer::kExtension
+                || (std::filesystem::is_directory(file, ec) && !doc::Project::FileIn(file).empty())) {
                 if (HoldCloseForUnsavedWork()) return;
                 OpenProject(file);
                 m_ShowLauncher = false;
@@ -232,7 +235,20 @@ namespace vae {
 
     // A project and its logic are one thing: opening, saving or starting a new one moves the
     // script with it, and none of that may happen underneath a running app.
-    void StudioLayer::OpenProject(const std::filesystem::path& path) {
+    void StudioLayer::OpenProject(const std::filesystem::path& given) {
+        // A folder is a project when it holds a project.vae, and pointing at the folder is what
+        // anyone does — from the launcher, from a drop, from a file manager. Resolving it here
+        // means every one of those routes behaves the same way.
+        std::filesystem::path path = given;
+        std::error_code ec;
+        if (std::filesystem::is_directory(path, ec)) {
+            path = doc::Project::FileIn(given);
+            if (path.empty()) {
+                VAE_WARN("studio: {} holds no {}", given.string(), doc::Project::kFileName);
+                return;
+            }
+        }
+
         m_Scripts.Stop();
         // A recovery file newer than the project means the last session ended with unsaved work.
         // Asked, never assumed: silently opening the recovery would hide what the file on disk
@@ -452,7 +468,8 @@ namespace vae {
         const std::filesystem::path folder = FileSystem::ProjectsRoot() / name;
         std::error_code ec;
         std::filesystem::create_directories(folder, ec);
-        const std::filesystem::path document = folder / (std::string(name) + ".vaescreen");
+        const std::filesystem::path document =
+            folder / (std::string(name) + std::string(doc::Serializer::kExtension));
 
         // The Counter's buttons make a noise, which needs a file to make it with. Written before
         // the project is saved, so the asset the document names is already there when it loads.
@@ -550,7 +567,7 @@ namespace vae {
         m_State.ProjectFile().name = clean;
         m_State.ProjectFile().scriptLanguage =
             spec.language == ScriptSession::Language::Cpp ? "cpp" : "lua";
-        SaveProject(folder / (clean + ".vaeproj"));
+        SaveProject(folder / doc::Project::kFileName);
         // The script file, written now rather than on the first edit. Two reasons, and the second
         // is the load-bearing one: it gives the author a template to start from, and it is the
         // only record on disk of which language the project is written in — reopening reads it

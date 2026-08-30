@@ -310,7 +310,7 @@ TEST(doc, a_grid_survives_a_round_trip_through_the_serializer) {
 
     Document loaded;
     std::string error;
-    CHECK_MESSAGE(Serializer::FromJson(Serializer::ToJson(doc, false), loaded, &error), error);
+    CHECK_MESSAGE(Serializer::FromXml(Serializer::ToXml(doc, false, nullptr, true), loaded, &error), error);
 
     const Node* back = loaded.Find(screen);
     CHECK(back != nullptr);
@@ -625,11 +625,11 @@ TEST(serializer, round_trips_a_document) {
     token.dark  = Color{ 1.0f, 1.0f, 1.0f, 1.0f };
     doc.SetToken("text.primary", token);
 
-    const std::string json = Serializer::ToJson(doc);
+    const std::string xml = Serializer::ToXml(doc, true, nullptr, true);
 
     Document loaded;
     std::string error;
-    CHECK(Serializer::FromJson(json, loaded, &error));
+    CHECK(Serializer::FromXml(xml, loaded, &error));
     CHECK_EQ(error, std::string(""));
 
     CHECK_EQ(loaded.NodeCount(), 3u);
@@ -671,77 +671,81 @@ TEST(serializer, round_trips_components_and_overrides) {
     doc.SetOverride(instance, label, Prop::Text, std::string("Save"));
 
     Document loaded;
-    CHECK(Serializer::FromJson(Serializer::ToJson(doc), loaded));
+    CHECK(Serializer::FromXml(Serializer::ToXml(doc, true, nullptr, true), loaded));
     CHECK(loaded.Find(instance)->componentId == component);
     CHECK_EQ(loaded.ResolvedProps(instance, label).Text(Prop::Text), std::string("Save"));
 }
 
-TEST(serializer, refuses_a_document_from_a_newer_build) {
-    Document doc;
-    std::string json = Serializer::ToJson(doc);
-    // Forge a future version; the reader must refuse rather than half-read it. Built from the
-    // current version rather than spelled out, so bumping the format does not break the test that
-    // guards the bump.
-    const std::string written = "\"version\": " + std::to_string(Serializer::kJsonFormatVersion);
-    const auto pos = json.find(written);
-    CHECK(pos != std::string::npos);
-    if (pos == std::string::npos) return;
-    json.replace(pos, written.size(), "\"version\": 99");
-
-    Document loaded;
-    std::string error;
-    CHECK(!Serializer::FromJson(json, loaded, &error));
-    CHECK(error.find("newer") != std::string::npos);
-}
 
 TEST(serializer, rejects_junk_without_crashing) {
     Document loaded;
     std::string error;
-    CHECK(!Serializer::FromJson("not json at all", loaded, &error));
-    CHECK(!Serializer::FromJson("{}", loaded, &error));
-    CHECK(!Serializer::FromJson(R"({"format":"something.else","version":1})", loaded, &error));
+    CHECK(!Serializer::FromXml("not markup at all", loaded, &error));
+    CHECK(!Serializer::FromXml("", loaded, &error));
+    CHECK(!Serializer::FromXml("<vae>", loaded, &error));
+    CHECK(!Serializer::FromXml("<something version=\"4\"/>", loaded, &error));
+    // Well-formed markup that is not a document: a root with no version says nothing about what it
+    // is, and guessing is how half a file gets read.
+    CHECK(!Serializer::FromXml("<vae><screen name=\"Home\"/></vae>", loaded, &error));
+    CHECK(!error.empty());
 }
 
 TEST(serializer, missing_optional_fields_take_their_defaults) {
-    // A minimal hand-written document: no layout block, no props, no children.
-    const std::string json = R"({
-        "format": "vae.document",
-        "version": 1,
-        "roots": ["0000000000000001"],
-        "nodes": [ { "id": "0000000000000001", "kind": "frame", "name": "Bare" } ]
-    })";
+    // A minimal hand-written document: no layout attributes, no properties, no children. Everything
+    // the encoder leaves out because it is at its default has to come back as that default.
+    const std::string xml =
+        "<vae version=\"" + std::to_string(Serializer::kFormatVersion) + "\">"
+        "<frame id=\"0000000000000001\" name=\"Bare\"/></vae>";
 
     Document loaded;
     std::string error;
-    CHECK(Serializer::FromJson(json, loaded, &error));
+    CHECK_MESSAGE(Serializer::FromXml(xml, loaded, &error), error);
     const Node* node = loaded.Find(Uuid(1));
     CHECK(node != nullptr);
+    if (!node) return;
     CHECK_EQ(node->name, std::string("Bare"));
     CHECK(node->visible);
-    CHECK(node->layout.width.mode == layout::SizeMode::Hug);
+    CHECK(!node->locked);
+    CHECK(!node->slot);
+    CHECK(node->props.Empty());
+    CHECK(node->layout == layout::LayoutStyle{});
 }
 
 TEST(serializer, project_files_round_trip) {
     Project project;
     project.name = "Demo";
     project.scriptLanguage = "cpp";
-    project.screens = { "screens/home.vaescreen", "screens/settings.vaescreen" };
-    project.components = { "components/button.vaecomp" };
+    project.fontDirs = { "fonts", "vendor/fonts" };
     project.targetResolution = { 1440.0f, 900.0f };
 
-    const auto path = std::filesystem::temp_directory_path() / "vae-test-project.vaeproj";
+    const auto dir = std::filesystem::temp_directory_path() / "vae-test-project";
+    std::error_code ec;
+    std::filesystem::create_directories(dir, ec);
+    const auto path = dir / Project::kFileName;
     CHECK(Project::Save(project, path));
 
     Project loaded;
     std::string error;
-    CHECK(Project::Load(path, loaded, &error));
+    CHECK_MESSAGE(Project::Load(path, loaded, &error), error);
     CHECK_EQ(loaded.name, std::string("Demo"));
     CHECK_EQ(loaded.scriptLanguage, std::string("cpp"));
-    CHECK_EQ(loaded.screens.size(), 2u);
+    CHECK_EQ(loaded.fontDirs.size(), 2u);
+    CHECK_EQ(loaded.fontDirs[1], std::string("vendor/fonts"));
     CHECK_NEAR(loaded.targetResolution.x, 1440.0f);
+    CHECK_EQ(loaded.root, dir);
 
-    std::error_code ec;
-    std::filesystem::remove(path, ec);
+    // It is a document like every other file: markup, with the one format version on it.
+    const auto text = FileSystem::ReadText(path);
+    CHECK(text.has_value());
+    if (text) {
+        CHECK(text->find("<vae version=\"" + std::to_string(Serializer::kFormatVersion) + "\"")
+              != std::string::npos);
+        CHECK(text->find("<project ") != std::string::npos);
+        // And it does NOT list the project's files: the folders are what exists.
+        CHECK(text->find("screens/") == std::string::npos);
+    }
+
+    std::filesystem::remove_all(dir, ec);
 }
 
 TEST(doc, assets_are_kept_by_id_and_survive_a_round_trip) {
@@ -761,10 +765,10 @@ TEST(doc, assets_are_kept_by_id_and_survive_a_round_trip) {
     CHECK(document.FindAsset(logo) != nullptr);
     CHECK_EQ(document.FindAsset(logo)->path, std::string("assets/logo-2.png"));
 
-    const std::string json = Serializer::ToJson(document);
+    const std::string xml = Serializer::ToXml(document, true, nullptr, true);
     Document loaded;
     std::string error;
-    CHECK_MESSAGE(Serializer::FromJson(json, loaded, &error), error);
+    CHECK_MESSAGE(Serializer::FromXml(xml, loaded, &error), error);
     CHECK_EQ(loaded.Assets().size(), std::size_t(2));
     CHECK(loaded.FindAsset(hero) != nullptr);
     CHECK(loaded.FindAsset(hero) && loaded.FindAsset(hero)->name == "hero");
@@ -1076,10 +1080,10 @@ TEST(doc, a_field_binding_survives_a_round_trip_through_the_serializer) {
     const Uuid body = doc.CreateNode(NodeKind::Text, list, "Body");
     doc.SetProp(body, Prop::Field, std::string("fill:tint"));
 
-    const std::string json = Serializer::ToJson(doc);
+    const std::string xml = Serializer::ToXml(doc, true, nullptr, true);
     Document loaded;
     std::string error;
-    CHECK_MESSAGE(Serializer::FromJson(json, loaded, &error), error);
+    CHECK_MESSAGE(Serializer::FromXml(xml, loaded, &error), error);
     CHECK_EQ(loaded.GetProp(list, Prop::Repeat), Value{ 3.0f });
     CHECK_EQ(loaded.GetProp(body, Prop::Field), Value{ std::string("fill:tint") });
 }
@@ -1091,20 +1095,21 @@ TEST(serializer, a_layout_at_its_defaults_is_not_written_at_all) {
     // real nodes. Writing them anyway was 40% of a document.
     Document doc;
     const Uuid bare = doc.CreateNode(NodeKind::Frame, Uuid::Invalid(), "Bare");
-    const std::string json = Serializer::ToJson(doc);
-    CHECK(json.find("\"layout\"") == std::string::npos);
-    CHECK(json.find("aspectRatio") == std::string::npos);
+    const std::string xml = Serializer::ToXml(doc, true, nullptr, true);
+    CHECK(xml.find("gap=") == std::string::npos);
+    CHECK(xml.find("aspectRatio") == std::string::npos);
+    CHECK(xml.find("minColumn") == std::string::npos);
 
     // ...and what does differ is still written, on its own.
     doc.Find(bare)->layout.gap = 12.0f;
     doc.Touch(bare);
-    const std::string withGap = Serializer::ToJson(doc);
-    CHECK(withGap.find("\"gap\"") != std::string::npos);
-    CHECK(withGap.find("\"minColumn\"") == std::string::npos);
+    const std::string withGap = Serializer::ToXml(doc, true, nullptr, true);
+    CHECK(withGap.find("gap=\"12\"") != std::string::npos);
+    CHECK(withGap.find("minColumn") == std::string::npos);
 
     Document loaded;
     std::string error;
-    CHECK_MESSAGE(Serializer::FromJson(withGap, loaded, &error), error);
+    CHECK_MESSAGE(Serializer::FromXml(withGap, loaded, &error), error);
     CHECK_EQ(loaded.Find(bare)->layout.gap, 12.0f);
     CHECK_EQ(loaded.Find(bare)->layout.minColumn, layout::LayoutStyle{}.minColumn);
     CHECK(loaded.Find(bare)->layout.maxSize == layout::LayoutStyle{}.maxSize);
@@ -1126,7 +1131,7 @@ TEST(serializer, every_value_kind_round_trips_untagged) {
 
     Document loaded;
     std::string error;
-    CHECK_MESSAGE(Serializer::FromJson(Serializer::ToJson(doc), loaded, &error), error);
+    CHECK_MESSAGE(Serializer::FromXml(Serializer::ToXml(doc, true, nullptr, true), loaded, &error), error);
     CHECK_EQ(loaded.GetProp(node, Prop::Checked), Value{ true });
     CHECK_EQ(loaded.GetProp(node, Prop::FontSize), Value{ 17.5f });
     CHECK((loaded.GetProp(node, Prop::ShadowOffset) == Value{ Vec2{ 3.0f, -4.0f } }));
@@ -1150,15 +1155,14 @@ TEST(serializer, numbers_are_written_as_themselves_not_as_widened_doubles) {
     doc.Find(node)->layout.gap = 12.5f;
     doc.Find(node)->layout.aspectRatio = 1.0f / 3.0f;
 
-    const std::string json = Serializer::ToJson(doc);
-    CHECK(json.find("0.6000000238418579") == std::string::npos);
-    CHECK(json.find("0.6") != std::string::npos);
-    CHECK(json.find("0.1,") != std::string::npos || json.find("0.1\n") != std::string::npos ||
-          json.find("0.1 ") != std::string::npos);
+    const std::string xml = Serializer::ToXml(doc, true, nullptr, true);
+    CHECK(xml.find("0.6000000238418579") == std::string::npos);
+    CHECK(xml.find("0.6") != std::string::npos);
+    CHECK(xml.find("opacity=\"0.1\"") != std::string::npos);
 
     Document loaded;
     std::string error;
-    CHECK_MESSAGE(Serializer::FromJson(json, loaded, &error), error);
+    CHECK_MESSAGE(Serializer::FromXml(xml, loaded, &error), error);
     CHECK_EQ(loaded.GetProp(node, Prop::LetterSpacing), Value{ 0.6f });
     CHECK_EQ(loaded.GetProp(node, Prop::Opacity), Value{ 0.1f });
     CHECK((loaded.GetProp(node, Prop::ShadowColor) == Value{ Color{ 0.29f, 0.427f, 0.808f, 1.0f } }));
@@ -1191,12 +1195,12 @@ TEST(serializer, a_colour_that_does_not_fit_in_hex_keeps_its_floats) {
     doc.SetProp(node, Prop::Fill, exact);
     doc.SetProp(node, Prop::Stroke, computed);
 
-    const std::string json = Serializer::ToJson(doc);
-    CHECK(json.find("#ff0080") != std::string::npos);
+    const std::string xml = Serializer::ToXml(doc, true, nullptr, true);
+    CHECK(xml.find("#ff0080") != std::string::npos);
 
     Document loaded;
     std::string error;
-    CHECK_MESSAGE(Serializer::FromJson(json, loaded, &error), error);
+    CHECK_MESSAGE(Serializer::FromXml(xml, loaded, &error), error);
     CHECK(loaded.GetProp(node, Prop::Fill) == Value{ exact });
     CHECK(loaded.GetProp(node, Prop::Stroke) == Value{ computed });
 }
@@ -1213,7 +1217,7 @@ TEST(serializer, a_string_that_starts_with_a_sigil_is_still_a_string) {
 
     Document loaded;
     std::string error;
-    CHECK_MESSAGE(Serializer::FromJson(Serializer::ToJson(doc), loaded, &error), error);
+    CHECK_MESSAGE(Serializer::FromXml(Serializer::ToXml(doc, true, nullptr, true), loaded, &error), error);
     CHECK_EQ(loaded.GetProp(node, Prop::Text), Value{ std::string("@mkonic") });
     CHECK_EQ(loaded.GetProp(node, Prop::Placeholder), Value{ std::string("#general") });
     CHECK_EQ(loaded.GetProp(node, Prop::Tooltip), Value{ std::string("=SUM(A1:A9)") });
@@ -1567,7 +1571,7 @@ TEST(xml, a_malformed_document_says_which_line_and_loads_nothing) {
     loaded.CreateNode(NodeKind::Screen);
     std::string error;
     const std::string broken =
-        "<vae version=\"3\" theme=\"dark\">\n"
+        "<vae version=\"4\" theme=\"dark\">\n"
         "  <screen name=\"Home\">\n"
         "    <frame name=\"Unclosed\">\n"
         "  </screen>\n"
@@ -1579,51 +1583,32 @@ TEST(xml, a_malformed_document_says_which_line_and_loads_nothing) {
     // is worse than not opening the file.
     std::string error2;
     Document other;
-    CHECK(!Serializer::FromXml("<vae version=\"3\"><widget name=\"x\"/></vae>", other, &error2));
+    CHECK(!Serializer::FromXml("<vae version=\"4\"><widget name=\"x\"/></vae>", other, &error2));
     CHECK(error2.find("widget") != std::string::npos);
 
     // The same for an attribute nobody declared.
     std::string error3;
     Document third;
-    CHECK(!Serializer::FromXml("<vae version=\"3\"><frame witdh=\"12\"/></vae>", third, &error3));
+    CHECK(!Serializer::FromXml("<vae version=\"4\"><frame witdh=\"12\"/></vae>", third, &error3));
     CHECK(error3.find("witdh") != std::string::npos);
 }
 
-TEST(xml, a_document_from_a_newer_build_is_refused_rather_than_half_read) {
+TEST(xml, a_document_from_any_other_format_is_refused_rather_than_half_read) {
+    // One format, so this refuses in both directions: a file from a build that has not happened yet
+    // and a file from one that no longer exists are equally unreadable, and saying which format the
+    // file is beats guessing at it.
     Document loaded;
     std::string error;
     CHECK(!Serializer::FromXml("<vae version=\"99\"><screen name=\"Home\"/></vae>", loaded, &error));
-    CHECK(error.find("newer") != std::string::npos);
+    CHECK(error.find("99") != std::string::npos);
+    CHECK(error.find(std::to_string(Serializer::kFormatVersion)) != std::string::npos);
+
+    CHECK(!Serializer::FromXml("<vae version=\"3\"><screen name=\"Home\"/></vae>", loaded, &error));
+    CHECK(error.find("format 3") != std::string::npos);
+    CHECK_EQ(loaded.NodeCount(), 0u);
 }
 
-TEST(xml, the_loader_reads_either_format_by_looking_at_the_first_character) {
-    Document doc;
-    const Uuid screen = doc.CreateNode(NodeKind::Screen, Uuid::Invalid(), "Home");
-    doc.SetProp(screen, Prop::Fill, TokenRef{ "bg" });
 
-    Document fromXml;
-    Document fromJson;
-    std::string error;
-    CHECK_MESSAGE(Serializer::FromText(ToXmlKeepingIds(doc), fromXml, &error), error);
-    CHECK_MESSAGE(Serializer::FromText(Serializer::ToJson(doc), fromJson, &error), error);
-    CHECK(fromXml.GetProp(screen, Prop::Fill) == Value{ TokenRef{ "bg" } });
-    CHECK(fromJson.GetProp(screen, Prop::Fill) == Value{ TokenRef{ "bg" } });
-
-    // Leading whitespace does not confuse it, and neither format is guessed at from the extension.
-    Document spaced;
-    CHECK_MESSAGE(Serializer::FromText("\n  " + ToXmlKeepingIds(doc), spaced, &error), error);
-    CHECK_EQ(spaced.NodeCount(), 1u);
-}
-
-TEST(xml, a_json_file_claiming_format_3_is_refused) {
-    // Format 3 is markup by definition, so a JSON document that says it is one is either corrupt or
-    // hand-edited, and either way is not something to guess at.
-    Document loaded;
-    std::string error;
-    const std::string text = R"({"format":"vae.document","version":3,"nodes":[],"roots":[]})";
-    CHECK(!Serializer::FromText(text, loaded, &error));
-    CHECK(error.find("format 3 is XML") != std::string::npos);
-}
 
 
 TEST(xml, an_id_is_written_only_when_something_refers_to_it) {
@@ -1682,38 +1667,6 @@ TEST(xml, keeping_ids_is_what_an_in_memory_snapshot_asks_for) {
     CHECK_EQ(loaded.Find(label)->parent, card);
 }
 
-TEST(serializer, a_format_1_document_still_opens) {
-    // Tagged values and a fully-written layout block: what every file on disk looks like today.
-    const std::string json = R"({
-        "format": "vae.document",
-        "version": 1,
-        "roots": ["0000000000000007"],
-        "nodes": [{
-            "id": "0000000000000007", "kind": "frame", "name": "Old",
-            "layout": { "mode": "stack", "axis": "row", "gap": 8.0, "wrap": false,
-                        "minColumn": 160.0, "maxSize": [null, null],
-                        "width": { "mode": "fill", "value": 1.0 } },
-            "props": {
-                "fill": { "type": "token", "value": "accent" },
-                "cornerRadius": { "type": "number", "value": 6.0 },
-                "shadowColor": { "type": "color", "value": [0.0, 0.0, 0.0, 0.25] }
-            }
-        }]
-    })";
-
-    Document loaded;
-    std::string error;
-    CHECK_MESSAGE(Serializer::FromJson(json, loaded, &error), error);
-    const Node* node = loaded.Find(Uuid(7));
-    CHECK(node != nullptr);
-    if (!node) return;
-    CHECK(node->layout.mode == layout::LayoutMode::Stack);
-    CHECK_EQ(node->layout.gap, 8.0f);
-    CHECK(node->layout.width == layout::Size::Fill());
-    CHECK(node->props.Find(Prop::Fill) && *node->props.Find(Prop::Fill) == Value{ TokenRef{ "accent" } });
-    CHECK((node->props.Find(Prop::ShadowColor)
-           && *node->props.Find(Prop::ShadowColor) == Value{ Color{ 0.0f, 0.0f, 0.0f, 0.25f } }));
-}
 
 // ------------------------------------------------------------------ a project split across files
 
@@ -1750,7 +1703,7 @@ namespace {
         std::error_code ec;
         std::filesystem::remove_all(dir, ec);
         std::filesystem::create_directories(dir, ec);
-        return dir / (std::string(name) + ".vaeproj");
+        return dir / Project::kFileName;
     }
 
 }
@@ -1765,18 +1718,21 @@ TEST(project, a_split_project_is_one_file_per_screen) {
     CHECK(Project::SaveDocument(doc, project, file, &ui::StandardLibrary()));
 
     // One file per screen, named after the screen — the whole point, because a diff has to say
-    // which screen changed.
-    CHECK_EQ(project.screens.size(), 2u);
-    CHECK(std::filesystem::exists(file.parent_path() / "screens/Home.vaescreen"));
-    CHECK(std::filesystem::exists(file.parent_path() / "screens/Settings.vaescreen"));
+    // which screen changed. The folder is the answer to "which screens are there": the index does
+    // not carry a second copy of it that could disagree.
+    CHECK_EQ(Project::DocumentsIn(file.parent_path()).size(), 3u);
+    CHECK(std::filesystem::exists(file.parent_path() / "screens/Home.vae"));
+    CHECK(std::filesystem::exists(file.parent_path() / "screens/Settings.vae"));
 
-    // The forked component gets its own file; the fifty the catalog builds do not.
-    CHECK_EQ(project.components.size(), 1u);
-    CHECK(std::filesystem::exists(file.parent_path() / "components/Card.vaecomp"));
+    // The forked component gets its own file; the fifty the catalog builds do not. And components
+    // are read first, so they come first.
+    CHECK(std::filesystem::exists(file.parent_path() / "components/Card.vae"));
+    CHECK_EQ(Project::DocumentsIn(file.parent_path()).front().filename(),
+             std::filesystem::path("Card.vae"));
     CHECK(std::filesystem::exists(file.parent_path() / "tokens.vae"));
 
     // A screen file holds its screen and not the others.
-    const auto homeText = FileSystem::ReadText(file.parent_path() / "screens/Home.vaescreen");
+    const auto homeText = FileSystem::ReadText(file.parent_path() / "screens/Home.vae");
     CHECK(homeText.has_value());
     CHECK(homeText->find("Home") != std::string::npos);
     CHECK(homeText->find("Settings") == std::string::npos);
@@ -1839,15 +1795,16 @@ TEST(project, a_deleted_screen_stops_being_on_disk) {
     project.name = "Split";
     const auto file = ScratchProject("vae-split-three");
     CHECK(Project::SaveDocument(doc, project, file, &ui::StandardLibrary()));
-    CHECK(std::filesystem::exists(file.parent_path() / "screens/Settings.vaescreen"));
+    CHECK(std::filesystem::exists(file.parent_path() / "screens/Settings.vae"));
 
     for (Uuid id : doc.Roots())
         if (const Node* node = doc.Find(id); node && node->name == "Settings") { doc.DeleteNode(id); break; }
 
-    // Left behind, the file would still be listed and still load: a deleted screen would come back.
+    // Left behind, the file would still load, because the folder is what the loader reads: a
+    // deleted screen would come back on the next open.
     CHECK(Project::SaveDocument(doc, project, file, &ui::StandardLibrary()));
-    CHECK(!std::filesystem::exists(file.parent_path() / "screens/Settings.vaescreen"));
-    CHECK_EQ(project.screens.size(), 1u);
+    CHECK(!std::filesystem::exists(file.parent_path() / "screens/Settings.vae"));
+    CHECK_EQ(Project::DocumentsIn(file.parent_path()).size(), 2u);
 
     std::error_code ec;
     std::filesystem::remove_all(file.parent_path(), ec);

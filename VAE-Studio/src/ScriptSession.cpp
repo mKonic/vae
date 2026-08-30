@@ -87,8 +87,9 @@ namespace vae {
 
     void ScriptSession::AdoptLanguageFor(const std::filesystem::path& projectPath) {
         if (projectPath.empty()) return;
-        std::filesystem::path base = projectPath;
-        base.replace_extension();
+        std::filesystem::path base = doc::Project::IsProjectFile(projectPath)
+            ? projectPath.parent_path() / projectPath.parent_path().filename()
+            : std::filesystem::path(projectPath).replace_extension();
 
         std::error_code ec;
         const bool lua = std::filesystem::exists(std::filesystem::path(base).concat(".lua"), ec);
@@ -103,9 +104,15 @@ namespace vae {
         // An unsaved project's script would sit beside a document that does not exist yet, so it
         // gets the same placeholder folder the document would — under the projects root, never
         // inside the engine's own directory.
+        // A project's script is named after the project, not after the file that indexes it: the
+        // index is always called project.vae, so stripping its extension would name every script in
+        // every project "project". A single-document project still answers off its own name.
         const std::filesystem::path base =
-            projectPath.empty() ? FileSystem::ProjectsRoot() / "Untitled" / "Untitled"
-                                : std::filesystem::path(projectPath).replace_extension();
+            projectPath.empty()
+                ? FileSystem::ProjectsRoot() / "Untitled" / "Untitled"
+            : doc::Project::IsProjectFile(projectPath)
+                ? projectPath.parent_path() / projectPath.parent_path().filename()
+                : std::filesystem::path(projectPath).replace_extension();
         m_Source = base;
         m_Source += (m_Language == Language::Lua ? ".lua" : ".cpp");
         m_Built = false;

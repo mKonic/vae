@@ -100,8 +100,6 @@ namespace vae::doc {
                  + Number(e.bottom);
         }
 
-        std::string Vec2Text(const Vec2& v) { return Number(v.x) + " " + Number(v.y); }
-
         std::string ColorText(const Color& c) {
             if (auto hex = ColorToHex(c)) return *hex;
             return Number(c.r) + " " + Number(c.g) + " " + Number(c.b) + " " + Number(c.a);
@@ -190,24 +188,6 @@ namespace vae::doc {
         }
 
         // ------------------------------------------------------------------ writing
-
-        std::string EscapeAttr(std::string_view s) {
-            std::string out;
-            out.reserve(s.size());
-            for (char c : s) {
-                switch (c) {
-                    case '&':  out += "&amp;";  break;
-                    case '<':  out += "&lt;";   break;
-                    case '>':  out += "&gt;";   break;
-                    case '"':  out += "&quot;"; break;
-                    case '\n': out += "&#10;";  break;
-                    case '\t': out += "&#9;";   break;
-                    case '\r': out += "&#13;";  break;
-                    default:   out += c;        break;
-                }
-            }
-            return out;
-        }
 
         std::string EscapeBody(std::string_view s) {
             std::string out;
@@ -653,12 +633,6 @@ namespace vae::doc {
             return std::nullopt;
         }
 
-        std::optional<Vec2> Vec2FromText(std::string_view s) {
-            auto nums = Numbers(s);
-            if (!nums || nums->size() != 2) return std::nullopt;
-            return Vec2{ (*nums)[0], (*nums)[1] };
-        }
-
         std::optional<ValueType> ValueTypeFromName(std::string_view n) {
             for (u8 i = 0; i <= static_cast<u8>(ValueType::Bound); ++i)
                 if (n == ValueTypeName(static_cast<ValueType>(i)))
@@ -774,11 +748,13 @@ namespace vae::doc {
         const pugi::xml_node root = dom.child("vae");
         if (!root) return Fail("not a VAE document (no <vae> root)");
 
+        // One format, so this is an equality check rather than a range. A file from either side of
+        // the only format there is gets told which one it is instead of being half-read.
         const u32 version = static_cast<u32>(root.attribute("version").as_uint(0));
         if (version == 0) return Fail("missing format version");
-        if (version > kFormatVersion)
-            return Fail("document was written by a newer VAE (format " + std::to_string(version)
-                        + ", this build reads " + std::to_string(kFormatVersion) + ")");
+        if (version != kFormatVersion)
+            return Fail("document is format " + std::to_string(version) + "; this VAE reads "
+                        + std::to_string(kFormatVersion));
 
         // Merging reads this file into whatever `out` already holds: the parts of a split project
         // are read one after another into a single document, and clearing between them would leave
@@ -979,26 +955,8 @@ namespace vae::doc {
         for (const auto& [id, children] : hierarchy)
             if (Node* node = out.Find(id)) node->children = children;
 
-        // A file that names no library carries its own copy of every component it uses. Fold that
-        // back into a reference, for the same reason format 2 does it: a file with its own frozen
-        // Button can never receive a fix to Button.
-        if (!libraryAttr && library) {
-            if (const u32 folded = library->Adopt(out))
-                VAE_CORE_INFO("adopted {} standard components into the shared library", folded);
-        }
-
         if (start.Valid()) out.SetStartScreen(start);
         return true;
-    }
-
-    bool Serializer::FromText(std::string_view text, Document& out, std::string* error,
-                              const LibrarySource* library) {
-        // The first character that is not whitespace decides. Two formats, one loader, and every
-        // file that already exists keeps opening without anyone renaming it.
-        std::size_t i = 0;
-        while (i < text.size() && std::isspace(static_cast<unsigned char>(text[i]))) ++i;
-        if (i < text.size() && text[i] == '<') return FromXml(text, out, error, library);
-        return FromJson(text, out, error, library);
     }
 
 }

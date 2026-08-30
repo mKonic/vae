@@ -4,15 +4,16 @@
 #include "vae/base/FileSystem.h"
 #include "vae/doc/ValueText.h"
 
-#include <nlohmann/json.hpp>
+#include <pugixml.hpp>
 
-// What is left here is everything that is not a codec: reading and writing the file, choosing which
-// codec to hand it to, and the project file. The codecs are JsonCodec.cpp and XmlCodec.cpp.
+#include <algorithm>
+
+// What is left here is everything that is not the codec: reading and writing the file, the project
+// index, and putting a project split across files back together. The codec is XmlCodec.cpp, and it
+// is the only one.
 namespace vae::doc {
 
-    using json = nlohmann::json;
     namespace fs = std::filesystem;
-
 
     bool Serializer::Save(const Document& document, const fs::path& path,
                           const LibrarySource* library) {
@@ -21,12 +22,27 @@ namespace vae::doc {
 
     bool Serializer::Load(const fs::path& path, Document& out, std::string* error,
                           const LibrarySource* library) {
+        // A directory is the commonest wrong argument — someone points at the project folder rather
+        // than into it — and it deserves an answer about folders rather than a parse failure.
+        std::error_code ec;
+        if (fs::is_directory(path, ec)) {
+            if (error) {
+                const fs::path index = Project::FileIn(path);
+                *error = index.empty()
+                       ? path.filename().string() + " is a folder and holds no "
+                         + std::string(Project::kFileName)
+                       : path.filename().string() + " is a folder — open "
+                         + index.filename().string() + " inside it";
+            }
+            return false;
+        }
+
         auto text = FileSystem::ReadText(path);
         if (!text) {
             if (error) *error = "cannot read " + path.string();
             return false;
         }
-        return FromText(*text, out, error, library);
+        return FromXml(*text, out, error, library);
     }
 
     bool Serializer::LoadInto(const fs::path& path, Document& out, std::string* error,
@@ -36,32 +52,26 @@ namespace vae::doc {
             if (error) *error = "cannot read " + path.string();
             return false;
         }
-        std::size_t i = 0;
-        while (i < text->size() && std::isspace(static_cast<unsigned char>((*text)[i]))) ++i;
-        if (i >= text->size() || (*text)[i] != '<') {
-            // The older JSON formats describe a whole document, so there is no sensible way to
-            // merge one into another. A split project is written by this build and is always
-            // format 3.
-            if (error) *error = path.filename().string() + " is not a format 3 document";
-            return false;
-        }
         return FromXml(*text, out, error, library, true);
     }
 
     // ---------------------------------------------------------------- Project
 
     bool Project::Save(const Project& project, const fs::path& path) {
-        json root;
-        root["format"] = "vae.project";
-        root["version"] = Serializer::kFormatVersion;
-        root["name"] = project.name;
-        root["scriptLanguage"] = project.scriptLanguage;
-        root["screens"] = project.screens;
-        root["components"] = project.components;
-        root["fontDirs"] = project.fontDirs;
-        root["targetResolution"] = { text::NumberAsDouble(project.targetResolution.x),
-                                     text::NumberAsDouble(project.targetResolution.y) };
-        return FileSystem::WriteText(path, root.dump(2));
+        std::string out = "<vae version=\"" + std::to_string(Serializer::kFormatVersion) + "\">\n";
+        out += "  <project name=\"" + text::EscapeAttr(project.name) + "\"";
+        out += " script=\"" + text::EscapeAttr(project.scriptLanguage) + "\"";
+        out += " targetSize=\"" + text::Vec2Text(project.targetResolution) + "\"";
+        if (project.fontDirs.empty()) {
+            out += "/>\n";
+        } else {
+            out += ">\n";
+            for (const std::string& dir : project.fontDirs)
+                out += "    <fonts dir=\"" + text::EscapeAttr(dir) + "\"/>\n";
+            out += "  </project>\n";
+        }
+        out += "</vae>\n";
+        return FileSystem::WriteText(path, out);
     }
 
     bool Project::Load(const fs::path& path, Project& out, std::string* error) {
@@ -70,25 +80,41 @@ namespace vae::doc {
             if (error) *error = "cannot read " + path.string();
             return false;
         }
-        json root = json::parse(*text, nullptr, false);
-        if (root.is_discarded() || root.value("format", "") != "vae.project") {
-            if (error) *error = "not a VAE project file";
-            return false;
-        }
-        if (root.value("version", 0u) > Serializer::kFormatVersion) {
-            if (error) *error = "project was written by a newer VAE";
+
+        pugi::xml_document xml;
+        const pugi::xml_parse_result parsed = xml.load_buffer(text->data(), text->size());
+        if (!parsed) {
+            if (error) *error = std::string("project file: ") + parsed.description();
             return false;
         }
 
-        out.name = root.value("name", "Untitled");
-        out.scriptLanguage = root.value("scriptLanguage", "lua");
+        const pugi::xml_node root = xml.child("vae");
+        if (!root) {
+            if (error) *error = "not a VAE project (no <vae> root)";
+            return false;
+        }
+        const auto version = root.attribute("version").as_uint(0);
+        if (version != Serializer::kFormatVersion) {
+            if (error)
+                *error = "project is format " + std::to_string(version) + "; this VAE reads "
+                       + std::to_string(Serializer::kFormatVersion);
+            return false;
+        }
+
+        const pugi::xml_node project = root.child("project");
+        if (!project) {
+            if (error) *error = "not a VAE project (no <project> element)";
+            return false;
+        }
+
+        out.name = project.attribute("name").as_string("Untitled");
+        out.scriptLanguage = project.attribute("script").as_string("lua");
         out.root = path.parent_path();
-        out.screens = root.value("screens", std::vector<std::string>{});
-        out.components = root.value("components", std::vector<std::string>{});
-        out.fontDirs = root.value("fontDirs", std::vector<std::string>{});
-        if (root.contains("targetResolution") && root["targetResolution"].size() == 2)
-            out.targetResolution = { root["targetResolution"][0].get<f32>(),
-                                     root["targetResolution"][1].get<f32>() };
+        out.fontDirs.clear();
+        for (pugi::xml_node fonts : project.children("fonts"))
+            out.fontDirs.emplace_back(fonts.attribute("dir").as_string());
+        if (const auto size = text::Vec2FromText(project.attribute("targetSize").as_string()))
+            out.targetResolution = *size;
         return true;
     }
 
@@ -103,7 +129,7 @@ namespace vae::doc {
             for (char c : name) {
                 const auto u = static_cast<unsigned char>(c);
                 if (std::isalnum(u) || c == '-' || c == '_') stem.push_back(c);
-                else if (c == ' ' && !stem.empty() && stem.back() != ' ') stem.push_back(' ');
+                else if (c == ' ' && !stem.empty() && stem.back() != ' ') stem.push_back(c);
             }
             while (!stem.empty() && stem.back() == ' ') stem.pop_back();
             return stem.empty() ? std::string(fallback) : stem;
@@ -124,24 +150,50 @@ namespace vae::doc {
             return Serializer::Save(part, path, library);
         }
 
-        // Files this project used to have and no longer does. Left behind, a deleted screen still
-        // loads on the next open.
-        void RemoveOrphans(const fs::path& dir, const std::vector<std::string>& keep,
-                           std::string_view extension) {
+        // Documents in `dir` this save did not write. Left behind, a deleted screen still loads on
+        // the next open — the folder is what the loader reads, so the folder is what a save has to
+        // leave correct.
+        void RemoveOrphans(const fs::path& dir, const std::vector<fs::path>& written) {
             std::error_code ec;
             if (!fs::is_directory(dir, ec)) return;
             for (const auto& entry : fs::directory_iterator(dir, ec)) {
-                if (entry.path().extension() != extension) continue;
-                const std::string relative = dir.filename().string() + "/"
-                                           + entry.path().filename().string();
-                if (std::find(keep.begin(), keep.end(), relative) == keep.end())
+                if (entry.path().extension() != Serializer::kExtension) continue;
+                if (std::find(written.begin(), written.end(), entry.path()) == written.end())
                     fs::remove(entry.path(), ec);
             }
         }
 
+        // Every .vae file directly inside `dir`, sorted. Sorted so two machines agree about the
+        // order a project loads in, which is what keeps ids and diffs stable.
+        std::vector<fs::path> DocumentsDirectlyIn(const fs::path& dir) {
+            std::vector<fs::path> out;
+            std::error_code ec;
+            if (!fs::is_directory(dir, ec)) return out;
+            for (const auto& entry : fs::directory_iterator(dir, ec))
+                if (entry.is_regular_file(ec) && entry.path().extension() == Serializer::kExtension)
+                    out.push_back(entry.path());
+            std::sort(out.begin(), out.end());
+            return out;
+        }
+
     }
 
-    bool Project::IsProjectFile(const fs::path& path) { return path.extension() == ".vaeproj"; }
+    bool Project::IsProjectFile(const fs::path& path) { return path.filename() == kFileName; }
+
+    fs::path Project::FileIn(const fs::path& dir) {
+        std::error_code ec;
+        const fs::path candidate = dir / kFileName;
+        return fs::is_regular_file(candidate, ec) ? candidate : fs::path{};
+    }
+
+    std::vector<fs::path> Project::DocumentsIn(const fs::path& root) {
+        // Components first: a screen's instance names its component by id, and the reference is
+        // only dangling until the file that defines it has been read.
+        std::vector<fs::path> out = DocumentsDirectlyIn(root / "components");
+        const std::vector<fs::path> screens = DocumentsDirectlyIn(root / "screens");
+        out.insert(out.end(), screens.begin(), screens.end());
+        return out;
+    }
 
     bool Project::SaveDocument(const Document& document, Project& project,
                                const fs::path& projectFile, const LibrarySource* library) {
@@ -158,8 +210,8 @@ namespace vae::doc {
             return std::find(stock.begin(), stock.end(), id) != stock.end();
         };
 
-        project.screens.clear();
-        project.components.clear();
+        std::vector<fs::path> screens;
+        std::vector<fs::path> components;
         u32 unnamed = 0;
 
         for (Uuid id : document.Roots()) {
@@ -167,22 +219,22 @@ namespace vae::doc {
             if (!node) continue;
 
             if (node->kind == NodeKind::Screen) {
-                const std::string relative = "screens/"
-                    + FileStem(node->name, "Screen " + std::to_string(++unnamed)) + ".vaescreen";
-                if (!WriteRoot(document, id, root / relative, library)) return false;
-                project.screens.push_back(relative);
+                const fs::path path = root / "screens"
+                    / (FileStem(node->name, "Screen " + std::to_string(++unnamed))
+                       + std::string(Serializer::kExtension));
+                if (!WriteRoot(document, id, path, library)) return false;
+                screens.push_back(path);
             } else if (node->IsComponent() && !isStock(id)) {
-                const std::string relative = "components/"
-                    + FileStem(node->name, "Component " + std::to_string(++unnamed)) + ".vaecomp";
-                if (!WriteRoot(document, id, root / relative, library)) return false;
-                project.components.push_back(relative);
+                const fs::path path = root / "components"
+                    / (FileStem(node->name, "Component " + std::to_string(++unnamed))
+                       + std::string(Serializer::kExtension));
+                if (!WriteRoot(document, id, path, library)) return false;
+                components.push_back(path);
             }
         }
 
         // The theme, the project's own tokens and its assets: document-wide, so they belong to no
-        // one screen. Written as a document like everything else rather than folded into the index,
-        // because the writer already knows how to write a token and JSON would be a second spelling
-        // of the same thing.
+        // one screen. Written as a document like everything else.
         {
             Document shared;
             if (library && !library->Install(library->Id(), library->Version(), shared)) return false;
@@ -192,8 +244,8 @@ namespace vae::doc {
             if (!Serializer::Save(shared, root / "tokens.vae", library)) return false;
         }
 
-        RemoveOrphans(root / "screens", project.screens, ".vaescreen");
-        RemoveOrphans(root / "components", project.components, ".vaecomp");
+        RemoveOrphans(root / "screens", screens);
+        RemoveOrphans(root / "components", components);
 
         project.root = root;
         return Save(project, projectFile);
@@ -210,24 +262,17 @@ namespace vae::doc {
         }
 
         const fs::path root = outProject.root;
-        // Components first: a screen's instance names its component by id, and the reference is
-        // only dangling until the file that defines it has been read.
-        const auto readAll = [&](const std::vector<std::string>& files) {
-            for (const std::string& relative : files) {
-                std::string one;
-                if (!Serializer::LoadInto(root / relative, out, &one, library)) {
-                    if (error) *error = one;
-                    return false;
-                }
-            }
-            return true;
-        };
-
         std::error_code ec;
         if (fs::exists(root / "tokens.vae", ec)
             && !Serializer::LoadInto(root / "tokens.vae", out, error, library)) return false;
-        if (!readAll(outProject.components)) return false;
-        if (!readAll(outProject.screens)) return false;
+
+        for (const fs::path& file : DocumentsIn(root)) {
+            std::string one;
+            if (!Serializer::LoadInto(file, out, &one, library)) {
+                if (error) *error = file.filename().string() + ": " + one;
+                return false;
+            }
+        }
         return true;
     }
 

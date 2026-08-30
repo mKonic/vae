@@ -17,11 +17,24 @@
 
 namespace vae::app {
 
-    bool RunLayer::Load(const std::filesystem::path& path, std::string* error) {
+    bool RunLayer::Load(const std::filesystem::path& given, std::string* error) {
+        // Pointing at the folder is the commonest way to name a project, so it is the first thing
+        // this understands rather than a mistake it reports.
+        std::error_code ec;
+        std::filesystem::path path = given;
+        if (std::filesystem::is_directory(path, ec)) {
+            path = doc::Project::FileIn(given);
+            if (path.empty()) {
+                if (error) *error = given.filename().string() + " holds no "
+                                  + std::string(doc::Project::kFileName);
+                return false;
+            }
+        }
+
         // The standard widgets are compiled in, not carried by the file: the player rebuilds them
-        // from the same catalog the Studio drew against.
-        // A `.vaeproj` is the same document spread over one file per screen; everything downstream
-        // of here sees no difference, because the difference is only on disk.
+        // from the same catalog the Studio drew against. A project folder is the same document
+        // spread over one file per screen; everything downstream of here sees no difference,
+        // because the difference is only on disk.
         doc::Project project;
         const bool loaded = doc::Project::IsProjectFile(path)
             ? doc::Project::LoadDocument(path, m_Document, project, error, &ui::StandardLibrary())
@@ -29,11 +42,14 @@ namespace vae::app {
         if (!loaded) return false;
         m_ProjectPath = path;
 
-        // The script sits beside the document and is named after it, exactly as the Studio writes
-        // it. A native module wins when both are present: a project that ships a compiled module
-        // has already been built and should not be recompiled on someone else's machine.
-        std::filesystem::path base = path;
-        base.replace_extension();
+        // The script sits beside the document and is named after the PROJECT — the folder for a
+        // split project, whose index is called project.vae in every project there is, and the file
+        // itself for a single-document one. A native module wins when both are present: a project
+        // that ships a compiled module has already been built and should not be recompiled on
+        // someone else's machine.
+        const std::filesystem::path base = doc::Project::IsProjectFile(path)
+            ? path.parent_path() / path.parent_path().filename()
+            : std::filesystem::path(path).replace_extension();
         const std::filesystem::path native =
             std::filesystem::path(base).concat(platform::ModuleExtension());
         const std::filesystem::path lua    = std::filesystem::path(base).concat(".lua");
@@ -56,7 +72,12 @@ namespace vae::app {
             return false;
         }
 
-        VAE_INFO("app: {} · screen '{}' · {}x{} · {}", path.filename().string(),
+        // The project's name, not the index's: "project.vae" is what every split project's index
+        // is called, so naming the file says nothing about which app just started.
+        const std::string opened = doc::Project::IsProjectFile(path)
+            ? path.parent_path().filename().string()
+            : path.filename().string();
+        VAE_INFO("app: {} · screen '{}' · {}x{} · {}", opened,
                  m_Document.Find(m_Screen)->name, m_DesignSize.x, m_DesignSize.y,
                  m_ScriptPath.empty() ? std::string("no script")
                                       : m_ScriptPath.filename().string());

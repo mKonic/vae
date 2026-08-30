@@ -104,7 +104,7 @@ namespace vae {
 
         // The component `node` is authored inside, or Invalid if it is on a screen.
         Uuid ComponentOwning(Uuid node) const;
-        // Cut, copy and paste. The clipboard carries format-3 markup — the same text a .vaescreen
+        // Cut, copy and paste. The clipboard carries format-3 markup — the same text a .vae file
         // holds — so a copy survives being pasted into another project, into a second Studio, or
         // through a text editor.
         void CopySelection();
@@ -147,7 +147,7 @@ namespace vae {
         bool Load(const std::filesystem::path& path);
         const std::filesystem::path& Path() const { return m_Path; }
 
-        // A `.vaeproj` is a project split across files — one per screen, one per forked component.
+        // A A project folder is a document split across files — one per screen, one per forked component.
         // Everything else is a single document. Which one this is decides only how Save and Load
         // touch the disk; the document in memory is the same either way.
         bool IsSplit() const { return doc::Project::IsProjectFile(m_Path); }

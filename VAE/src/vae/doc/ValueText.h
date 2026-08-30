@@ -8,9 +8,10 @@
 
 namespace vae::doc {
 
-    // The scalar half of writing a document: turning a number, a colour or a string into text and
-    // back. Shared by both codecs — the JSON one and the XML one disagree about where a value goes,
-    // not about how a colour is spelled — so it lives here rather than being written twice.
+    // The scalar half of writing a document: turning a number, a colour, a vector or a string into
+    // text and back, plus the attribute escaping the markup needs. Separate from the codec because
+    // the project index writes the same scalars the document does, and a second spelling of a
+    // number is a second thing to keep in step.
     namespace text {
 
         // Sigils, so a value can be written as itself rather than as a {"type","value"} pair. A
@@ -44,6 +45,15 @@ namespace vae::doc {
         // quietly rounded on save.
         std::optional<std::string> ColorToHex(const Color& c);
         std::optional<Color> ColorFromHex(std::string_view hex);
+
+        // Two numbers with a space between them: "12 8".
+        std::string Vec2Text(const Vec2& v);
+        std::optional<Vec2> Vec2FromText(std::string_view s);
+
+        // What an XML attribute value may not contain. Newlines and tabs go out as character
+        // references rather than raw, because an attribute that wraps is an attribute a reader
+        // reformats.
+        std::string EscapeAttr(std::string_view s);
 
     }
 

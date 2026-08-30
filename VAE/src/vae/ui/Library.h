@@ -23,7 +23,7 @@ namespace vae::ui {
     Library BuildStandardLibrary(doc::Document& document);
 
     // The same catalog, as something a document can name instead of copying. This is what keeps a
-    // .vaescreen down to the app the designer actually drew: the 53 components and ~480 nodes
+    // .vae file down to the app the designer actually drew: the 53 components and ~480 nodes
     // above are compiled into the binary, so a file says "vae.std" and gets them rebuilt on load.
     //
     // The pairing with BuildStandardLibrary is exact — Install calls it — so a component that

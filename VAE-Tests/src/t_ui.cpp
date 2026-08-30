@@ -2652,10 +2652,10 @@ TEST(ui, slot_content_survives_a_save_and_a_load) {
     ui.document.Touch(button);
     ui.Frame();
 
-    const std::string json = doc::Serializer::ToJson(ui.document);
+    const std::string xml = doc::Serializer::ToXml(ui.document, true, nullptr, true);
     doc::Document loaded;
     std::string error;
-    CHECK_MESSAGE(doc::Serializer::FromJson(json, loaded, &error), error);
+    CHECK_MESSAGE(doc::Serializer::FromXml(xml, loaded, &error), error);
 
     const doc::Node* inside = loaded.Find(button);
     CHECK(inside != nullptr);
@@ -3002,14 +3002,14 @@ TEST(library, the_standard_catalog_is_not_written_into_the_file) {
     const Uuid screen = document.CreateNode(doc::NodeKind::Screen, Uuid::Invalid(), "Home");
     document.CreateInstance(library.Find("Button"), screen);
 
-    const std::string named = doc::Serializer::ToJson(document, true, &StandardLibrary());
-    const std::string copied = doc::Serializer::ToJson(document);
+    const std::string named = doc::Serializer::ToXml(document, true, &StandardLibrary(), true);
+    const std::string copied = doc::Serializer::ToXml(document, true, nullptr, true);
     CHECK(named.size() * 10 < copied.size());
-    CHECK(named.find("\"vae.std\"") != std::string::npos);
+    CHECK(named.find("library=\"vae.std@") != std::string::npos);
 
     doc::Document loaded;
     std::string error;
-    CHECK_MESSAGE(doc::Serializer::FromJson(named, loaded, &error, &StandardLibrary()), error);
+    CHECK_MESSAGE(doc::Serializer::FromXml(named, loaded, &error, &StandardLibrary()), error);
     // Same ids, so the instance still points at a Button that exists.
     const Uuid button = library.Find("Button");
     CHECK(loaded.Find(button) != nullptr);
@@ -3135,11 +3135,11 @@ TEST(library, the_catalog_comes_back_on_the_same_ids_every_time) {
 TEST(library, a_document_without_the_library_available_says_so) {
     doc::Document document;
     BuildStandardLibrary(document);
-    const std::string json = doc::Serializer::ToJson(document, true, &StandardLibrary());
+    const std::string xml = doc::Serializer::ToXml(document, true, &StandardLibrary(), true);
 
     doc::Document loaded;
     std::string error;
-    CHECK(!doc::Serializer::FromJson(json, loaded, &error));
+    CHECK(!doc::Serializer::FromXml(xml, loaded, &error));
     CHECK(error.find("vae.std") != std::string::npos);
 }
 
@@ -3151,78 +3151,14 @@ TEST(library, an_edited_component_is_written_out_and_wins_over_the_built_one) {
     const Uuid button = library.Find("Button");
     document.SetProp(button, doc::Prop::CornerRadius, 99.0f);
 
-    const std::string json = doc::Serializer::ToJson(document, true, &StandardLibrary());
-    CHECK(json.find("\"vae.std\"") != std::string::npos);
+    const std::string xml = doc::Serializer::ToXml(document, true, &StandardLibrary(), true);
+    CHECK(xml.find("library=\"vae.std@") != std::string::npos);
 
     doc::Document loaded;
     std::string error;
-    CHECK_MESSAGE(doc::Serializer::FromJson(json, loaded, &error, &StandardLibrary()), error);
+    CHECK_MESSAGE(doc::Serializer::FromXml(xml, loaded, &error, &StandardLibrary()), error);
     CHECK_EQ(loaded.GetProp(button, doc::Prop::CornerRadius), doc::Value{ 99.0f });
     // ...and exactly once: the built copy must not survive beside it.
     CHECK_EQ(loaded.Subtree(button).size(), document.Subtree(button).size());
     CHECK_EQ(std::count(loaded.Roots().begin(), loaded.Roots().end(), button), 1);
-}
-
-TEST(library, a_document_with_the_catalog_inlined_is_folded_down_on_load) {
-    // Every file written before format 2 carries its own copy of the catalog under ids that were
-    // random at the time. Reading one has to recognise the copy and rewrite what pointed into it,
-    // or the saving would only ever apply to files made from here on.
-    doc::Document document;
-    const Library library = BuildStandardLibrary(document);
-    const Uuid button = library.Find("Button");
-    const Uuid label = document.Find(button)->children.front();
-    const Uuid screen = document.CreateNode(doc::NodeKind::Screen, Uuid::Invalid(), "Home");
-    const Uuid instance = document.CreateInstance(button, screen);
-    document.SetOverride(instance, label, doc::Prop::Text, std::string("Send"));
-
-    // Stand in for an old file: the catalog inlined, under ids that are nothing like today's.
-    std::string json = doc::Serializer::ToJson(document);
-    for (Uuid id : document.Subtree(button)) {
-        const std::string was = id.ToString();
-        const std::string now = Uuid::FromName("old/" + was).ToString();
-        for (std::size_t at = json.find(was); at != std::string::npos; at = json.find(was, at))
-            json.replace(at, was.size(), now);
-    }
-    CHECK(json.find(button.ToString()) == std::string::npos);
-
-    doc::Document loaded;
-    std::string error;
-    CHECK_MESSAGE(doc::Serializer::FromJson(json, loaded, &error, &StandardLibrary()), error);
-
-    // The copy is gone, the real Button is back, and the instance still points at it with its
-    // override intact — which is the only thing that could have been silently lost.
-    CHECK(loaded.Find(button) != nullptr);
-    CHECK_EQ(std::count(loaded.Roots().begin(), loaded.Roots().end(), button), 1);
-    CHECK(loaded.Find(instance) != nullptr);
-    CHECK(loaded.Find(instance)->componentId == button);
-    CHECK_EQ(loaded.ResolvedProps(instance, label).Text(doc::Prop::Text), std::string("Send"));
-    CHECK_EQ(loaded.NodeCount(), document.NodeCount());
-
-    // Saved again, it is now a reference like any other document.
-    const std::string again = doc::Serializer::ToJson(loaded, true, &StandardLibrary());
-    CHECK(again.size() * 10 < json.size());
-}
-
-TEST(library, an_inlined_component_the_designer_edited_stays_inlined) {
-    // The mirror of the case above: an old file whose Button was restyled is not the stock widget
-    // and must not be replaced by it.
-    doc::Document document;
-    const Library library = BuildStandardLibrary(document);
-    const Uuid button = library.Find("Button");
-    document.SetProp(button, doc::Prop::CornerRadius, 99.0f);
-
-    std::string json = doc::Serializer::ToJson(document);
-    for (Uuid id : document.Subtree(button)) {
-        const std::string was = id.ToString();
-        const std::string now = Uuid::FromName("old/" + was).ToString();
-        for (std::size_t at = json.find(was); at != std::string::npos; at = json.find(was, at))
-            json.replace(at, was.size(), now);
-    }
-
-    doc::Document loaded;
-    std::string error;
-    CHECK_MESSAGE(doc::Serializer::FromJson(json, loaded, &error, &StandardLibrary()), error);
-    const Uuid forked = Uuid::FromName("old/" + button.ToString());
-    CHECK(loaded.Find(forked) != nullptr);
-    CHECK_EQ(loaded.GetProp(forked, doc::Prop::CornerRadius), doc::Value{ 99.0f });
 }

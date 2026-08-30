@@ -3,6 +3,7 @@
 
 #include <array>
 #include <charconv>
+#include <cctype>
 #include <cstdio>
 
 namespace vae::doc::text {
@@ -81,6 +82,44 @@ namespace vae::doc::text {
             if (ec != std::errc{} || ptr != first + 2) return std::nullopt;
         }
         return Color{ bytes[0] / 255.0f, bytes[1] / 255.0f, bytes[2] / 255.0f, bytes[3] / 255.0f };
+    }
+
+    std::string Vec2Text(const Vec2& v) { return Number(v.x) + " " + Number(v.y); }
+
+    std::optional<Vec2> Vec2FromText(std::string_view s) {
+        f32 parts[2]{};
+        std::size_t found = 0;
+        std::size_t at = 0;
+        while (at < s.size() && found < 2) {
+            while (at < s.size() && std::isspace(static_cast<unsigned char>(s[at]))) ++at;
+            const std::size_t start = at;
+            while (at < s.size() && !std::isspace(static_cast<unsigned char>(s[at]))) ++at;
+            if (at == start) break;
+            const auto value = ParseNumber(s.substr(start, at - start));
+            if (!value) return std::nullopt;
+            parts[found++] = *value;
+        }
+        while (at < s.size() && std::isspace(static_cast<unsigned char>(s[at]))) ++at;
+        if (found != 2 || at != s.size()) return std::nullopt;
+        return Vec2{ parts[0], parts[1] };
+    }
+
+    std::string EscapeAttr(std::string_view s) {
+        std::string out;
+        out.reserve(s.size());
+        for (char c : s) {
+            switch (c) {
+                case '&':  out += "&amp;";  break;
+                case '<':  out += "&lt;";   break;
+                case '>':  out += "&gt;";   break;
+                case '"':  out += "&quot;"; break;
+                case '\n': out += "&#10;";  break;
+                case '\t': out += "&#9;";   break;
+                case '\r': out += "&#13;";  break;
+                default:   out += c;        break;
+            }
+        }
+        return out;
     }
 
 }

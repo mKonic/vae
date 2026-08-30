@@ -62,7 +62,7 @@ namespace vae {
             std::string ext = path.extension().string();
             std::ranges::transform(ext, ext.begin(),
                                    [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-            if (ext == ".vaescreen" || ext == ".vaeproj" || ext == ".vaecomp") return Kind::Screen;
+            if (ext == ".vae") return Kind::Screen;
             if (ext == ".lua" || ext == ".cpp" || ext == ".h" || ext == ".hpp") return Kind::Script;
             if (ext == ".png" || ext == ".jpg" || ext == ".jpeg" || ext == ".svg") return Kind::Image;
             if (ext == ".wav" || ext == ".ogg" || ext == ".mp3" || ext == ".flac") return Kind::Sound;
@@ -338,8 +338,7 @@ namespace vae {
                         ImGui::SetWindowFocus("Script###Script");
                         break;
                     case Kind::Screen:
-                        if (entry.path.extension() == ".vaescreen"
-                            || entry.path.extension() == ".vaeproj") openProject = entry.path;
+                        openProject = entry.path;
                         break;
                     default: break;
                 }
