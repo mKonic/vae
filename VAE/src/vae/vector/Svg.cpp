@@ -235,10 +235,12 @@ namespace vae::vector {
                 switch (upper) {
                     case 'M': if (point(a)) path.MoveTo(a + offset()); break;
                     case 'L': if (point(a)) path.LineTo(a + offset()); break;
-                    case 'H': if (number(a.x))
-                                  path.LineTo({ a.x + offset().x, path.Current().y }); break;
-                    case 'V': if (number(a.y))
-                                  path.LineTo({ path.Current().x, a.y + offset().y }); break;
+                    case 'H':
+                        if (number(a.x)) path.LineTo({ a.x + offset().x, path.Current().y });
+                        break;
+                    case 'V':
+                        if (number(a.y)) path.LineTo({ path.Current().x, a.y + offset().y });
+                        break;
                     case 'C': {
                         const Vec2 base = offset();
                         if (point(a) && point(b) && point(c))

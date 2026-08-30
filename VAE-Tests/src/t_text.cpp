@@ -105,7 +105,7 @@ TEST(utf8, decodes_every_sequence_length) {
     Utf8Append(s, 0x4E2D);                  // 3 bytes: CJK
     Utf8Append(s, 0x1F600);                 // 4 bytes: emoji
 
-    CHECK_EQ(Utf8Next(s, i), 'A');
+    CHECK_EQ(Utf8Next(s, i), u32{ 'A' });
     CHECK_EQ(Utf8Next(s, i), 0x00E9u);
     CHECK_EQ(Utf8Next(s, i), 0x4E2Du);
     CHECK_EQ(Utf8Next(s, i), 0x1F600u);
@@ -119,8 +119,8 @@ TEST(utf8, malformed_bytes_do_not_desynchronise_or_hang) {
     std::size_t i = 0;
     CHECK_EQ(Utf8Next(s, i), kReplacementChar);
     CHECK_EQ(i, 1u);
-    CHECK_EQ(Utf8Next(s, i), 'o');
-    CHECK_EQ(Utf8Next(s, i), 'k');
+    CHECK_EQ(Utf8Next(s, i), u32{ 'o' });
+    CHECK_EQ(Utf8Next(s, i), u32{ 'k' });
     CHECK_EQ(i, s.size());
 }
 

@@ -240,7 +240,8 @@ namespace vae {
             GLFW_NOT_ALLOWED_CURSOR, GLFW_RESIZE_NWSE_CURSOR, GLFW_RESIZE_NESW_CURSOR,
             GLFW_RESIZE_ALL_CURSOR,
         };
-        for (int i = 0; i < kCursorCount; ++i) m_Cursors[i] = glfwCreateStandardCursor(kShapes[i]);
+        for (std::size_t i = 0; i < kCursorCount; ++i)
+            m_Cursors[i] = glfwCreateStandardCursor(kShapes[i]);
     }
 
     void DesktopWindow::SetCursor(Cursor cursor) {

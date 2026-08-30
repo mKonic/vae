@@ -98,7 +98,7 @@ namespace vae::gpu {
         if (stageBits & StageBit(ShaderStage::Vertex))   flags |= VK_SHADER_STAGE_VERTEX_BIT;
         if (stageBits & StageBit(ShaderStage::Fragment)) flags |= VK_SHADER_STAGE_FRAGMENT_BIT;
         if (stageBits & StageBit(ShaderStage::Compute))  flags |= VK_SHADER_STAGE_COMPUTE_BIT;
-        return flags ? flags : VK_SHADER_STAGE_ALL_GRAPHICS;
+        return flags ? flags : VkShaderStageFlags{ VK_SHADER_STAGE_ALL_GRAPHICS };
     }
 
     VkDescriptorType ToVk(BindingType t) {

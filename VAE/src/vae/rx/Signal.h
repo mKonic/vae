@@ -33,7 +33,10 @@ namespace vae::rx {
         }
 
         template<typename Fn>
-        void Update(Fn&& fn) { T next = m_Value; fn(next); Set(std::move(next)); }
+        // Named apart from Node::Update on purpose: an overload with the same name hides the
+        // virtual, so a Signal reached through a Node* would call neither the one you meant nor
+        // the one you wrote.
+        void Modify(Fn&& fn) { T next = m_Value; fn(next); Set(std::move(next)); }
 
         // For types too large or non-comparable to round-trip through Set. The caller promises the
         // value really changed; there is no equality cutoff on this path.

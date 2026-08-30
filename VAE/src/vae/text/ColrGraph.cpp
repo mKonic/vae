@@ -874,7 +874,7 @@ namespace vae::text {
                     }
 
                     f32 fs = 1.0f, fb = 1.0f - as;
-                    PorterDuff(mode >= kScreen ? kSrcOver : mode, as, ab, fs, fb);
+                    PorterDuff(mode >= kScreen ? u8{ kSrcOver } : mode, as, ab, fs, fb);
                     const f32 alpha = std::clamp(as * fs + ab * fb, 0.0f, 1.0f);
                     const auto channel = [&](f32 s, f32 b) {
                         return static_cast<u8>(std::clamp(

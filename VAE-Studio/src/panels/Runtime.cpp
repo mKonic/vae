@@ -301,7 +301,7 @@ namespace vae {
                 ImGui::EndChild();
                 ImGui::EndTabItem();
             }
-            char watches[32];
+            char watches[64];
             std::snprintf(watches, sizeof watches, "Watch (%zu)###watch",
                           session.Debug().Watches().size());
             if (ImGui::BeginTabItem(watches)) {

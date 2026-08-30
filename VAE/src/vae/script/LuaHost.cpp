@@ -504,8 +504,20 @@ namespace vae::script {
         auto it = host->m_State->objects.find(handle);
         if (it == host->m_State->objects.end()) return;
 
+        // GCC reads sol2's string-literal key as one char longer than it is once the whole
+        // traverse_get chain inlines, and reports an out-of-bounds it then never performs. A false
+        // positive in a vendored template, silenced where it fires rather than project-wide:
+        // -Warray-bounds is worth having everywhere else. -isystem does not reach it, because the
+        // diagnostic is attributed to the inlined chain rooted in this function.
+#if defined(__GNUC__) && !defined(__clang__)
+#  pragma GCC diagnostic push
+#  pragma GCC diagnostic ignored "-Warray-bounds"
+#endif
         const sol::optional<sol::protected_function> fn =
             it->second["on_event"].get<sol::optional<sol::protected_function>>();
+#if defined(__GNUC__) && !defined(__clang__)
+#  pragma GCC diagnostic pop
+#endif
         if (!fn || !fn->valid()) return;
 
         sol::table event = host->m_State->lua.create_table();

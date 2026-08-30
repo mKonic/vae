@@ -22,11 +22,6 @@ namespace vae {
         ImVec2 Im(Vec2 v) { return { v.x, v.y }; }
         Vec2   Vae(ImVec2 v) { return { v.x, v.y }; }
 
-        ImU32 Col(Color c) {
-            return IM_COL32(static_cast<int>(c.r * 255.0f), static_cast<int>(c.g * 255.0f),
-                            static_cast<int>(c.b * 255.0f), static_cast<int>(c.a * 255.0f));
-        }
-
         const ImU32 kAccent   = IM_COL32(93, 130, 228, 255);
         const ImU32 kAccentBg = IM_COL32(93, 130, 228, 40);
         const ImU32 kGuide    = IM_COL32(236, 72, 153, 220);

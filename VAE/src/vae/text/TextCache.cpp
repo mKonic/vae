@@ -96,11 +96,6 @@ namespace vae::text {
             return cache;
         }
 
-        const TextLayoutResult& Empty() {
-            static const TextLayoutResult empty;
-            return empty;
-        }
-
     }
 
     const TextLayoutResult& TextCache::Layout(std::string_view utf8, const TextStyle& style,

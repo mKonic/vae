@@ -42,8 +42,8 @@ namespace vae::fields {
 
     // `key` is what a write is filed under: the property itself, or a state overlay like
     // "hovered:fill". Both are one colour on one node as far as this field is concerned.
-    bool Colour(EditorState& state, Uuid node, const char* label, std::string key, doc::Prop prop,
-                Color fallback) {
+    bool Colour(EditorState& state, Uuid node, const char* label, std::string key,
+                [[maybe_unused]] doc::Prop prop, Color fallback) {
         const doc::Value current = state.GetProp(node, key);
         Color value = fallback;
         const bool unset = !doc::IsSet(current);

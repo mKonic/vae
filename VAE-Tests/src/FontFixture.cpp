@@ -540,9 +540,7 @@ namespace vae::fixture {
         if (spec.composite >= 0) p.Fill(compositeSourceHole, root, stackTop);
 
         u32 transformParent = 0, transformHole = 0;
-        u32 layersAt = 0;
         if (layered) {
-            layersAt = stackTop;
             p.Put8(1);                       // PaintColrLayers
             p.Put8(layerCount);
             p.Put32(0);                      // firstLayerIndex

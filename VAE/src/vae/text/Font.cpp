@@ -519,6 +519,10 @@ namespace vae::text {
                 VAE_CORE_INFO("'{}' is a colour font (COLR/CPAL): {} layered glyphs, {} palette "
                               "entries", m_Family, m_Colr->bases.size(), m_Colr->palette.size());
                 break;
+            case ColourFormat::Svg:
+                VAE_CORE_INFO("'{}' is a colour font (OpenType-SVG): {} glyph documents",
+                              m_Family, m_Svg->records.size());
+                break;
             case ColourFormat::None: break;
         }
         return true;
@@ -542,7 +546,8 @@ namespace vae::text {
         hb_font_t* font = hb_font_create(m_Shaper->face);
         // Advances come back in 26.6-style fixed point at this scale; matching the em scale to
         // upem * pixelSize / upem keeps HarfBuzz's numbers in the same units stb_truetype gives us.
-        const unsigned upem = hb_face_get_upem(m_Shaper->face);
+        // Only the assert reads this, and the assert is ((void)0) in Dist.
+        [[maybe_unused]] const unsigned upem = hb_face_get_upem(m_Shaper->face);
         const auto scale = static_cast<int>(pixelSize * 64.0f);
         hb_font_set_scale(font, scale, scale);
         hb_font_set_ppem(font, static_cast<unsigned>(pixelSize), static_cast<unsigned>(pixelSize));

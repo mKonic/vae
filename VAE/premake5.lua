@@ -14,6 +14,15 @@ project "VAE-Core"
    language "C++"
    cppdialect "C++23"
    staticruntime "off"
+   -- First-party code only, never vendor-build/: other people's warnings are noise you cannot act
+   -- on, and a wall of them is how a real one goes unread. This codebase compiled at GCC's default
+   -- warning level until 2026-08-30, which is close to silent.
+   --
+   -- -Wmissing-field-initializers is off because it is exactly that noise here: it fires on every
+   -- designated initializer that leaves a member to its default, which is the whole point of one,
+   -- and it was 469 of the first 487 warnings. Turning it off is what makes the other 18 readable.
+   warnings "Extra"
+   buildoptions { "-Wno-missing-field-initializers" }
    targetdir ("%{wks.location}/bin/"     .. outputdir .. "/%{prj.name}")
    objdir    ("%{wks.location}/bin-int/" .. outputdir .. "/%{prj.name}")
 
@@ -61,6 +70,11 @@ project "VAE-Core"
       "src/vae/draw/DrawList.h", "src/vae/draw/DrawList.cpp",
    }
 
+   -- sol2 as a system include: -Wextra fires inside its templates from OUR translation units, and
+   -- a warning in a header we do not own is one nobody can act on. externalincludedirs is what
+   -- premake spells -isystem.
+   externalincludedirs { "%{IncludeDir.sol2}" }
+
    defines {
       "VAE_ENGINE_BUILD",
       "SPDLOG_COMPILED_LIB",
@@ -86,7 +100,6 @@ project "VAE-Core"
       "%{IncludeDir.miniaudio}",
       "%{IncludeDir.luashim}",
       "%{IncludeDir.lua}",
-      "%{IncludeDir.sol2}",
    }
 
    -- https when the host has OpenSSL; plain http and a clear error when not.
@@ -124,6 +137,15 @@ project "VAE"
    language "C++"
    cppdialect "C++23"
    staticruntime "off"
+   -- First-party code only, never vendor-build/: other people's warnings are noise you cannot act
+   -- on, and a wall of them is how a real one goes unread. This codebase compiled at GCC's default
+   -- warning level until 2026-08-30, which is close to silent.
+   --
+   -- -Wmissing-field-initializers is off because it is exactly that noise here: it fires on every
+   -- designated initializer that leaves a member to its default, which is the whole point of one,
+   -- and it was 469 of the first 487 warnings. Turning it off is what makes the other 18 readable.
+   warnings "Extra"
+   buildoptions { "-Wno-missing-field-initializers" }
    targetdir ("%{wks.location}/bin/"     .. outputdir .. "/%{prj.name}")
    objdir    ("%{wks.location}/bin-int/" .. outputdir .. "/%{prj.name}")
 
