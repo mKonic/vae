@@ -357,3 +357,144 @@ TEST(vector, a_real_icon_comes_out_looking_like_one) {
     CHECK(covered > 0.03f);
     CHECK(covered < 0.40f);
 }
+
+// --- gradients ----------------------------------------------------------------------------------
+//
+// Skipped until now, and honestly so: a wrong picture is worse than a missing one. What made them
+// worth reading is that a colour font's glyphs are SVG documents, and almost every one of them is
+// mostly gradient.
+
+TEST(vector, a_linear_gradient_is_read_and_drawn_across_the_shape) {
+    Picture picture;
+    std::string error;
+    CHECK_MESSAGE(ParseSvg(R"SVG(<svg viewBox="0 0 20 20">
+      <defs>
+        <linearGradient id="sky" x1="0" y1="0" x2="1" y2="0">
+          <stop offset="0" stop-color="#ff0000"/>
+          <stop offset="1" stop-color="#0000ff"/>
+        </linearGradient>
+      </defs>
+      <rect x="0" y="0" width="20" height="20" fill="url(#sky)"/>
+    </svg>)SVG", picture, &error), error);
+
+    CHECK_EQ(picture.gradients.size(), std::size_t(1));
+    CHECK_EQ(picture.shapes.size(), std::size_t(1));
+    CHECK_EQ(picture.shapes[0].fillGradient, 0);
+    CHECK_EQ(picture.gradients[0].stops.size(), std::size_t(2));
+    CHECK(!picture.gradients[0].userSpace);       // objectBoundingBox is the default
+
+    const Bitmap bitmap = Render(picture, 40, 40);
+    CHECK_EQ(bitmap.width, 40u);
+    const auto at = [&](u32 x, u32 y, int channel) {
+        return bitmap.pixels[(static_cast<std::size_t>(y) * bitmap.width + x) * 4 + channel];
+    };
+    // Red on the left, blue on the right, and a real mix in the middle — which is the difference
+    // between a gradient and a shape that took the first stop's colour.
+    CHECK(at(2, 20, 0) > 200);
+    CHECK(at(2, 20, 2) < 60);
+    CHECK(at(37, 20, 2) > 200);
+    CHECK(at(37, 20, 0) < 60);
+    CHECK(at(20, 20, 0) > 60);
+    CHECK(at(20, 20, 0) < 200);
+}
+
+TEST(vector, a_radial_gradient_is_a_circle_around_its_centre) {
+    Picture picture;
+    std::string error;
+    CHECK_MESSAGE(ParseSvg(R"SVG(<svg viewBox="0 0 20 20">
+      <radialGradient id="ball" cx="0.5" cy="0.5" r="0.5">
+        <stop offset="0" stop-color="white"/>
+        <stop offset="1" stop-color="black"/>
+      </radialGradient>
+      <rect x="0" y="0" width="20" height="20" fill="url(#ball)"/>
+    </svg>)SVG", picture, &error), error);
+    CHECK_EQ(picture.gradients.size(), std::size_t(1));
+    CHECK(picture.gradients[0].kind == Gradient::Kind::Radial);
+
+    const Bitmap bitmap = Render(picture, 40, 40);
+    const auto red = [&](u32 x, u32 y) {
+        return bitmap.pixels[(static_cast<std::size_t>(y) * bitmap.width + x) * 4];
+    };
+    // Bright in the middle and dark at every edge — a linear gradient read as a radial one would
+    // be bright down one whole side.
+    CHECK(red(20, 20) > 200);
+    CHECK(red(1, 20) < 80);
+    CHECK(red(38, 20) < 80);
+    CHECK(red(20, 1) < 80);
+    CHECK(red(20, 38) < 80);
+}
+
+TEST(vector, a_gradient_may_be_defined_after_the_shape_that_uses_it) {
+    // Valid SVG, and the reason the names are resolved once the whole file has been read rather
+    // than at the moment the shape is built.
+    Picture picture;
+    CHECK(ParseSvg(R"SVG(<svg viewBox="0 0 10 10">
+      <rect width="10" height="10" fill="url(#later)"/>
+      <defs><linearGradient id="later"><stop offset="0" stop-color="red"/>
+                                        <stop offset="1" stop-color="lime"/></linearGradient></defs>
+    </svg>)SVG", picture));
+    CHECK_EQ(picture.shapes.size(), std::size_t(1));
+    CHECK_EQ(picture.shapes[0].fillGradient, 0);
+}
+
+TEST(vector, a_gradient_inherits_the_stops_of_the_one_it_references) {
+    Picture picture;
+    CHECK(ParseSvg(R"SVG(<svg viewBox="0 0 10 10">
+      <defs>
+        <linearGradient id="base"><stop offset="0" stop-color="red"/>
+                                  <stop offset="1" stop-color="blue"/></linearGradient>
+        <linearGradient id="tilted" xlink:href="#base" x1="0" y1="0" x2="0" y2="1"/>
+      </defs>
+      <rect width="10" height="10" fill="url(#tilted)"/>
+    </svg>)SVG", picture));
+    CHECK_EQ(picture.shapes.size(), std::size_t(1));
+    CHECK(picture.shapes[0].fillGradient >= 0);
+    if (picture.shapes[0].fillGradient < 0) return;
+    const Gradient& used = picture.gradients[static_cast<std::size_t>(picture.shapes[0].fillGradient)];
+    CHECK_EQ(used.stops.size(), std::size_t(2));
+    CHECK_NEAR(used.to.y, 1.0f);
+}
+
+TEST(vector, a_url_that_names_something_unreadable_still_takes_the_tint) {
+    // A pattern, a filter, a paint server this does not read. The shape has to end up somewhere,
+    // and "whatever colour the theme says" is the same answer it got before gradients existed.
+    Picture picture;
+    CHECK(ParseSvg(R"SVG(<svg viewBox="0 0 10 10">
+      <rect width="10" height="10" fill="url(#nothing)"/>
+    </svg>)SVG", picture));
+    CHECK_EQ(picture.shapes.size(), std::size_t(1));
+    CHECK_EQ(picture.shapes[0].fillGradient, -1);
+    CHECK(picture.shapes[0].fillFollowsText);
+    CHECK(picture.FollowsText());
+}
+
+TEST(vector, only_the_named_subtree_is_kept_when_one_is_asked_for) {
+    // How a colour font asks for one glyph out of a document that draws several.
+    const std::string source = R"SVG(<svg viewBox="0 0 10 10">
+      <defs><linearGradient id="g"><stop offset="0" stop-color="red"/>
+                                   <stop offset="1" stop-color="blue"/></linearGradient></defs>
+      <g id="glyph1"><rect width="4" height="4" fill="url(#g)"/></g>
+      <g id="glyph2"><circle cx="8" cy="8" r="2" fill="green"/></g>
+    </svg>)SVG";
+
+    Picture both;
+    CHECK(ParseSvg(source, both));
+    CHECK_EQ(both.shapes.size(), std::size_t(2));
+
+    Picture one;
+    CHECK(ParseSvg(source, one, nullptr, "glyph2"));
+    CHECK_EQ(one.shapes.size(), std::size_t(1));
+    CHECK_NEAR(one.shapes[0].fill.g, 0.5019608f);
+
+    // And the definitions outside it are still read: the gradient lives in <defs>, which is in no
+    // glyph's subtree at all.
+    Picture gradient;
+    CHECK(ParseSvg(source, gradient, nullptr, "glyph1"));
+    CHECK_EQ(gradient.shapes.size(), std::size_t(1));
+    CHECK_EQ(gradient.shapes[0].fillGradient, 0);
+
+    // An id that is not there means the document is one glyph and did not say so.
+    Picture missing;
+    CHECK(ParseSvg(source, missing, nullptr, "glyph9"));
+    CHECK_EQ(missing.shapes.size(), std::size_t(2));
+}

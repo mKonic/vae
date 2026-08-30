@@ -2,6 +2,9 @@
 #include "vae/text/Font.h"
 
 #include "vae/base/FileSystem.h"
+#include "vae/text/ColrGraph.h"
+#include "vae/vector/Path.h"
+#include "vae/vector/Svg.h"
 
 #include <stb_truetype.h>
 #include <stb_image.h>
@@ -84,6 +87,46 @@ namespace vae::text {
             const auto it = std::lower_bound(bases.begin(), bases.end(), glyph,
                                              [](const Base& b, u32 g) { return b.glyph < g; });
             return it != bases.end() && it->glyph == glyph ? &*it : nullptr;
+        }
+    };
+
+    // One glyph's drawing, out of the document that holds it.
+    struct SvgPicture {
+        vector::Picture picture;
+        bool drawn = false;         // it parsed, and there is something in it
+        // Every paint in it is `currentColor`. Such a glyph is not a colour glyph at all: it is an
+        // outline asking to be the colour of the text around it, and the atlas — keyed by face,
+        // glyph and size — has nowhere to put that. Same case as a COLR glyph whose every layer is
+        // the foreground palette index, and it takes the same exit.
+        bool followsText = false;
+    };
+
+    // OpenType-SVG: the colour glyph is an SVG document, and one document can draw many glyphs.
+    //
+    // The other three formats are data structures a font reader parses. This one is a *file* in
+    // another language — a whole SVG document, gzipped as often as not, in which the drawing for
+    // glyph 42 is whichever element carries `id="glyph42"`. That is why this is the format that
+    // waited for `vae::vector` to be able to read an SVG and fill a path through a transform:
+    // there is no shortcut where the font code draws it itself.
+    struct SvgDocuments {
+        struct Record { u32 first = 0, last = 0, offset = 0, length = 0; };
+
+        std::vector<Record> records;    // sorted by `first`, and non-overlapping, as the spec says
+        u32 upem = 1000;                // from `head`, because Font::Scale needs outlines and an
+                                        // SVG face is allowed to have none
+
+        // Decompressed once per document and parsed once per glyph. A document covering a whole
+        // emoji set is megabytes of XML; doing either per frame is not an option, and the parse is
+        // kept even when it found nothing so a glyph that draws nothing is not retried forever.
+        mutable std::unordered_map<u32, std::string> documents;   // keyed by record index
+        mutable std::unordered_map<u32, SvgPicture>  glyphs;      // keyed by glyph
+
+        const Record* Find(u32 glyph) const {
+            const auto it = std::upper_bound(records.begin(), records.end(), glyph,
+                                             [](u32 g, const Record& r) { return g < r.first; });
+            if (it == records.begin()) return nullptr;
+            const Record& record = *(it - 1);
+            return glyph >= record.first && glyph <= record.last ? &record : nullptr;
         }
     };
 
@@ -270,25 +313,27 @@ namespace vae::text {
 
         auto table = CreateScope<ColrLayers>();
 
-        // Version 0's four fields sit at the front of every version, so a v1 table is read for the
-        // v0 glyphs it still lists. A v1-only face reports zero of them and gets no colour here,
-        // which is the honest answer: its glyphs are a paint graph, not a layer list.
+        // Version 0's four fields sit at the front of every version, so both halves of a v1 table
+        // are read: the layer list for the glyphs it still lists that way, and the paint graph for
+        // the rest. A font may carry either or both, and a glyph in both is the v1 one.
         const u32 baseCount   = Be16(m_Data, colr + 2);
         const u32 baseOffset  = Be32(m_Data, colr + 4);
         const u32 layerOffset = Be32(m_Data, colr + 8);
         const u32 layerCount  = Be16(m_Data, colr + 12);
-        if (baseCount == 0 || layerCount == 0) return false;
+
+        m_ColrV1 = ColrGraph::Parse(m_Data, colr, colrLength);
+        if ((baseCount == 0 || layerCount == 0) && !m_ColrV1) return false;
 
         table->bases.reserve(baseCount);
-        for (u32 i = 0; i < baseCount; ++i) {
+        for (u32 i = 0; i < baseCount && layerCount; ++i) {
             const std::size_t at = colr + baseOffset + static_cast<std::size_t>(i) * 6;
-            if (at + 6 > m_Data.size()) return false;
+            if (at + 6 > m_Data.size()) { table->bases.clear(); break; }
             table->bases.push_back({ Be16(m_Data, at), Be16(m_Data, at + 2), Be16(m_Data, at + 4) });
         }
         table->layers.reserve(layerCount);
         for (u32 i = 0; i < layerCount; ++i) {
             const std::size_t at = colr + layerOffset + static_cast<std::size_t>(i) * 4;
-            if (at + 4 > m_Data.size()) return false;
+            if (at + 4 > m_Data.size()) { table->layers.clear(); break; }
             table->layers.push_back({ Be16(m_Data, at), Be16(m_Data, at + 2) });
         }
         // The spec requires the base records to be sorted so a reader can bisect them. Sorting
@@ -300,19 +345,92 @@ namespace vae::text {
         const u32 entries  = Be16(m_Data, cpal + 2);
         const u32 palettes = Be16(m_Data, cpal + 4);
         const u32 records  = Be32(m_Data, cpal + 8);
-        if (entries == 0 || palettes == 0) return false;
+        if (entries == 0 || palettes == 0) { m_ColrV1.reset(); return false; }
         const u32 first = Be16(m_Data, cpal + 12);       // colorRecordIndices[0]
 
         table->palette.reserve(entries);
         for (u32 i = 0; i < entries; ++i) {
             const std::size_t at = cpal + records + (static_cast<std::size_t>(first) + i) * 4;
-            if (at + 4 > m_Data.size()) return false;
+            if (at + 4 > m_Data.size()) { m_ColrV1.reset(); return false; }
             // BGRA in the file, which is the one place in a font where the order is not the
             // obvious one, and a silent red/blue swap if it is missed.
             table->palette.push_back({ m_Data[at + 2], m_Data[at + 1], m_Data[at], m_Data[at + 3] });
         }
 
         m_Colr = std::move(table);
+        // Either half is enough to call this a colour face; neither is not.
+        return !m_Colr->bases.empty() || m_ColrV1 != nullptr;
+    }
+
+    // gzip: a header, a raw deflate stream, then a checksum. stb decodes the deflate; the header
+    // has to be stepped over by hand, optional fields and all, because it is not part of it.
+    //
+    // The table does not say whether a document is compressed — the spec allows either — so the
+    // magic number decides, and a document that is not gzip is XML already.
+    static bool Gunzip(const u8* data, u32 length, std::string& out) {
+        if (length < 18 || data[0] != 0x1F || data[1] != 0x8B || data[2] != 0x08) return false;
+        const u8 flags = data[3];
+        std::size_t at = 10;
+        if (flags & 0x04) {                                   // FEXTRA: a length and that many bytes
+            if (at + 2 > length) return false;
+            at += 2 + (static_cast<std::size_t>(data[at]) | (static_cast<std::size_t>(data[at + 1]) << 8));
+        }
+        const auto skipString = [&] {                         // FNAME, FCOMMENT: NUL-terminated
+            while (at < length && data[at] != 0) ++at;
+            ++at;
+        };
+        if (flags & 0x08) skipString();
+        if (flags & 0x10) skipString();
+        if (flags & 0x02) at += 2;                            // FHCRC
+        if (at + 8 >= length) return false;                   // the trailer is CRC32 then ISIZE
+
+        int size = 0;
+        char* decoded = stbi_zlib_decode_noheader_malloc(
+            reinterpret_cast<const char*>(data + at), static_cast<int>(length - at - 8), &size);
+        if (!decoded) return false;
+        if (size > 0) out.assign(decoded, decoded + size);
+        stbi_image_free(decoded);
+        return size > 0;
+    }
+
+    bool Font::InitSvg() {
+        const auto [svg, length] = TableRange("SVG ");
+        if (length < 10) return false;
+        if (Be16(m_Data, svg) != 0) return false;             // version 0 is the only one there is
+
+        const u32 list = Be32(m_Data, svg + 2);
+        if (list == 0 || static_cast<std::size_t>(svg) + list + 2 > m_Data.size()) return false;
+        const std::size_t base = static_cast<std::size_t>(svg) + list;
+        const u32 count = Be16(m_Data, base);
+        if (count == 0) return false;
+
+        auto table = CreateScope<SvgDocuments>();
+        // Not Font::Scale: that reads stb's parse of `head`, and an SVG face need not have the
+        // outlines stb requires to have parsed anything at all.
+        const auto [head, headLength] = TableRange("head");
+        if (headLength >= 20) table->upem = Be16(m_Data, head + 18);
+        if (table->upem == 0) table->upem = 1000;
+
+        table->records.reserve(count);
+        for (u32 i = 0; i < count; ++i) {
+            const std::size_t at = base + 2 + static_cast<std::size_t>(i) * 12;
+            if (at + 12 > m_Data.size()) break;
+            SvgDocuments::Record record;
+            record.first  = Be16(m_Data, at);
+            record.last   = Be16(m_Data, at + 2);
+            // Both are from the start of the document *list*, not of the table — the one offset in
+            // this format that is not relative to the thing you would expect.
+            record.offset = static_cast<u32>(base) + Be32(m_Data, at + 4);
+            record.length = Be32(m_Data, at + 8);
+            if (record.last < record.first || record.length == 0) continue;
+            if (record.offset > m_Data.size() || record.length > m_Data.size() - record.offset)
+                continue;
+            table->records.push_back(record);
+        }
+        if (table->records.empty()) return false;
+
+        std::ranges::sort(table->records, {}, &SvgDocuments::Record::first);
+        m_Svg = std::move(table);
         return true;
     }
 
@@ -333,17 +451,22 @@ namespace vae::text {
         // stb refuses those and why the whole face has to answer through HarfBuzz instead.
         if (InitCbdt())                    m_ColourFormat = ColourFormat::Cbdt;
         else if (InitSbix())               m_ColourFormat = ColourFormat::Sbix;
+        // SVG before COLR, because a face carrying both is carrying COLR as the *fallback* — that
+        // is what Adobe's colour fonts ship, a version-0 layer list next to the SVG the artwork
+        // was actually drawn as, for readers that cannot draw the document. This one can.
+        else if (InitSvg())                m_ColourFormat = ColourFormat::Svg;
         // COLR builds a glyph out of other glyphs in the same font, so without outlines there is
         // nothing for a layer to be. It is the one format that cannot stand on its own.
         else if (m_Outlines && InitColr()) m_ColourFormat = ColourFormat::Colr;
 
         if (!m_Outlines && m_ColourFormat == ColourFormat::None) {
             if (HasTable("SVG "))
-                VAE_CORE_INFO("'{}' stores its colour glyphs as OpenType-SVG, which this build "
-                              "does not read — skipping it", m_Name);
+                VAE_CORE_INFO("'{}' has an SVG table with no readable document list — skipping it",
+                              m_Name);
             else if (HasTable("COLR"))
-                VAE_CORE_INFO("'{}' is COLR with no version-0 layer list (a v1 paint graph), which "
-                              "this build does not read — skipping it", m_Name);
+                // A COLR face with no outlines has nothing for a paint to fill: both halves of the
+                // table draw glyphs from the same font, and there are none.
+                VAE_CORE_INFO("'{}' is COLR with no outlines to fill — skipping it", m_Name);
             else
                 VAE_CORE_ERROR("'{}' is not a font stb_truetype can read", m_Name);
             return false;
@@ -553,7 +676,11 @@ namespace vae::text {
             // it is one shape described awkwardly, and the outline path draws it in the colour the
             // text actually asked for. See RasterizeColr.
             case ColourFormat::Colr: {
-                const auto* base = m_Colr->Find(glyph);
+                // Version 1 first: a glyph listed in both halves is the v1 one, which is the spec's
+                // own rule and the reason a font ships both — the v0 list is the fallback drawing
+                // for readers that cannot follow a paint graph.
+                if (m_ColrV1 && m_ColrV1->Has(glyph)) return !m_ColrV1->ForegroundOnly(glyph);
+                const auto* base = m_Colr ? m_Colr->Find(glyph) : nullptr;
                 if (!base) return false;
                 for (u32 i = 0; i < base->count; ++i) {
                     const std::size_t at = base->first + i;
@@ -562,6 +689,12 @@ namespace vae::text {
                         return true;
                 }
                 return false;
+            }
+            // The same question, and the same answer, for a glyph whose whole drawing is
+            // `currentColor`: it is an outline, and the outline path gives it the text's colour.
+            case ColourFormat::Svg: {
+                const SvgPicture* entry = SvgGlyphPicture(glyph);
+                return entry != nullptr && !entry->followsText;
             }
             case ColourFormat::None: return false;
         }
@@ -662,9 +795,65 @@ namespace vae::text {
         return any;
     }
 
+    // stb's outline of a glyph, as a path in font units and y-up — which is how the paint graph
+    // wants it, because every coordinate in the table is in that same space.
+    bool Font::ColrOutline(u32 glyph, vector::Path& path) const {
+        if (!m_Outlines) return false;
+        stbtt_vertex* vertices = nullptr;
+        const int count = stbtt_GetGlyphShape(&m_Impl->info, static_cast<int>(glyph), &vertices);
+        if (count <= 0 || !vertices) {
+            if (vertices) stbtt_FreeShape(&m_Impl->info, vertices);
+            return false;
+        }
+        bool open = false;
+        for (int i = 0; i < count; ++i) {
+            const stbtt_vertex& v = vertices[i];
+            const Vec2 to{ static_cast<f32>(v.x), static_cast<f32>(v.y) };
+            switch (v.type) {
+                case STBTT_vmove:
+                    if (open) path.Close();
+                    path.MoveTo(to);
+                    open = true;
+                    break;
+                case STBTT_vline:
+                    path.LineTo(to);
+                    break;
+                case STBTT_vcurve:
+                    path.QuadTo({ static_cast<f32>(v.cx), static_cast<f32>(v.cy) }, to);
+                    break;
+                case STBTT_vcubic:
+                    path.CubicTo({ static_cast<f32>(v.cx), static_cast<f32>(v.cy) },
+                                 { static_cast<f32>(v.cx1), static_cast<f32>(v.cy1) }, to);
+                    break;
+                default: break;
+            }
+        }
+        if (open) path.Close();
+        stbtt_FreeShape(&m_Impl->info, vertices);
+        return !path.Empty();
+    }
+
     GlyphMetrics Font::ColrGlyph(u32 glyph, f32 pixelSize) const {
         GlyphMetrics m;
-        const auto* base = m_Colr->Find(glyph);
+
+        // The version-1 graph, when this glyph is in it. The advance still comes from hmtx: how a
+        // glyph is drawn says nothing about how much room it takes.
+        if (m_ColrV1 && m_ColrV1->Has(glyph)) {
+            Rect box;
+            const auto outline = [this](u32 id, vector::Path& path) {
+                return ColrOutline(id, path);
+            };
+            if (!m_ColrV1->Bounds(glyph, Scale(pixelSize), outline, box)) return m;
+            int advance = 0, bearing = 0;
+            stbtt_GetGlyphHMetrics(&m_Impl->info, static_cast<int>(glyph), &advance, &bearing);
+            m.advance = static_cast<f32>(advance) * Scale(pixelSize);
+            m.bearing = box.pos;
+            m.size    = box.size;
+            m.blank   = false;
+            return m;
+        }
+
+        const auto* base = m_Colr ? m_Colr->Find(glyph) : nullptr;
         if (!base) return m;
 
         const f32 scale = Scale(pixelSize);
@@ -685,7 +874,26 @@ namespace vae::text {
 
     GlyphBitmap Font::RasterizeColr(u32 glyph, f32 pixelSize) const {
         GlyphBitmap bitmap;
-        const auto* base = m_Colr->Find(glyph);
+
+        if (m_ColrV1 && m_ColrV1->Has(glyph)) {
+            const auto outline = [this](u32 id, vector::Path& path) {
+                return ColrOutline(id, path);
+            };
+            std::vector<ColrGraph::Rgba> palette;
+            palette.reserve(m_Colr ? m_Colr->palette.size() : 0);
+            if (m_Colr)
+                for (const ColrLayers::Rgba& entry : m_Colr->palette)
+                    palette.push_back({ entry.r, entry.g, entry.b, entry.a });
+            ColrGraph::Picture picture = m_ColrV1->Render(glyph, Scale(pixelSize), outline, palette);
+            if (picture.Empty()) return bitmap;
+            bitmap.channels = 4;
+            bitmap.width  = picture.width;
+            bitmap.height = picture.height;
+            bitmap.pixels = std::move(picture.pixels);
+            return bitmap;
+        }
+
+        const auto* base = m_Colr ? m_Colr->Find(glyph) : nullptr;
         if (!base) return bitmap;
 
         const f32 scale = Scale(pixelSize);
@@ -760,6 +968,105 @@ namespace vae::text {
         return bitmap;
     }
 
+    // --- OpenType-SVG -------------------------------------------------------------------------
+    //
+    // The document's coordinate system is the font's design grid with the y axis pointing *down*
+    // and the origin at the pen — which is what the spec says, and it is why the root element's
+    // `width`, `height` and `viewBox` are deliberately ignored here. There is no viewport for a
+    // glyph to be fitted into: a glyph is drawn at the size the text is, in font units, and a
+    // reader that honoured a viewBox would rescale artwork the font already placed correctly.
+
+    const SvgPicture* Font::SvgGlyphPicture(u32 glyph) const {
+        if (!m_Svg) return nullptr;
+        if (const auto it = m_Svg->glyphs.find(glyph); it != m_Svg->glyphs.end())
+            return it->second.drawn ? &it->second : nullptr;
+
+        SvgPicture& entry = m_Svg->glyphs[glyph];      // remembered whether or not it draws
+        const auto* record = m_Svg->Find(glyph);
+        if (!record) return nullptr;
+
+        std::string& text = m_Svg->documents[static_cast<u32>(record - m_Svg->records.data())];
+        if (text.empty()) {
+            const u8* bytes = m_Data.data() + record->offset;
+            if (!Gunzip(bytes, record->length, text))
+                text.assign(reinterpret_cast<const char*>(bytes), record->length);
+            if (text.empty()) return nullptr;
+        }
+
+        // The element for *this* glyph out of a document that may draw a hundred of them. A
+        // document with no such id is a single-glyph document, and ParseSvg keeps all of it.
+        char id[24];
+        std::snprintf(id, sizeof(id), "glyph%u", glyph);
+        std::string error;
+        if (!vector::ParseSvg(text, entry.picture, &error, id) || entry.picture.Empty()) {
+            if (!error.empty())
+                VAE_CORE_WARN("'{}' glyph {}: {}", m_Name, glyph, error);
+            entry.picture = {};
+            return nullptr;
+        }
+
+        entry.drawn = true;
+        entry.followsText = true;
+        for (const vector::Shape& shape : entry.picture.shapes) {
+            if (shape.hasFill && !shape.fillFollowsText) entry.followsText = false;
+            if (shape.hasStroke && !shape.strokeFollowsText) entry.followsText = false;
+        }
+        return &entry;
+    }
+
+    f32 Font::SvgScale(f32 pixelSize) const {
+        const f32 upem = m_Svg ? static_cast<f32>(m_Svg->upem) : 1000.0f;
+        return upem > 0.0f ? pixelSize / upem : 0.0f;
+    }
+
+    GlyphMetrics Font::SvgGlyph(u32 glyph, f32 pixelSize) const {
+        GlyphMetrics m;
+        const SvgPicture* entry = SvgGlyphPicture(glyph);
+        if (!entry) return m;
+
+        const f32 scale = SvgScale(pixelSize);
+        const Rect box = vector::PictureBounds(entry->picture);
+        if (box.size.x <= 0.0f || box.size.y <= 0.0f) return m;
+
+        // Out to whole pixels, so the bitmap below holds the whole drawing rather than clipping
+        // whatever fell either side of a rounded edge.
+        const Vec2 near{ std::floor(box.pos.x * scale), std::floor(box.pos.y * scale) };
+        const Vec2 far { std::ceil((box.pos.x + box.size.x) * scale),
+                         std::ceil((box.pos.y + box.size.y) * scale) };
+        if (far.x <= near.x || far.y <= near.y) return m;
+
+        m.bearing = near;                              // already y-down from the pen
+        m.size    = { far.x - near.x, far.y - near.y };
+        // From hmtx through the shaper, for the same reason a picture glyph's is: it is the advance
+        // shaping already used to place this glyph, and the drawing has no say in it.
+        if (auto* font = static_cast<hb_font_t*>(ShaperFont(pixelSize)))
+            m.advance = static_cast<f32>(hb_font_get_glyph_h_advance(font, glyph)) / 64.0f;
+        m.blank = false;
+        return m;
+    }
+
+    GlyphBitmap Font::RasterizeSvg(u32 glyph, f32 pixelSize) const {
+        GlyphBitmap bitmap;
+        const SvgPicture* entry = SvgGlyphPicture(glyph);
+        if (!entry) return bitmap;
+
+        const GlyphMetrics m = SvgGlyph(glyph, pixelSize);
+        if (m.blank || m.size.x < 1.0f || m.size.y < 1.0f) return bitmap;
+
+        const f32 scale = SvgScale(pixelSize);
+        vector::Bitmap drawn = vector::RenderTransformed(
+            entry->picture, static_cast<u32>(m.size.x), static_cast<u32>(m.size.y),
+            vector::Affine::Scaling({ scale, scale })
+                .Then(vector::Affine::Translate({ -m.bearing.x, -m.bearing.y })));
+        if (drawn.Empty()) return bitmap;
+
+        bitmap.channels = 4;
+        bitmap.width  = drawn.width;
+        bitmap.height = drawn.height;
+        bitmap.pixels = std::move(drawn.pixels);
+        return bitmap;
+    }
+
     FontMetrics Font::Metrics(f32 pixelSize) const {
         // No outlines means no `hhea` that stb can reach, because stb never opened the file. The
         // same numbers come out of HarfBuzz, which did.
@@ -811,6 +1118,7 @@ namespace vae::text {
         // some as colour, so asking the face would get every letter in it wrong.
         if (HasColourGlyph(glyph)) {
             if (m_ColourFormat == ColourFormat::Colr) return ColrGlyph(glyph, pixelSize);
+            if (m_ColourFormat == ColourFormat::Svg)  return SvgGlyph(glyph, pixelSize);
             return PictureGlyph(glyph, pixelSize);
         }
         if (!m_Outlines) return {};
@@ -847,6 +1155,7 @@ namespace vae::text {
     GlyphBitmap Font::Rasterize(u32 glyph, f32 pixelSize) const {
         if (HasColourGlyph(glyph)) {
             if (m_ColourFormat == ColourFormat::Colr) return RasterizeColr(glyph, pixelSize);
+            if (m_ColourFormat == ColourFormat::Svg)  return RasterizeSvg(glyph, pixelSize);
             return RasterizePicture(glyph, pixelSize);
         }
         if (!m_Outlines) return {};

@@ -8,6 +8,8 @@
 #include <unordered_map>
 #include <vector>
 
+namespace vae::vector { class Path; }
+
 namespace vae::text {
 
     // Metrics scaled to a pixel size, baseline-relative and y-down: ascent is negative (above the
@@ -33,14 +35,19 @@ namespace vae::text {
         bool Colour() const { return channels == 4; }
     };
 
-    // How a face stores colour glyphs, when it has any. Four formats exist and three are read
-    // here. They are not variations on one idea: two are pictures and one is drawing instructions.
+    // How a face stores colour glyphs, when it has any. Four formats exist and all four are read
+    // here. They are not variations on one idea: two are pictures, one is drawing instructions,
+    // and one is a whole SVG document per glyph.
     enum class ColourFormat {
         None,
         Cbdt,   // CBLC indexes CBDT: PNGs at one big ppem. Noto Color Emoji, and so every Linux.
         Sbix,   // Apple's: PNGs again, indexed per strike per glyph, and the face keeps its outlines.
         Colr,   // Not pictures at all — a base glyph is a list of other glyphs, each in a palette
                 // colour (COLR/CPAL). Composited here rather than drawn as layers; see Font.cpp.
+                // Covers both halves of the table: version 0's layer list, and version 1's paint
+                // graph, which is a different thing behind the same tag — see ColrGraph.h.
+        Svg,    // A gzipped SVG *document* per range of glyphs, drawn by vae::vector. The only
+                // format whose contents are a file in another language rather than a table.
     };
 
     // A single face at arbitrary sizes. Rasterization is CPU-only with no GPU dependency, which is
@@ -100,6 +107,10 @@ namespace vae::text {
         bool InitCbdt();
         bool InitSbix();
         bool InitColr();
+        bool InitSvg();
+        // The glyph outlines the v1 paint graph fills, handed to it as paths because the graph has
+        // no business knowing which rasterizer produced them.
+        bool ColrOutline(u32 glyph, vector::Path& path) const;
         bool HasTable(const char* tag) const;
         std::pair<u32, u32> TableRange(const char* tag) const;
         f32  Scale(f32 pixelSize) const;
@@ -109,6 +120,12 @@ namespace vae::text {
         GlyphBitmap  RasterizePicture(u32 glyph, f32 pixelSize) const;
         GlyphMetrics ColrGlyph(u32 glyph, f32 pixelSize) const;
         GlyphBitmap  RasterizeColr(u32 glyph, f32 pixelSize) const;
+        // The parsed drawing for one SVG glyph, decompressed and read on first use and kept.
+        // Null when this glyph has no document, or has one that draws nothing.
+        const struct SvgPicture* SvgGlyphPicture(u32 glyph) const;
+        f32          SvgScale(f32 pixelSize) const;
+        GlyphMetrics SvgGlyph(u32 glyph, f32 pixelSize) const;
+        GlyphBitmap  RasterizeSvg(u32 glyph, f32 pixelSize) const;
 
         std::vector<u8> m_Data;
         std::string     m_Name;
@@ -124,6 +141,8 @@ namespace vae::text {
         Scope<struct ColourStrike>                    m_Strike;   // CBDT
         Scope<struct SbixStrike>                      m_Sbix;
         Scope<struct ColrLayers>                      m_Colr;
+        Scope<class ColrGraph>                        m_ColrV1;
+        Scope<struct SvgDocuments>                    m_Svg;
         ColourFormat                                  m_ColourFormat = ColourFormat::None;
         bool                                          m_Outlines = false;
         // Where this font's table directory is. Non-zero only in a collection ('ttcf'), which is
