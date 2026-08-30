@@ -24,6 +24,9 @@ namespace vae {
     // Takes the editor state as well as the session: completion that knows the names on
     // the screen being edited is the half a generic code editor cannot have.
     void DrawScriptPanel(ScriptSession& session, EditorState& state);
+    // Logic, drawn. The screen or component on the canvas, its variables, and the blueprint that
+    // drives it — Unreal's Blueprint model, over the same script API a written script uses.
+    void DrawBlueprintPanel(ScriptSession& session, EditorState& state);
     // The selection as markup: the same XML the file holds, scoped to one node. Explicit Apply
     // rather than the Script panel's continuous sync, because this is a second writer for a model
     // the canvas and the Inspector are already writing.

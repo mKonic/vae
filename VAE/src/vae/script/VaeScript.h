@@ -124,6 +124,16 @@ namespace vae {
             detail::g_Api->set_color(m_Instance, m_Name, prop, value);
         }
 
+        // A knob the component this node is an instance of declares. How a screen talks to what
+        // is on it: the component says what may be set, and everything inside it follows through
+        // bindings, so a screen never has to know a component's own node names.
+        std::string Property(const char* name, const char* fallback = "") const {
+            return detail::g_Api->get_property(m_Instance, m_Name, name, fallback);
+        }
+        void SetProperty(const char* name, const std::string& value) {
+            detail::g_Api->set_property(m_Instance, m_Name, name, value.c_str());
+        }
+
         void SetVisible(bool visible) { detail::g_Api->set_visible(m_Instance, m_Name, visible ? 1 : 0); }
         void SetEnabled(bool enabled) { detail::g_Api->set_enabled(m_Instance, m_Name, enabled ? 1 : 0); }
 

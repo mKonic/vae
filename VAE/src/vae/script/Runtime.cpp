@@ -1,6 +1,8 @@
 #include "vaepch.h"
 #include "vae/script/Runtime.h"
 
+#include "vae/doc/ValueText.h"
+
 #include "vae/base/Log.h"
 
 #include <algorithm>
@@ -550,6 +552,22 @@ namespace vae::script {
     // A dotted name — "Sidebar.Header.Close" — scopes each step to what the step before it found.
     // A bare name keeps meaning "the nearest one"; a dotted one is how you say which of two
     // identically-named things you meant, which a bare name cannot express at all.
+    Uuid Runtime::InstanceUnder(const Record& record, const char* node) const {
+        // An empty name means the script's own instance, which is what "set a knob on myself"
+        // is — a component reading back what it was given.
+        if (!node || node[0] == '\0') return record.isScreen ? Uuid::Invalid() : record.instance;
+        const u32 view = ViewFor(record, node);
+        if (view == ui::ViewTree::kInvalid || !m_Host) return Uuid::Invalid();
+        u32 root = ui::ViewTree::kInvalid;
+        const ui::ViewTree* tree = TreeOf(record, &root);
+        if (!tree) return Uuid::Invalid();
+        // The authored node behind the view: for an instance's own root that is the instance
+        // itself, which is the node whose property bag holds what was picked.
+        const Uuid authored = tree->At(view).authoredId;
+        const doc::Node* node_ = m_Document ? m_Document->Find(authored) : nullptr;
+        return node_ && node_->IsInstance() ? authored : Uuid::Invalid();
+    }
+
     u32 Runtime::ViewFor(const Record& record, const char* node) const {
         u32 root = ui::ViewTree::kInvalid;
         const ui::ViewTree* found = TreeOf(record, &root);
@@ -679,6 +697,37 @@ namespace vae::script {
             const u32 view = record.runtime->ViewFor(record, node);
             if (view == ui::ViewTree::kInvalid) return;
             record.runtime->m_Host->Tree().SetViewProp(view, doc::Prop::Enabled, enabled != 0);
+        };
+
+        // --- a component's knobs, on one instance of it ------------------------------------------
+        // The write lands on the INSTANCE, not on the component, which is the whole point: two
+        // cards on a screen are two things, and setting a title on one must not retitle the other.
+        m_Api.get_property = [](VaeInstance handle, const char* node, const char* name,
+                                const char* fallback) -> const char* {
+            Record& record = Of(handle);
+            const Uuid instance = record.runtime->InstanceUnder(record, node);
+            if (!instance.Valid() || !name) return fallback ? fallback : "";
+            const doc::Value value = record.runtime->m_Document->InstanceProperty(instance, name);
+            if (!doc::IsSet(value)) return fallback ? fallback : "";
+            return record.Keep(doc::text::ValueAsText(value));
+        };
+
+        m_Api.set_property = [](VaeInstance handle, const char* node, const char* name,
+                                const char* value) {
+            Record& record = Of(handle);
+            const Uuid instance = record.runtime->InstanceUnder(record, node);
+            if (!instance.Valid() || !name) return;
+            doc::Document& document = *record.runtime->m_Document;
+            const doc::Node* authored = document.Find(instance);
+            if (!authored) return;
+            // Converted to whatever the component declared, so a number knob stays a number even
+            // though it crossed the boundary as text.
+            doc::ValueType type = doc::ValueType::Text;
+            if (const doc::ComponentProperty* declared =
+                    document.FindProperty(authored->componentId, name))
+                type = declared->type;
+            document.SetInstanceProperty(instance, name,
+                                         doc::text::ValueFromText(value ? value : "", type));
         };
 
         // --- state ---------------------------------------------------------------------------

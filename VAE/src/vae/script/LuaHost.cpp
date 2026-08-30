@@ -145,6 +145,18 @@ namespace vae::script {
                                                       std::string prop, std::string value) {
             m_Api->set_text(handleOf(self), node.c_str(), prop.c_str(), value.c_str());
         });
+        // A knob the component declares, on one instance of it: how a screen talks to what is on
+        // it without reaching into a component's own nodes.
+        base.set_function("property", [this, handleOf](sol::table self, std::string node,
+                                                       std::string name,
+                                                       sol::optional<std::string> fallback) {
+            return std::string(m_Api->get_property(handleOf(self), node.c_str(), name.c_str(),
+                                                   fallback ? fallback->c_str() : ""));
+        });
+        base.set_function("set_property", [this, handleOf](sol::table self, std::string node,
+                                                           std::string name, std::string value) {
+            m_Api->set_property(handleOf(self), node.c_str(), name.c_str(), value.c_str());
+        });
         base.set_function("set_visible", [this, handleOf](sol::table self, std::string node, bool on) {
             m_Api->set_visible(handleOf(self), node.c_str(), on ? 1 : 0);
         });

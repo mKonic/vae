@@ -24,6 +24,27 @@ namespace vae::doc {
         return true;
     }
 
+    // ---------------------------------------------------------------- SetBlueprint
+
+    void SetBlueprintCommand::Apply(Document& document) {
+        if (!m_Captured) {
+            if (const Blueprint* existing = document.BlueprintFor(m_Node)) m_Old = *existing;
+            m_Captured = true;
+        }
+        document.SetBlueprint(m_Node, m_New);
+    }
+
+    void SetBlueprintCommand::Undo(Document& document) { document.SetBlueprint(m_Node, m_Old); }
+
+    bool SetBlueprintCommand::Coalesce(const Command& newer) {
+        const auto* other = dynamic_cast<const SetBlueprintCommand*>(&newer);
+        // Only a run of the same edit on the same blueprint: dragging a node is a hundred of these and
+        // wants to be one undo, but a drag followed by a delete is two things that happened.
+        if (!other || other->m_Node != m_Node || other->m_Name != m_Name) return false;
+        m_New = other->m_New;
+        return true;
+    }
+
     // ---------------------------------------------------------------- SetOverride
 
     void SetOverrideCommand::Apply(Document& document) {

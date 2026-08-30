@@ -103,6 +103,14 @@ namespace vae::script {
 
         const VaeScriptAPI& Api() const { return m_Api; }
 
+        // Which runtime an instance belongs to. A script in a .so cannot ask this and has no
+        // reason to; a host that lives INSIDE the engine does, because the four C entry points it
+        // hands over carry no context of their own and this is the context they need. One line
+        // here is what saves the blueprint host from a global, a fixed pool of trampolines, or both.
+        static Runtime* Owner(VaeInstance handle) {
+            return handle ? Of(handle).runtime : nullptr;
+        }
+
     private:
         struct Timer {
             std::string name;
@@ -154,6 +162,9 @@ namespace vae::script {
         ui::ViewTree* TreeOf(const Record& record, u32* rootView) const;
         u32 RootViewOf(const Record& record) const;
         u32 ViewFor(const Record& record, const char* node) const;
+        // The instance a node name resolves to, or Invalid when it names something that is not
+        // one. What a component property is set on.
+        Uuid InstanceUnder(const Record& record, const char* node) const;
         // What a widget's state is keyed on, for the view a name resolved to.
         ui::WidgetId WidgetOf(u32 view) const;
         static ui::WidgetId WidgetIn(const ui::ViewTree& tree, u32 view);

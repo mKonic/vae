@@ -35,7 +35,7 @@ namespace vae {
         // Which worked example. Both are ordinary projects written out to disk, not demos.
         // The last two carry no script: they are the catalog's exam, two of shadcn's own blocks
         // rebuilt out of library components to find out what the catalog is still missing.
-        enum class Example { Counter, Screens, Feed, Login, Dashboard };
+        enum class Example { Counter, CounterBlueprint, Screens, Feed, Login, Dashboard };
         void OpenExample(Example which = Example::Counter);
 
         void SaveProject(const std::filesystem::path& path);
@@ -100,7 +100,7 @@ namespace vae {
         void LoadRecents();
         // Bumped whenever the default layout gains a panel, so an existing layout is rebuilt
         // once instead of hiding the new one.
-        static constexpr int kLayoutVersion = 3;   // 3: the XML tab
+        static constexpr int kLayoutVersion = 5;   // 5: the Blueprint tab
         int  m_LayoutVersion = 0;
 
         void TickAutosave();

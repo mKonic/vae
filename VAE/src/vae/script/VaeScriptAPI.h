@@ -17,7 +17,7 @@ extern "C" {
 #endif
 
 /* Bumped whenever anything below changes shape. The host refuses a script that does not match. */
-#define VAE_SCRIPT_ABI_VERSION 5u
+#define VAE_SCRIPT_ABI_VERSION 6u
 
 /* The script's "self": one component instance. Opaque — the engine owns what is behind it. */
 typedef struct VaeInstanceOpaque* VaeInstance;
@@ -104,6 +104,18 @@ typedef struct VaeScriptAPI {
     void   (*cancel)   (VaeInstance, const char* name);
     double (*time)     (VaeInstance);
     void   (*log)      (VaeInstance, int level, const char* text);
+
+    /* --- a component's knobs, on one instance of it ---------------------------------------------
+     * How a screen talks to what is on it, and the only way it should: a component declares the
+     * properties it exposes, an instance is given values for them, and everything drawn inside it
+     * follows through bindings. Reaching past this into a component's own nodes would make every
+     * screen depend on the insides of every component it holds.
+     *
+     * Values cross as text and are converted to the property's declared type, which is the same
+     * thing a row cell already does — one spelling of "a value as text", learned once. */
+    const char* (*get_property)(VaeInstance, const char* node, const char* name,
+                                const char* fallback);
+    void        (*set_property)(VaeInstance, const char* node, const char* name, const char* value);
 
     /* --- identity, mostly for logs and for a script that drives several components */
     const char* (*component_name)(VaeInstance);

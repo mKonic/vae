@@ -47,3 +47,6 @@
 [submodule "VAE/vendor/harfbuzz"]
 	path = VAE/vendor/harfbuzz
 	url = https://github.com/harfbuzz/harfbuzz.git
+[submodule "VAE/vendor/imgui-node-editor"]
+	path = VAE/vendor/imgui-node-editor
+	url = https://github.com/mKonic/imgui-node-editor.git

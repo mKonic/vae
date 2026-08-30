@@ -108,7 +108,7 @@ namespace vae::doc {
     // and the disagreement is always the index being wrong.
     struct Project {
         std::string name = "Untitled";
-        std::string scriptLanguage = "lua";     // "lua" or "cpp", chosen once at creation
+        std::string scriptLanguage = "lua";     // "lua", "cpp" or "blueprint", chosen once
         std::filesystem::path root;
         std::vector<std::string> fontDirs;
         Vec2 targetResolution{ 1280.0f, 800.0f };

@@ -128,6 +128,7 @@ namespace vae {
         // code editor nobody can read what they are typing in.
         ImGui::DockBuilderDockWindow("Canvas###Canvas", centre);
         ImGui::DockBuilderDockWindow("Script###Script", centre);
+        ImGui::DockBuilderDockWindow("Blueprint###Blueprint", centre);
         ImGui::DockBuilderDockWindow("XML###Markup", centre);
         ImGui::DockBuilderDockWindow("Inspector###Inspector", right);
         ImGui::DockBuilderDockWindow("Assets###Assets", right);
@@ -268,6 +269,12 @@ namespace vae {
     }
 
     void StudioLayer::SaveProject(const std::filesystem::path& path) {
+        // The index records which language this project is written in, and the session is what
+        // knows. Written on every save rather than only at creation: a project that changed
+        // language and did not say so opens next time as the language it used to be.
+        m_State.ProjectFile().scriptLanguage =
+              m_Scripts.Lang() == ScriptSession::Language::Cpp   ? "cpp"
+            : m_Scripts.Lang() == ScriptSession::Language::Blueprint ? "blueprint" : "lua";
         if (!m_State.Save(path)) return;
         RememberProject(path);
         m_Canvas.Assets().SetRoot(path.parent_path());
@@ -457,6 +464,14 @@ namespace vae {
         const bool lua = m_Scripts.Lang() == ScriptSession::Language::Lua;
         const char* name = "Counter example";
         switch (which) {
+            case Example::CounterBlueprint:
+                name = "Counter blueprint";
+                // The language is part of the example: this one has no script file, so the
+                // session has to be told before the project path is set or it would go looking
+                // for a .lua that will never exist.
+                m_Scripts.SetLanguage(ScriptSession::Language::Blueprint);
+                BuildCounterBlueprint(m_State);
+                break;
             case Example::Screens:   name = "Screens example";   BuildScreensExample(m_State); break;
             case Example::Feed:      name = "Feed example";      BuildFeedExample(m_State);    break;
             case Example::Login:     name = "Login block";       BuildLoginBlock(m_State);     break;
@@ -474,7 +489,8 @@ namespace vae {
 
         // The Counter's buttons make a noise, which needs a file to make it with. Written before
         // the project is saved, so the asset the document names is already there when it loads.
-        if (which == Example::Counter) WriteExampleClick(m_State, folder);
+        if (which == Example::Counter || which == Example::CounterBlueprint)
+            WriteExampleClick(m_State, folder);
 
         m_Scripts.SetProjectPath(document);
         // The blocks have no logic in them: they are a layout exam, and inventing a script for one
@@ -567,7 +583,8 @@ namespace vae {
         // convert it.
         m_State.ProjectFile().name = clean;
         m_State.ProjectFile().scriptLanguage =
-            spec.language == ScriptSession::Language::Cpp ? "cpp" : "lua";
+              spec.language == ScriptSession::Language::Cpp   ? "cpp"
+            : spec.language == ScriptSession::Language::Blueprint ? "blueprint" : "lua";
         SaveProject(folder / doc::Project::kFileName);
         // The script file, written now rather than on the first edit. Two reasons, and the second
         // is the load-bearing one: it gives the author a template to start from, and it is the
@@ -608,15 +625,21 @@ namespace vae {
         // later means rewriting every component script it has.
         ImGui::Dummy(ImVec2(0.0f, 6.0f));
         ImGui::SeparatorText("Logic");
-        int language = m_NewSpec.language == ScriptSession::Language::Lua ? 0 : 1;
+        int language = m_NewSpec.language == ScriptSession::Language::Lua   ? 0
+                     : m_NewSpec.language == ScriptSession::Language::Cpp   ? 1 : 2;
         ImGui::RadioButton("Lua", &language, 0);
         ImGui::SameLine(0.0f, 24.0f);
         ImGui::RadioButton("C++", &language, 1);
+        ImGui::SameLine(0.0f, 24.0f);
+        ImGui::RadioButton("Blueprint", &language, 2);
         m_NewSpec.language = language == 0 ? ScriptSession::Language::Lua
-                                           : ScriptSession::Language::Cpp;
+                           : language == 1 ? ScriptSession::Language::Cpp
+                                           : ScriptSession::Language::Blueprint;
         ImGui::TextDisabled(language == 0
             ? "Reloads while the app is running. Nothing to install."
-            : "Compiled to a module. Needs a C++ compiler on this machine.");
+            : language == 1
+            ? "Compiled to a module. Needs a C++ compiler on this machine."
+            : "Drawn in the Blueprint panel, saved with the screen it drives.");
 
         // The screen size is not a setting so much as the thing every position on the canvas will
         // be chosen against, which is why it is decided before anything is placed.
@@ -796,6 +819,8 @@ namespace vae {
             if (ImGui::BeginMenu("Examples")) {
                 if (ImGui::MenuItem("Counter — one component, twice"))
                     OpenExample(Example::Counter);
+                if (ImGui::MenuItem("Counter, drawn — the same thing as a blueprint"))
+                    OpenExample(Example::CounterBlueprint);
                 if (ImGui::MenuItem("Screens — a list, a detail and an alert"))
                     OpenExample(Example::Screens);
                 if (ImGui::MenuItem("Feed — waiting, failed, empty and the answer"))
@@ -1093,7 +1118,12 @@ namespace vae {
         if (const std::filesystem::path open = DrawFilesPanel(m_Scripts, m_State); !open.empty())
             OpenProject(open);
         DrawRuntimePanel(m_Scripts, m_Canvas);
-        DrawScriptPanel(m_Scripts, m_State);
+        // A project's logic is written or drawn, never both, so only one of these is a thing this
+        // project has. Showing the other would be a tab that can only ever say "not this one".
+        if (m_Scripts.Lang() == ScriptSession::Language::Blueprint)
+            DrawBlueprintPanel(m_Scripts, m_State);
+        else
+            DrawScriptPanel(m_Scripts, m_State);
         DrawMarkupPanel(m_State);
         m_Canvas.OnImGuiRender(m_State);
 

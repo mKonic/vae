@@ -308,6 +308,72 @@ namespace vae::doc {
             return out;
         }
 
+        // ------------------------------------------------------------------ encoding a blueprint
+
+        // Logic, as markup, inside the screen or component it drives.
+        //
+        // Two things are deliberately NOT written, because the reader works them out: a link's id,
+        // which nothing refers to and which is minted in document order on the way back in, and a
+        // pin literal that is already what the node type says it starts with. What is left is the
+        // blueprint somebody drew.
+        void WriteGraph(Writer& w, const Blueprint& blueprint) {
+            w.Open("blueprint", {}, false);
+
+            for (const BlueprintVariable& variable : blueprint.variables) {
+                std::vector<Attr> attrs{ { "name", variable.name },
+                                         { "type", std::string(ValueTypeName(variable.type)) } };
+                if (const auto value = ValueToAttr(variable.defaultValue, variable.type))
+                    attrs.push_back({ "value", *value });
+                w.Open("var", attrs, true);
+            }
+
+            for (const BlueprintNode& node : blueprint.nodes) {
+                std::vector<Attr> attrs{ { "id", std::to_string(node.id) },
+                                         { "type", node.type } };
+                attrs.push_back({ "at", Vec2Text(node.position) });
+                if (!node.target.empty())  attrs.push_back({ "target", node.target });
+                if (node.extraPins != 0)   attrs.push_back({ "extra", std::to_string(node.extraPins) });
+                if (!node.comment.empty()) attrs.push_back({ "comment", node.comment });
+
+                // A pin's literal is written under the pin's own name. Every pin name starts with
+                // a capital and every reserved name above is lower case, so the two can never
+                // collide — which is a rule worth stating rather than noticing, and t_graph
+                // asserts it against the whole table.
+                std::vector<Attr> pins;
+                std::vector<Attr> longPins;
+                for (const PinSpec& pin : BlueprintInputs(blueprint, node)) {
+                    if (pin.type == PinType::Exec) continue;
+                    const auto it = node.literals.find(std::string(pin.name));
+                    if (it == node.literals.end() || !IsSet(it->second)) continue;
+                    const std::string value = PinLiteralText(it->second, pin.type);
+                    if (value == pin.literal) continue;      // already what the type says
+                    const bool nameable = pin.name.find(' ') == std::string_view::npos;
+                    (nameable ? pins : longPins).push_back({ std::string(pin.name), value });
+                }
+
+                if (longPins.empty()) {
+                    for (const Attr& pin : pins) attrs.push_back(pin);
+                    w.Open("node", attrs, true);
+                    continue;
+                }
+                for (const Attr& pin : pins) attrs.push_back(pin);
+                w.Open("node", attrs, false);
+                for (const Attr& pin : longPins)
+                    w.Open("pin", { { "name", pin.name }, { "value", pin.value } }, true);
+                w.Close("node");
+            }
+
+            for (const BlueprintLink& link : blueprint.links)
+                w.Open("link", { { "from", std::to_string(link.from) }, { "out", link.fromPin },
+                                 { "to", std::to_string(link.to) }, { "in", link.toPin } }, true);
+
+            for (const BlueprintComment& note : blueprint.comments)
+                w.Leaf("note", { { "at", Vec2Text(note.position) },
+                                 { "size", Vec2Text(note.size) } }, note.text);
+
+            w.Close("blueprint");
+        }
+
         void WriteNode(Writer& w, const Document& document, Uuid id,
                        const std::unordered_set<Uuid>& referenced, Uuid start, bool keepIds) {
             const Node* node = document.Find(id);
@@ -357,9 +423,12 @@ namespace vae::doc {
             if (node->locked)   attrs.push_back({ "locked", "true" });
             if (node->slot)     attrs.push_back({ "slot", "true" });
 
+            const Blueprint* blueprint = document.BlueprintFor(id);
+            if (blueprint && blueprint->Empty()) blueprint = nullptr;
+
             const bool hasChildren = !node->children.empty() || !node->overrides.empty()
                                    || !long_.empty() || sample != nullptr
-                                   || !node->properties.empty();
+                                   || !node->properties.empty() || blueprint != nullptr;
             if (!hasChildren && multiline) { w.Leaf(tag, attrs, *multiline); return; }
             if (!hasChildren)              { w.Open(tag, attrs, true); return; }
 
@@ -381,6 +450,10 @@ namespace vae::doc {
                 }
                 w.Open("property", pa, true);
             }
+            // Logic before the tree it drives, after the properties that declare what this is.
+            // A file then reads as: here is what this component takes, here is what it does, here
+            // is what it looks like.
+            if (blueprint) WriteGraph(w, *blueprint);
             if (sample) w.Leaf("sample", {}, *sample);
             for (const LongProp& p : long_)
                 w.Open("prop", { { "name", p.name }, { "type", p.type }, { "value", p.value } }, true);
@@ -539,6 +612,110 @@ namespace vae::doc {
             }
         };
 
+        // A <blueprint> back into logic. Node ids come out of the file because links name them; link
+        // and note ids are minted here in document order, because nothing in the file refers to
+        // one and a number nobody reads is a number nobody should have to write.
+        bool ReadGraph(const pugi::xml_node& el, Blueprint& out, std::string& error) {
+            std::vector<std::pair<BlueprintNode, std::vector<std::pair<std::string, std::string>>>>
+                pending;
+
+            for (pugi::xml_node child : el.children()) {
+                const std::string_view tag = child.name();
+                if (tag.empty()) continue;
+
+                if (tag == "var") {
+                    BlueprintVariable variable;
+                    variable.name = child.attribute("name").as_string();
+                    variable.type = ValueTypeFromName(child.attribute("type").as_string("number"))
+                                        .value_or(ValueType::Number);
+                    if (const auto attr = child.attribute("value"))
+                        variable.defaultValue = ValueFromAttr(attr.as_string(), variable.type);
+                    if (variable.name.empty()) { error = "a blueprint variable with no name"; return false; }
+                    out.variables.push_back(std::move(variable));
+                    continue;
+                }
+
+                if (tag == "note") {
+                    BlueprintComment note;
+                    note.text = child.child_value();
+                    note.position = Vec2FromText(child.attribute("at").as_string("0 0"))
+                                        .value_or(Vec2{});
+                    note.size = Vec2FromText(child.attribute("size").as_string("320 180"))
+                                    .value_or(Vec2{ 320.0f, 180.0f });
+                    out.comments.push_back(std::move(note));
+                    continue;
+                }
+
+                if (tag == "link") {
+                    BlueprintLink link;
+                    link.from    = static_cast<u32>(child.attribute("from").as_uint(0));
+                    link.fromPin = child.attribute("out").as_string();
+                    link.to      = static_cast<u32>(child.attribute("to").as_uint(0));
+                    link.toPin   = child.attribute("in").as_string();
+                    if (link.from == 0 || link.to == 0) { error = "a link with no ends"; return false; }
+                    out.links.push_back(std::move(link));
+                    continue;
+                }
+
+                if (tag != "node") {
+                    error = "unknown element <" + std::string(tag) + "> inside <blueprint>";
+                    return false;
+                }
+
+                BlueprintNode node;
+                std::vector<std::pair<std::string, std::string>> literals;
+                node.id   = static_cast<u32>(child.attribute("id").as_uint(0));
+                node.type = child.attribute("type").as_string();
+                if (node.id == 0)      { error = "a blueprint node with no id"; return false; }
+                if (node.type.empty()) { error = "a blueprint node with no type"; return false; }
+                // Refused rather than dropped, and for the same reason an unknown attribute is:
+                // the version gate has already said this file is a format this build reads, so a
+                // type it does not know is a bug or a typo, and running the rest of the blueprint
+                // without it would be running something nobody drew.
+                if (!FindBlueprintNodeType(node.type)) {
+                    error = "unknown blueprint node type '" + node.type + "'";
+                    return false;
+                }
+
+                for (pugi::xml_attribute a : child.attributes()) {
+                    const std::string_view n = a.name();
+                    if (n == "id" || n == "type") continue;
+                    if (n == "at")      { node.position = Vec2FromText(a.as_string()).value_or(Vec2{}); continue; }
+                    if (n == "target")  { node.target = a.as_string(); continue; }
+                    if (n == "extra")   { node.extraPins = static_cast<u32>(a.as_uint(0)); continue; }
+                    if (n == "comment") { node.comment = a.as_string(); continue; }
+                    literals.emplace_back(n, a.as_string());
+                }
+                for (pugi::xml_node pin : child.children("pin"))
+                    literals.emplace_back(pin.attribute("name").as_string(),
+                                          pin.attribute("value").as_string());
+
+                pending.emplace_back(std::move(node), std::move(literals));
+            }
+
+            // Literals are typed by the pins they sit on, and a variable node's pins are typed by
+            // the variable — which is why this is a second pass: every <var> has been read by now.
+            for (auto& [node, literals] : pending) {
+                for (const auto& [name, text] : literals) {
+                    const PinSpec* found = nullptr;
+                    const std::vector<PinSpec> inputs = BlueprintInputs(out, node);
+                    for (const PinSpec& pin : inputs)
+                        if (pin.name == name) { found = &pin; break; }
+                    if (!found) {
+                        error = "blueprint node '" + node.type + "' has no pin called '" + name + "'";
+                        return false;
+                    }
+                    node.literals[name] = ParsePinLiteral(text, found->type);
+                }
+                out.nodes.push_back(std::move(node));
+            }
+
+            out.RecomputeNextId();
+            for (BlueprintLink& link : out.links) link.id = out.MintId();
+            for (BlueprintComment& note : out.comments) note.id = out.MintId();
+            return true;
+        }
+
     }
 
     std::string Serializer::ToXmlSubtree(const Document& document, Uuid node) {
@@ -608,6 +785,9 @@ namespace vae::doc {
 
         Reader reader;
         Uuid start = Uuid::Invalid();
+        // Blueprints are collected as they are read and attached once the document has the nodes they
+        // belong to: a node is only handed over after its whole subtree is known.
+        std::vector<std::pair<Uuid, Blueprint>> blueprints;
 
         // Everything a node needs that is not in the tree shape: read into a Node, then handed to
         // the document once its whole subtree is known.
@@ -666,6 +846,12 @@ namespace vae::doc {
                 if (tag.empty()) continue;                  // the text body, already read
                 if (tag == "sample") {
                     node.props.Set(Prop::Sample, std::string(child.child_value()));
+                    continue;
+                }
+                if (tag == "blueprint") {
+                    Blueprint blueprint;
+                    if (!ReadGraph(child, blueprint, reader.error)) return false;
+                    blueprints.emplace_back(node.id, std::move(blueprint));
                     continue;
                 }
                 if (tag == "property") {
@@ -793,6 +979,12 @@ namespace vae::doc {
         for (const auto& [id, children] : hierarchy)
             if (Node* node = out.Find(id)) node->children = children;
 
+        // Logic last, because a blueprint belongs to a node and the nodes have only just arrived. A
+        // blueprint whose node did not survive the fork check above is dropped with it: it was the
+        // logic of a component the file then replaced.
+        for (auto& [id, blueprint] : blueprints)
+            if (out.Contains(id)) out.SetBlueprint(id, std::move(blueprint));
+
         if (start.Valid()) out.SetStartScreen(start);
         return true;
     }
@@ -831,14 +1023,22 @@ namespace vae::doc {
                                           + std::to_string(roots.size()));
 
         std::vector<Node> subtree;
-        for (const Uuid id : scratch.Subtree(roots.front()))
+        std::vector<std::pair<Uuid, Blueprint>> subtreeGraphs;
+        for (const Uuid id : scratch.Subtree(roots.front())) {
             if (const Node* found = scratch.Find(id)) subtree.push_back(*found);
+            // Logic is part of the markup, so it is part of what the tab replaces. Carrying it is
+            // not a nicety: the delete below takes the old blueprint with the old subtree, so a blueprint
+            // left behind here is a blueprint deleted by an edit that never mentioned it.
+            if (const Blueprint* blueprint = scratch.BlueprintFor(id)) subtreeGraphs.emplace_back(id, *blueprint);
+        }
         if (subtree.empty()) return Fail("no element here — markup describing one node was expected");
 
         // The root answers to the id it is replacing whatever the markup claims. Deleting the `id`
         // attribute is an easy thing to do while editing, and a new id is a node the selection, the
         // observers and every override key have lost track of.
         const Uuid was = subtree.front().id;
+        if (was != node)
+            for (auto& [id, blueprint] : subtreeGraphs) if (id == was) id = node;
         if (was != node)
             for (Node& n : subtree) {
                 if (n.id == was)     n.id = node;
@@ -862,6 +1062,8 @@ namespace vae::doc {
         }
         for (const auto& [id, children] : hierarchy)
             if (Node* restored = out.Find(id)) restored->children = children;
+        for (auto& [id, blueprint] : subtreeGraphs)
+            if (out.Contains(id)) out.SetBlueprint(id, std::move(blueprint));
 
         out.Touch(node);
         return true;

@@ -5,6 +5,11 @@ IncludeDir = {}
 IncludeDir["GLFW"]          = "%{wks.location}/VAE/vendor/GLFW/include"
 IncludeDir["ImGui"]         = "%{wks.location}/VAE/vendor/imgui"
 IncludeDir["TextEditor"]    = "%{wks.location}/VAE/vendor/ImGuiColorTextEdit"
+IncludeDir["NodeEditor"]    = "%{wks.location}/VAE/vendor/imgui-node-editor"
+-- The blueprint node builder and the pin icons sit under examples/ upstream. They are the
+-- reference implementation of the Unreal-style node, not a demo of it, so they are on the include
+-- path like any other part of the library.
+IncludeDir["NodeEditorUtil"] = "%{wks.location}/VAE/vendor/imgui-node-editor/examples/blueprints-example/utilities"
 IncludeDir["httplib"]       = "%{wks.location}/VAE/vendor/httplib"
 IncludeDir["glm"]           = "%{wks.location}/VAE/vendor/glm"
 IncludeDir["spdlog"]        = "%{wks.location}/VAE/vendor/spdlog/include"

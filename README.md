@@ -1,7 +1,7 @@
 # VAE
 
 **Virtual App Engine** — a visual builder for desktop applications. Draw the interface on a canvas,
-attach logic in Lua or C++, then run it or export it as C++.
+attach logic in Lua, C++ or a blueprint, then run it or export it as C++.
 
 ![VAE Studio](docs/studio.png)
 
@@ -14,7 +14,7 @@ attach logic in Lua or C++, then run it or export it as C++.
 - Components declare properties and variants; instances answer them
 - Design tokens and themes, dark and light
 - Data-bound rows — draw one row, hand over a table at runtime
-- Logic in Lua or C++, chosen once per project
+- Logic in Lua, C++ or a blueprint — nodes and wires, Unreal's model — chosen once per project
 - Services for files, storage, HTTP, WebSockets, timers and audio
 - SVG import, vector shapes, pictures and fonts as project assets
 - Text shaped by HarfBuzz: right-to-left scripts, reordering, ligatures, colour emoji
@@ -24,6 +24,8 @@ attach logic in Lua or C++, then run it or export it as C++.
 - Run a project on the canvas, or in its own window
 - Documents are XML, one file per screen, diffable
 - Export readable C++ that builds into a standalone folder
+
+![The Blueprint editor](docs/blueprint.png)
 
 ## Install
 
@@ -76,6 +78,23 @@ vae.component("Counter", {
 
 The C++ form is the same shape against `vae/script/VaeScriptAPI.h`, compiled to a `.so` beside the
 project. The player loads whichever sits next to it, native winning when both do.
+
+## Blueprints
+
+The third form is drawn rather than written. A blueprint binds to a component or a screen by the
+same names a script does, so it is a spelling of the model above rather than a second one: a
+component is a class and its blueprint runs once per copy with its own state, and a screen's
+blueprint is the one that reaches what is placed on it.
+
+Two kinds of wire. A **white** one says what happens next; a **coloured** one says where a value
+comes from, and its colour is its type. A node with white pins runs when execution reaches it; a
+node without them is worked out where it is read.
+
+Every node is one call in `vae/script/VaeScript.h` — the palette says which — so a blueprint can do
+what a script can do and nothing else. It is stored inside the screen or component it drives, so
+there is no separate file and nothing to keep in step.
+
+`design/blueprints.md` has the model, the execution rules and what the compiler refuses.
 
 ## Export
 

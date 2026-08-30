@@ -100,6 +100,106 @@ namespace vae::selftest {
     }
 
 
+    // ------------------------------------------------------------------------ a drawn project
+
+    // The same counter with its logic drawn, driven end to end: the example opens as a blueprint
+    // project, compiles, plays, counts, hot-reloads, and comes back off disk still drawn.
+    void TestBlueprintProject() {
+        Section("blueprint project");
+        Shortcuts driver;
+        StudioLayer& layer = driver.Layer_();
+
+        layer.OpenExample(StudioLayer::Example::CounterBlueprint);
+        driver.Frame();
+        driver.Frame();
+
+        EditorState& state = layer.State();
+        ScriptSession& scripts = layer.Scripts();
+        Check(scripts.Lang() == ScriptSession::Language::Blueprint, "the example opens as a blueprint");
+        Check(state.Doc().HasBlueprints(), "and the document carries its logic");
+        Check(scripts.HasSource(), "which is what a drawn project has instead of a file");
+        Check(!scripts.Artifact().string().size(),
+              "with nothing to build and nothing to ship beside it");
+
+        if (!Check(scripts.Build(), "every blueprint compiles: " + scripts.Output())) return;
+
+        const Uuid left  = InstanceNamed(state.Doc(), state.ActiveScreen(), "Left");
+        const Uuid right = InstanceNamed(state.Doc(), state.ActiveScreen(), "Right");
+        if (!Check(left.Valid() && right.Valid(), "two counters on screen")) return;
+
+        driver.Press(ImGuiKey_F5);
+        driver.Frame();
+        if (!Check(scripts.Playing(), "F5 runs it")) return;
+        Check(scripts.Blueprints() != nullptr, "through the blueprint host");
+        Check(scripts.LiveInstances() == 2, "both copies mounted");
+        Check(TextIn(layer.Surface().Host().Tree(), left, "Count") == "0",
+              "On Mount wrote through the designer's name: "
+                  + TextIn(layer.Surface().Host().Tree(), left, "Count"));
+
+        auto click = [&](Uuid owner, std::string_view name) {
+            const Rect box = BoundsIn(layer.Surface().Host().Tree(), owner, name);
+            const Vec2 point = box.Center();
+            ui::UiHost& host = layer.Surface().Host();
+            host.Dispatch(MakeMouseMoved(point.x, point.y));
+            host.Dispatch(MakeMouseButton(EventType::MouseButtonPressed, Mouse::Left,
+                                          point.x, point.y, Mod::None));
+            host.Dispatch(MakeMouseButton(EventType::MouseButtonReleased, Mouse::Left,
+                                          point.x, point.y, Mod::None));
+            driver.Frame();
+        };
+
+        click(left, "Increment");
+        click(left, "Increment");
+        click(right, "Increment");
+        Check(TextIn(layer.Surface().Host().Tree(), left, "Count") == "2",
+              "the left counter counted its own clicks: "
+                  + TextIn(layer.Surface().Host().Tree(), left, "Count"));
+        Check(TextIn(layer.Surface().Host().Tree(), right, "Count") == "1",
+              "and the right one counted separately: "
+                  + TextIn(layer.Surface().Host().Tree(), right, "Count"));
+
+        // The wires the app went through, which is what the canvas animates while it runs.
+        scripts.Blueprints()->SetWatching(true);
+        scripts.Blueprints()->TakeFlow();
+        click(right, "Increment");
+        Check(!scripts.Blueprints()->TakeFlow().empty(), "the debugger sees the flow through a click");
+
+        driver.Press(ImGuiKey_F6);
+        driver.Frame();
+        Check(scripts.Playing(), "F6 leaves it running");
+        Check(TextIn(layer.Surface().Host().Tree(), left, "Count") == "2",
+              "and the counts survive a reload of a blueprint");
+
+        click(left, "Reset");
+        Check(TextIn(layer.Surface().Host().Tree(), left, "Count") == "0",
+              "Reset runs the other event");
+
+        driver.Press(ImGuiKey_F5, false, true);
+        driver.Frame();
+        Check(!scripts.Playing(), "Shift+F5 stops");
+        Check(TextIn(layer.Surface().Host().Tree(), left, "Count") == "0",
+              "and the design comes back");
+        // The snapshot is markup, and markup now carries logic. A restore that dropped it would
+        // leave a project that plays once.
+        Check(state.Doc().HasBlueprints(), "with its blueprint still attached after the restore");
+
+        // Off disk and back: the file carries the blueprint, and the language is read back off it.
+        const std::filesystem::path folder = FileSystem::ProjectsRoot() / "Counter blueprint";
+        const std::filesystem::path file = folder / "Counter blueprint.vae";
+        layer.SaveProject(file);
+        {
+            Shortcuts second;
+            StudioLayer& reopened = second.Layer_();
+            Check(reopened.State().Load(file), "the drawn project loads");
+            second.Frame();
+            reopened.Scripts().AdoptLanguageFor(file);
+            Check(reopened.State().Doc().HasBlueprints(), "with its logic inside it");
+            Check(reopened.Scripts().Lang() == ScriptSession::Language::Blueprint,
+                  "and opens as a blueprint project without being told");
+        }
+    }
+
+
     // ------------------------------------------------------------------------ debug tools
 
     void TestDebugger() {
@@ -352,6 +452,7 @@ namespace vae::selftest {
 
     void RunRunning() {
         TestPlayMode();
+        TestBlueprintProject();
         TestDebugger();
         TestFeedExample();
         TestExampleSound();

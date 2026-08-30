@@ -4,6 +4,7 @@
 #include "Debugger.h"
 #include "EditorState.h"
 
+#include "vae/script/BlueprintHost.h"
 #include "vae/script/Runtime.h"
 #include "vae/svc/Services.h"
 
@@ -21,7 +22,10 @@ namespace vae {
     // app once would leave the design showing whatever the last frame happened to say.
     class ScriptSession {
     public:
-        enum class Language { Lua, Cpp };
+        // The three ways a project's logic can be written. One per project, chosen once — a
+        // per-component choice makes the inspector ask a question whose answer is always
+        // "whatever this project is" (D4).
+        enum class Language { Lua, Cpp, Blueprint };
 
         struct Diagnostic {
             std::string file;
@@ -40,7 +44,13 @@ namespace vae {
         // it is a C++ project whatever the Studio was last set to, and opening it in the other
         // language would show an empty editor and claim the project had no logic.
         void AdoptLanguageFor(const std::filesystem::path& projectPath);
-        const char* LanguageName() const { return m_Language == Language::Lua ? "Lua" : "C++"; }
+        const char* LanguageName() const {
+            return m_Language == Language::Lua   ? "Lua"
+                 : m_Language == Language::Blueprint ? "Blueprint" : "C++";
+        }
+        // The blueprint host, or null when this project's logic is written rather than drawn.
+        // The Blueprint panel reads it for diagnostics and for what the running app is doing.
+        script::BlueprintHost* Blueprints() { return m_Blueprints; }
 
         // Follows the project: the script sits beside the document and is named after it.
         void SetProjectPath(const std::filesystem::path& projectPath);
@@ -95,6 +105,8 @@ namespace vae {
 
     private:
         void LoadSource();
+        // Compiles every blueprint the document holds and turns what comes back into diagnostics.
+        bool BuildBlueprints();
         void ParseDiagnostics(const std::string& output);
         bool StartHosts();
 
@@ -110,6 +122,9 @@ namespace vae {
         std::string m_Output;
         std::vector<Diagnostic> m_Diagnostics;
         std::string m_Snapshot;
+        // Owned by the runtime, which owns every host. Kept here because the panel needs to reach
+        // it and the runtime's host list is a list of the base class.
+        script::BlueprintHost* m_Blueprints = nullptr;
 
         bool m_Dirty = false;
         bool m_Built = false;

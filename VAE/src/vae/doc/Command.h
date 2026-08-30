@@ -329,6 +329,33 @@ namespace vae::doc {
 
     // The widths the project designs for. A document-level edit like a token, and undoable for the
     // same reason: dragging a breakpoint's width restyles every node that overlays at it.
+    // A blueprint edit, as one entry: the whole blueprint before and the whole blueprint after.
+    //
+    // Node-level commands were the alternative and are worth saying no to explicitly. A blueprint is
+    // tens of nodes, not thousands, and almost every edit touches more than one thing at once — a
+    // wire displaces the wire that was there, deleting a node deletes every wire that reached it,
+    // and dragging a selection moves ten. Recording those as a dozen command types is a dozen
+    // chances to record one of them wrong; recording the blueprint is one, and it cannot be wrong.
+    //
+    // `name` is what the undo menu says, so it names the edit rather than the mechanism.
+    class SetBlueprintCommand final : public Command {
+    public:
+        SetBlueprintCommand(Uuid node, Blueprint blueprint, std::string name = "Edit blueprint")
+            : m_Node(node), m_New(std::move(blueprint)), m_Name(std::move(name)) {}
+
+        void Apply(Document& document) override;
+        void Undo(Document& document) override;
+        std::string_view Name() const override { return m_Name; }
+        bool Coalesce(const Command& newer) override;
+
+    private:
+        Uuid m_Node;
+        Blueprint m_New;
+        Blueprint m_Old;
+        std::string m_Name;
+        bool m_Captured = false;
+    };
+
     class SetBreakpointsCommand final : public Command {
     public:
         explicit SetBreakpointsCommand(std::vector<Breakpoint> breakpoints)

@@ -38,6 +38,8 @@ project "VAE-Studio"
       "%{IncludeDir.GLFW}",
       "%{IncludeDir.ImGui}",
       "%{IncludeDir.TextEditor}",
+      "%{IncludeDir.NodeEditor}",
+      "%{IncludeDir.NodeEditorUtil}",
       "%{IncludeDir.VulkanHeaders}",
    }
 
@@ -46,7 +48,7 @@ project "VAE-Studio"
    VaeAccessibility()
 
    -- StaticLib links are NOT transitive under gmake, so every dependency is relisted here.
-   links { "VAE", "VAE-Core", "spdlog", "GLFW", "VulkanDeps", "ImGui", "TextEditor", "Lua", "miniaudio", "pugixml", "harfbuzz" }
+   links { "VAE", "VAE-Core", "spdlog", "GLFW", "VulkanDeps", "ImGui", "TextEditor", "NodeEditor", "Lua", "miniaudio", "pugixml", "harfbuzz" }
 
    filter "system:linux"
       systemversion "latest"

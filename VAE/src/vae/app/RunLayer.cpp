@@ -8,6 +8,7 @@
 #include "vae/base/Platform.h"
 #include "vae/base/Log.h"
 #include "vae/core/Application.h"
+#include "vae/script/BlueprintHost.h"
 #include "vae/script/LuaHost.h"
 #include "vae/script/NativeHost.h"
 #include "vae/text/FontDB.h"
@@ -55,6 +56,9 @@ namespace vae::app {
         const std::filesystem::path lua    = std::filesystem::path(base).concat(".lua");
         if (std::filesystem::exists(native))   { m_ScriptPath = native; m_Language = "cpp"; }
         else if (std::filesystem::exists(lua)) { m_ScriptPath = lua;    m_Language = "lua"; }
+        // A drawn project has no script file: its logic is inside the documents that have just
+        // been read. There is nothing to find on disk, so the document is what says so.
+        else if (m_Document.HasBlueprints())       { m_ScriptPath = path;   m_Language = "blueprint"; }
 
         // The app's own folder is its sandbox and its saved state lives in it. Beside the project
         // rather than in a hidden directory: an exported app is a folder you can move, and its
@@ -161,6 +165,24 @@ namespace vae::app {
         m_Runtime.Attach(m_Host, m_Document);
         m_Runtime.SetServices(&m_Services);
         if (m_ScriptPath.empty()) return true;
+
+        // A drawn project is the one whose logic the runtime already has: it came in with the
+        // documents, so the host is handed the document rather than a path to read.
+        if (m_Language == "blueprint") {
+            auto blueprints = CreateScope<script::BlueprintHost>();
+            blueprints->Bind(m_Runtime.Api());
+            blueprints->Adopt(m_Document);
+            for (const script::BlueprintHost::Message& message : blueprints->Messages()) {
+                if (message.error) VAE_ERROR("app: {}: {}", message.component, message.message);
+                else               VAE_WARN ("app: {}: {}", message.component, message.message);
+            }
+            if (blueprints->ErrorCount() > 0) {
+                m_ScriptError = blueprints->Messages().front().message;
+                return false;
+            }
+            m_Runtime.AddHost(std::move(blueprints));
+            return true;
+        }
 
         Scope<script::Host> host;
         if (m_Language == "cpp") host = CreateScope<script::NativeHost>();

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "vae/doc/Blueprint.h"
 #include "vae/doc/Node.h"
 
 #include <functional>
@@ -228,6 +229,23 @@ namespace vae::doc {
         const Asset* FindAssetNamed(std::string_view name) const;
         const std::vector<Asset>& Assets() const { return m_Assets; }
 
+        // --- blueprints ------------------------------------------------------------------------------
+        // A screen's or a component's logic, drawn. Stored here rather than on the Node because a
+        // Node is compared whole to decide whether a component is still the stock one, and it is
+        // copied by value on every clone — a hundred blueprint nodes riding along inside every widget
+        // in the catalog would be paid for by everything, to be used by almost nothing.
+        //
+        // The one that matters: a component with a blueprint is a FORK. Its logic is not something the
+        // binary can rebuild, so `Stock` must not name it, or the file would be written without
+        // the only part of it nobody else has.
+        const Blueprint* BlueprintFor(Uuid node) const;
+        Blueprint* BlueprintFor(Uuid node);
+        // An empty blueprint removes the entry: a screen that has no logic should not carry an empty
+        // <blueprint/> around, and "has a blueprint" is then a question with one answer.
+        void SetBlueprint(Uuid node, Blueprint blueprint);
+        const std::map<Uuid, Blueprint>& Blueprints() const { return m_Blueprints; }
+        bool HasBlueprints() const { return !m_Blueprints.empty(); }
+
         // --- components ------------------------------------------------------------------------
         // Turns a subtree into a reusable component in place, returning the component's id.
         Uuid MakeComponent(Uuid subtreeRoot, std::string name);
@@ -335,6 +353,7 @@ namespace vae::doc {
         std::map<std::string, Token> m_Tokens;
         std::vector<Breakpoint> m_Breakpoints;
         std::vector<Asset> m_Assets;
+        std::map<Uuid, Blueprint> m_Blueprints;
         Theme m_Theme = Theme::Dark;
         Uuid m_StartScreen = Uuid::Invalid();
 

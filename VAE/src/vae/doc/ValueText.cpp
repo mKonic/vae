@@ -122,4 +122,37 @@ namespace vae::doc::text {
         return out;
     }
 
+    std::string ValueAsText(const Value& value) {
+        return std::visit([](const auto& v) -> std::string {
+            using T = std::decay_t<decltype(v)>;
+            if constexpr (std::is_same_v<T, bool>)             return v ? "true" : "false";
+            else if constexpr (std::is_same_v<T, f32>)         return Number(v);
+            else if constexpr (std::is_same_v<T, Vec2>)        return Vec2Text(v);
+            else if constexpr (std::is_same_v<T, Color>)       return ColorToHex(v).value_or("");
+            else if constexpr (std::is_same_v<T, std::string>) return v;
+            else if constexpr (std::is_same_v<T, TokenRef>)    return "@" + v.name;
+            else if constexpr (std::is_same_v<T, Binding>)     return "=" + v.expression;
+            else return std::string();
+        }, value);
+    }
+
+    Value ValueFromText(std::string_view text, ValueType type) {
+        switch (type) {
+            case ValueType::Bool:
+                // The same words a row cell means by false, so one boundary carrying a value as
+                // text does not disagree with the other about what "off" is.
+                return !(text.empty() || text == "0" || text == "no" || text == "off"
+                         || text == "false");
+            case ValueType::Number: return ParseNumber(text).value_or(0.0f);
+            case ValueType::Colour: {
+                if (const auto colour = ColorFromHex(text)) return *colour;
+                // Not hex, so it is the name of a colour: a token, which resolves against the
+                // theme the way every other colour in the document does.
+                return TokenRef{ std::string(text) };
+            }
+            default: break;
+        }
+        return std::string(text);
+    }
+
 }

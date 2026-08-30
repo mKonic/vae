@@ -82,7 +82,24 @@ namespace vae::doc {
         m_Tokens.clear();
         m_Breakpoints = DefaultBreakpoints();
         m_Assets.clear();
+        m_Blueprints.clear();
         ++m_Revision;
+    }
+
+    const Blueprint* Document::BlueprintFor(Uuid node) const {
+        const auto it = m_Blueprints.find(node);
+        return it == m_Blueprints.end() ? nullptr : &it->second;
+    }
+
+    Blueprint* Document::BlueprintFor(Uuid node) {
+        const auto it = m_Blueprints.find(node);
+        return it == m_Blueprints.end() ? nullptr : &it->second;
+    }
+
+    void Document::SetBlueprint(Uuid node, Blueprint blueprint) {
+        if (blueprint.Empty()) m_Blueprints.erase(node);
+        else               m_Blueprints[node] = std::move(blueprint);
+        Notify(node);
     }
 
     u32 Document::AddObserver(Observer observer) {
@@ -166,7 +183,7 @@ namespace vae::doc {
         // Collect first, then erase: erasing while walking invalidates the children we still need.
         const std::vector<Uuid> subtree = Subtree(id);
         DetachFromParent(id);
-        for (Uuid node : subtree) m_Nodes.erase(node);
+        for (Uuid node : subtree) { m_Nodes.erase(node); m_Blueprints.erase(node); }
 
         Notify(id);
     }
@@ -655,6 +672,13 @@ namespace vae::doc {
                 }
             }
         }
+
+        // Logic travels with the thing it drives. Duplicating a component that counts its own
+        // clicks and getting one that does not would be a copy of the picture, not of the
+        // component — and the blueprint refers to nodes by NAME, so it needs no remapping at all.
+        for (const auto& [before, after] : remap)
+            if (const Blueprint* blueprint = from.BlueprintFor(before)) into.SetBlueprint(after, *blueprint);
+
         return remap[root];
     }
 

@@ -1,5 +1,7 @@
 #include "Example.h"
 
+#include "vae/doc/Blueprint.h"
+
 #include "vae/base/FileSystem.h"
 #include "vae/base/Log.h"
 #include "vae/doc/Document.h"
@@ -171,6 +173,90 @@ namespace vae {
             style.gap = 32.0f;
         }
 
+        state.ClearSelection();
+        state.Commands().Clear();
+    }
+
+    // The same counter, with its logic drawn instead of written. Three entry points, because a
+    // blueprint has no functions to share the "show the number" chain between them — which is exactly
+    // what a small Blueprint looks like, and is worth showing rather than hiding.
+    void BuildCounterBlueprint(EditorState& state) {
+        BuildCounterExample(state);
+        doc::Document& d = state.Doc();
+
+        Uuid component = Uuid::Invalid();
+        for (const Uuid root : d.Roots())
+            if (const doc::Node* node = d.Find(root); node && node->IsComponent()
+                && node->name == "Counter") component = root;
+        if (!component.Valid()) return;
+
+        doc::Blueprint blueprint;
+        blueprint.SetVariable({ "count", doc::ValueType::Number, 0.0f });
+
+        const auto Node = [&](std::string type, Vec2 at, std::string target = {}) {
+            doc::BlueprintNode node;
+            node.type = std::move(type);
+            node.position = at;
+            node.target = std::move(target);
+            return blueprint.AddNode(std::move(node));
+        };
+        const auto Lit = [&](u32 id, const char* pin, doc::Value value) {
+            if (doc::BlueprintNode* node = blueprint.Find(id)) node->literals[pin] = std::move(value);
+        };
+        const auto Wire = [&](u32 from, const char* out, u32 to, const char* in) {
+            blueprint.AddLink({ 0, from, out, to, in });
+        };
+        // Every path ends the same way: put the number on screen. Three copies of one node,
+        // because that is what a blueprint without functions honestly is.
+        const auto Show = [&](Vec2 at) {
+            const u32 id = Node("ui.setText", at);
+            Lit(id, "Node", std::string("Count"));
+            return id;
+        };
+
+        // On Mount: show whatever the count already is.
+        const u32 mount = Node("event.mount", { -40.0f, 0.0f });
+        const u32 mountGet = Node("var.get", { 300.0f, 110.0f }, "count");
+        const u32 mountShow = Show({ 560.0f, 0.0f });
+        Wire(mount, "Out", mountShow, "In");
+        Wire(mountGet, "Value", mountShow, "Value");
+
+        // Add one: make a noise, add one, show it. The Set's own output carries the new value
+        // along, which is why nothing has to read the variable back afterwards.
+        const u32 clicked = Node("event.clicked", { -40.0f, 240.0f });
+        Lit(clicked, "Node", std::string("Increment"));
+        const u32 click = Node("sound.play", { 240.0f, 240.0f });
+        Lit(click, "Sound", std::string("click"));
+        Lit(click, "Volume", 0.6f);
+        const u32 get = Node("var.get", { 240.0f, 430.0f }, "count");
+        const u32 add = Node("math.add", { 420.0f, 430.0f });
+        Lit(add, "B", 1.0f);
+        const u32 set = Node("var.set", { 620.0f, 240.0f }, "count");
+        const u32 show = Show({ 860.0f, 240.0f });
+        Wire(clicked, "Out", click, "In");
+        Wire(click, "Out", set, "In");
+        Wire(get, "Value", add, "A");
+        Wire(add, "Value", set, "Value");
+        Wire(set, "Out", show, "In");
+        Wire(set, "Value", show, "Value");
+
+        // Reset: the same shape, with nothing to add.
+        const u32 reset = Node("event.clicked", { -40.0f, 620.0f });
+        Lit(reset, "Node", std::string("Reset"));
+        const u32 resetClick = Node("sound.play", { 240.0f, 620.0f });
+        Lit(resetClick, "Sound", std::string("click"));
+        Lit(resetClick, "Volume", 0.6f);
+        const u32 zero = Node("var.set", { 620.0f, 620.0f }, "count");
+        const u32 resetShow = Show({ 860.0f, 620.0f });
+        Wire(reset, "Out", resetClick, "In");
+        Wire(resetClick, "Out", zero, "In");
+        Wire(zero, "Out", resetShow, "In");
+        Wire(zero, "Value", resetShow, "Value");
+
+        blueprint.comments.push_back({ 0, "counting", { -80.0f, 190.0f }, { 1080.0f, 340.0f } });
+        blueprint.comments.back().id = blueprint.MintId();
+
+        d.SetBlueprint(component, std::move(blueprint));
         state.ClearSelection();
         state.Commands().Clear();
     }

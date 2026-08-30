@@ -58,10 +58,14 @@ namespace vae::ui {
                     const std::vector<Uuid> theirs = reference.document.Subtree(root);
                     if (mine != theirs) continue;
 
+                    // Logic is not part of a Node, so node-for-node equality cannot see it. A
+                    // stock Button somebody gave a blueprint to is a fork whatever its nodes say, and
+                    // calling it stock would write the file without the only part of it that the
+                    // binary cannot rebuild.
                     const bool identical = std::all_of(mine.begin(), mine.end(), [&](Uuid id) {
                         const doc::Node* a = document.Find(id);
                         const doc::Node* b = reference.document.Find(id);
-                        return a && b && *a == *b;
+                        return a && b && *a == *b && document.BlueprintFor(id) == nullptr;
                     });
                     if (identical) stock.push_back(root);
                 }

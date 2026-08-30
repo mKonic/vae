@@ -13,6 +13,9 @@ namespace vae {
     // A counter, twice over — two copies of one component, each keeping its own count, each built
     // from the library's Button. That is the whole of the composition story on one screen.
     void BuildCounterExample(EditorState& state);
+    // The same project with its logic drawn rather than written: no script file, a blueprint on the
+    // Counter component.
+    void BuildCounterBlueprint(EditorState& state);
     // The click the Counter's buttons make, generated into the project's assets folder and
     // registered under the name the script plays it by. Generated rather than shipped: a 4 KB
     // binary in the repo is a thing nobody can read in a diff, and the twenty lines that make one

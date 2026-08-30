@@ -50,6 +50,12 @@ namespace vae::doc {
         std::string Vec2Text(const Vec2& v);
         std::optional<Vec2> Vec2FromText(std::string_view s);
 
+        // A value as plain text, and back against a declared type. Not the codec's job — the codec
+        // has sigils and a long form to fall back on — but the shape every boundary that carries a
+        // value as a string needs: a row cell, and a script setting a component's knob.
+        std::string ValueAsText(const Value& value);
+        Value ValueFromText(std::string_view text, ValueType type);
+
         // What an XML attribute value may not contain. Newlines and tabs go out as character
         // references rather than raw, because an attribute that wraps is an attribute a reader
         // reformats.

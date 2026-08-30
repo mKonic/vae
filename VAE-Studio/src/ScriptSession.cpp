@@ -4,6 +4,7 @@
 #include "vae/base/Platform.h"
 #include "vae/base/Log.h"
 #include "vae/doc/Serializer.h"
+#include "vae/script/BlueprintHost.h"
 #include "vae/script/LuaHost.h"
 #include "vae/script/NativeHost.h"
 #include "vae/ui/Library.h"
@@ -67,6 +68,18 @@ namespace vae {
 // VAE_SCRIPT(Counter, "Counter")
 )";
 
+        // What the Script panel says for a project whose logic is drawn. There is no file, so
+        // there is nothing to edit here — and saying so is better than an empty editor that looks
+        // like a project which lost its script.
+        constexpr const char* kGraphNote = R"(-- This project's logic is drawn, not written.
+--
+-- Open the Blueprint panel. Each screen and each component has its own blueprint: events down the left,
+-- what happens along the white wires, values along the coloured ones.
+--
+-- Nothing in a blueprint is invented — every node is one call in vae/script/VaeScript.h, which is why
+-- "Export as C++" produces a script you could have written by hand.
+)";
+
     }
 
     void ScriptSession::Attach(Canvas& canvas, EditorState& state) {
@@ -91,13 +104,25 @@ namespace vae {
             ? projectPath.parent_path() / projectPath.parent_path().filename()
             : std::filesystem::path(projectPath).replace_extension();
 
+        // A drawn project has no script file to read the language off, so the project index is
+        // asked first — it is the only place "this one is drawn" can be written down. A file
+        // beside it still wins for the two written languages, because a `.cpp` on disk is a
+        // stronger statement than a line in a settings file that may be out of date.
         std::error_code ec;
         const bool lua = std::filesystem::exists(std::filesystem::path(base).concat(".lua"), ec);
         const bool cpp = std::filesystem::exists(std::filesystem::path(base).concat(".cpp"), ec);
-        // Only when it is unambiguous. A project with both is a project someone is porting, and
-        // switching the language out from under them would be the wrong half of the guess.
-        if (lua == cpp) return;
-        SetLanguage(lua ? Language::Lua : Language::Cpp);
+        if (lua != cpp) { SetLanguage(lua ? Language::Lua : Language::Cpp); return; }
+
+        if (doc::Project::IsProjectFile(projectPath)) {
+            doc::Project settings;
+            if (doc::Project::Load(projectPath, settings) && settings.scriptLanguage == "blueprint") {
+                SetLanguage(Language::Blueprint);
+                return;
+            }
+        }
+        // Nothing said so, but the document might: a folder holding blueprints and no script is a
+        // drawn project whatever its index forgot to say.
+        if (!lua && !cpp && m_State && m_State->Doc().HasBlueprints()) SetLanguage(Language::Blueprint);
     }
 
     void ScriptSession::SetProjectPath(const std::filesystem::path& projectPath) {
@@ -114,12 +139,19 @@ namespace vae {
                 ? projectPath.parent_path() / projectPath.parent_path().filename()
                 : std::filesystem::path(projectPath).replace_extension();
         m_Source = base;
-        m_Source += (m_Language == Language::Lua ? ".lua" : ".cpp");
+        // A drawn project's logic is inside its documents, so there is no file to name. The base
+        // path is kept anyway, because it is what the store and the app's sandbox folder are
+        // worked out from, and those are the same wherever the logic is written.
+        if (m_Language == Language::Lua)      m_Source += ".lua";
+        else if (m_Language == Language::Cpp) m_Source += ".cpp";
         m_Built = false;
         LoadSource();
     }
 
     std::filesystem::path ScriptSession::Artifact() const {
+        // A drawn project's logic ships inside the documents, which the app already carries. There
+        // is nothing else to build and nothing else to copy.
+        if (m_Language == Language::Blueprint) return {};
         if (m_Language == Language::Lua) return m_Source;
         std::filesystem::path out = m_Source;
         return out.replace_extension(platform::ModuleExtension());
@@ -140,7 +172,9 @@ namespace vae {
     }
 
     void ScriptSession::LoadSource() {
-        if (const auto text = FileSystem::ReadText(m_Source)) {
+        if (m_Language == Language::Blueprint) {
+            m_Buffer = kGraphNote;
+        } else if (const auto text = FileSystem::ReadText(m_Source)) {
             m_Buffer = *text;
         } else {
             m_Buffer = m_Language == Language::Lua ? kLuaTemplate : kCppTemplate;
@@ -151,11 +185,17 @@ namespace vae {
     }
 
     bool ScriptSession::HasSource() const {
+        // For a drawn project the question is whether anything has been drawn, which is a fact
+        // about the document rather than about the folder it is saved in.
+        if (m_Language == Language::Blueprint) return m_State && m_State->Doc().HasBlueprints();
         std::error_code ec;
         return !m_Source.empty() && std::filesystem::exists(m_Source, ec);
     }
 
     bool ScriptSession::CreateSource() {
+        // There is no file to write: a blueprint is made by drawing one in the Blueprint panel, and it is
+        // saved with the screen it drives.
+        if (m_Language == Language::Blueprint) return true;
         if (HasSource()) return true;
         if (!SaveSource()) return false;
         VAE_INFO("script: created {}", m_Source.filename().string());
@@ -163,6 +203,7 @@ namespace vae {
     }
 
     bool ScriptSession::SaveSource() {
+        if (m_Language == Language::Blueprint) { m_Dirty = false; return true; }
         if (!FileSystem::WriteText(m_Source, m_Buffer)) {
             VAE_ERROR("could not write {}", m_Source.string());
             return false;
@@ -219,11 +260,16 @@ namespace vae {
 
         // Nothing to build is not a failure. A project without a script is an ordinary project —
         // the widget library and declared navigation carry plenty on their own.
-        if (!m_Dirty && !HasSource()) {
+        if (m_Language != Language::Blueprint && !m_Dirty && !HasSource()) {
             m_Built = true;
             return true;
         }
         if (m_Dirty && !SaveSource()) return false;
+
+        if (m_Language == Language::Blueprint) {
+            m_Built = BuildBlueprints();
+            return m_Built;
+        }
 
         if (m_Language == Language::Cpp) {
             m_Built = script::NativeHost::Compile(m_Source, Artifact(), &m_Output);
@@ -249,8 +295,54 @@ namespace vae {
         return true;
     }
 
+    // Compiling every blueprint in the project, which for a drawn project is what "build" means: no
+    // file is produced, the answer is the diagnostics. Done against a host of its own so the one
+    // that is running is not disturbed by a check.
+    bool ScriptSession::BuildBlueprints() {
+        if (!m_State) return false;
+
+        script::BlueprintHost probe;
+        probe.Bind(m_Runtime.Api());
+        probe.Adopt(m_State->Doc());
+
+        std::string output;
+        m_Diagnostics.clear();
+        for (const script::BlueprintHost::Message& message : probe.Messages()) {
+            output += message.component + ": " + message.message + "\n";
+            Diagnostic diagnostic;
+            diagnostic.file = message.component;
+            diagnostic.line = static_cast<int>(message.node);
+            diagnostic.error = message.error;
+            diagnostic.message = message.message;
+            m_Diagnostics.push_back(std::move(diagnostic));
+        }
+        m_Output = output;
+        if (probe.ErrorCount() > 0) return false;
+
+        const std::size_t blueprints = probe.Components().size();
+        VAE_INFO("blueprint: {} blueprint{} compile", blueprints, blueprints == 1 ? "" : "s");
+        return true;
+    }
+
     bool ScriptSession::StartHosts() {
         m_Runtime.ClearHosts();
+        m_Blueprints = nullptr;
+
+        if (m_Language == Language::Blueprint) {
+            if (!m_State) return false;
+            auto host = CreateScope<script::BlueprintHost>();
+            host->Bind(m_Runtime.Api());
+            host->Adopt(m_State->Doc());
+            if (host->ErrorCount() > 0) {
+                m_Output = host->Messages().front().component + ": "
+                         + host->Messages().front().message;
+                VAE_ERROR("blueprint: {}", m_Output);
+                return false;
+            }
+            m_Blueprints = host.get();
+            m_Runtime.AddHost(std::move(host));
+            return true;
+        }
 
         // No script, no hosts. The runtime still mounts the screen, so navigation and every widget
         // behave exactly as they will in the player.
@@ -348,6 +440,7 @@ namespace vae {
         m_Debugger.Detach(m_Runtime);
         m_Runtime.Detach();
         m_Runtime.ClearHosts();
+        m_Blueprints = nullptr;
 
         // Put the design back. Restored in place so every observer — the view tree above all —
         // keeps its subscription; replacing the Document object would silently unhook them.
@@ -362,6 +455,11 @@ namespace vae {
     bool ScriptSession::HotReload() {
         if (!m_Playing) return Build();
         if (!Build()) return false;
+
+        // A blueprint host holds a copy of every blueprint it compiled, so it has to be handed the
+        // document again before the reload — otherwise the reload recompiles the blueprint as it was
+        // when Play started, which is the one thing a reload is for changing.
+        if (m_Blueprints && m_State) m_Blueprints->Adopt(m_State->Doc());
 
         std::string error;
         if (m_Runtime.Reload(&error)) {
