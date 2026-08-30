@@ -33,13 +33,49 @@ namespace vae::doc {
         return std::nullopt;
     }
 
-    Document::Document() = default;
+    const std::vector<Breakpoint>& DefaultBreakpoints() {
+        // Three names, two numbers. Chosen because they are the three shapes an app actually has —
+        // a phone, a tablet or a narrow window, and a desktop — and because a designer has to be
+        // able to hold the whole set in their head. `expanded` is everything wider than `medium`
+        // and needs no entry: it is what "no breakpoint matched" means.
+        static const std::vector<Breakpoint> kDefaults{
+            { "medium",  1024.0f },
+            { "compact",  600.0f },
+        };
+        return kDefaults;
+    }
+
+    Document::Document() : m_Breakpoints(DefaultBreakpoints()) {}
+
+    void Document::SetBreakpoints(std::vector<Breakpoint> breakpoints) {
+        // Widest first, so applying them in order lands the narrowest last and the narrowest wins.
+        std::sort(breakpoints.begin(), breakpoints.end(),
+                  [](const Breakpoint& a, const Breakpoint& b) { return a.upTo > b.upTo; });
+        m_Breakpoints = std::move(breakpoints);
+        ++m_Revision;
+    }
+
+    u32 Document::BreakpointsAt(f32 width) const {
+        u32 mask = 0;
+        for (std::size_t i = 0; i < m_Breakpoints.size() && i < 32; ++i)
+            if (width <= m_Breakpoints[i].upTo) mask |= 1u << i;
+        return mask;
+    }
+
+    std::string_view Document::NarrowestAt(f32 width) const {
+        // Sorted widest-first, so the last match is the narrowest.
+        std::string_view narrowest;
+        for (const Breakpoint& breakpoint : m_Breakpoints)
+            if (width <= breakpoint.upTo) narrowest = breakpoint.name;
+        return narrowest;
+    }
 
     void Document::Clear() {
         PopIdScope();
         m_Nodes.clear();
         m_Roots.clear();
         m_Tokens.clear();
+        m_Breakpoints = DefaultBreakpoints();
         m_Assets.clear();
         ++m_Revision;
     }

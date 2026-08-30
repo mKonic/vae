@@ -19,6 +19,26 @@ namespace vae::doc {
 
     enum class Theme : u8 { Light, Dark };
 
+    // A width a design answers to, by name.
+    //
+    // `upTo` is a maximum, the way a CSS media query is: `compact` applies while the box is 600
+    // wide or less. More than one can be true at once — at 500 both `compact` and `medium` apply —
+    // and the narrowest wins, because it is the more specific statement about the same box.
+    //
+    // A node answers with an overlay named after the breakpoint: `compact:axis` in memory,
+    // `compact.axis` on disk. That is the shape `hovered:fill` and `tone=danger:fill` already use,
+    // because it is the same idea — a property whose value depends on a condition the node did not
+    // choose.
+    struct Breakpoint {
+        std::string name;
+        f32 upTo = 0.0f;
+        bool operator==(const Breakpoint&) const = default;
+    };
+
+    // What a project gets if it says nothing. Not a law: a document that declares its own replaces
+    // these outright, and the writer only puts them in the file when they differ.
+    const std::vector<Breakpoint>& DefaultBreakpoints();
+
     // The rows an app hands to a repeated container. A repeat on its own is one node drawn N
     // times, which is a placeholder; with rows behind it every copy draws a row, which is what a
     // list of messages, of channels or of people actually is.
@@ -124,6 +144,17 @@ namespace vae::doc {
         void ApplyComponentProperties(Uuid component, Uuid instance, PropBag& bag) const;
 
         // --- tokens ----------------------------------------------------------------------------
+        // --- breakpoints ------------------------------------------------------------------------
+        // Kept sorted widest-first, which is the order overlays apply in: every matching breakpoint
+        // is applied and the narrowest lands last, so it wins.
+        const std::vector<Breakpoint>& Breakpoints() const { return m_Breakpoints; }
+        void SetBreakpoints(std::vector<Breakpoint> breakpoints);
+        // Which breakpoints a box this wide is inside, as a bitmask of indices into Breakpoints().
+        u32 BreakpointsAt(f32 width) const;
+        // The one that decides, or empty — the narrowest that matches, which is what a designer
+        // means by "which breakpoint am I looking at".
+        std::string_view NarrowestAt(f32 width) const;
+
         void SetToken(const std::string& name, Token token);
         void RemoveToken(const std::string& name);
         const Token* FindToken(std::string_view name) const;
@@ -270,6 +301,7 @@ namespace vae::doc {
         std::unordered_map<Uuid, Node> m_Nodes;
         std::vector<Uuid> m_Roots;
         std::map<std::string, Token> m_Tokens;
+        std::vector<Breakpoint> m_Breakpoints;
         std::vector<Asset> m_Assets;
         Theme m_Theme = Theme::Dark;
         Uuid m_StartScreen = Uuid::Invalid();

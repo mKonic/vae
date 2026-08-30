@@ -76,6 +76,15 @@ namespace vae::ui {
             // always wins — that is the whole rule.
             doc::PropBag inherited;
             StateMask state = 0;
+            // Which breakpoints this view's own box is inside, as a bitmask of indices into the
+            // document's list. A container query, not a screen query: a component answers to the
+            // box it was given, so a sidebar card goes vertical below 400px whether the window is
+            // 400px or the card is.
+            u32 breakpoints = 0;
+            // The style as authored, before any breakpoint overlay. Kept because the overlay is
+            // recomputed from scratch each layout — applying one on top of the last one's answer
+            // would ratchet.
+            layout::LayoutStyle baseLayout{};
 
             Vec2 scroll{ 0.0f, 0.0f };
             // How far short of filling the box its content falls, for a container that fills from
@@ -104,6 +113,12 @@ namespace vae::ui {
         void Clear();
 
         void Layout(Vec2 available);
+        // Lays the root out at a stated width whatever its own style says. Design time only:
+        // previewing a breakpoint means seeing the screen at that width, and a screen with a
+        // stated width would otherwise ignore the box it was offered and show nothing different.
+        // Zero is off, which is every running app.
+        void SetPreviewWidth(f32 width);
+        f32 PreviewWidth() const { return m_PreviewWidth; }
         // Where the root sits in absolute space. Overlays use it: a popover lays itself out at its
         // hug size and is only then placed against its anchor.
         void SetOrigin(Vec2 origin);
@@ -160,6 +175,14 @@ namespace vae::ui {
         // describe how text looks — set a font on a screen and every label under it follows,
         // instead of every label having to say it. A node that names its own value keeps it.
         static const std::vector<doc::Prop>& Inheritable();
+
+        // Which breakpoints a view is inside, and the narrowest of them by name — what the canvas
+        // shows and what the Inspector offers overlays for.
+        u32 BreakpointsOf(u32 view) const;
+        std::string_view NarrowestBreakpoint(u32 view) const;
+        // Whether any node in this tree authors a breakpoint overlay at all. When nothing does, the
+        // second layout pass is skipped entirely and a design without breakpoints pays nothing.
+        bool HasBreakpointOverlays() const { return m_HasBreakpoints; }
         // What `view` would inherit if it named nothing itself. For the Inspector, which has to
         // show the value a field will actually draw with rather than an empty box.
         const doc::PropBag& InheritedProps(u32 view) const;
@@ -220,6 +243,9 @@ namespace vae::ui {
         // stack. A rebuild drops these and the behaviors' Sync puts them back.
         void SetLayoutStyle(u32 view, const layout::LayoutStyle& style);
         const layout::LayoutStyle& LayoutStyleOf(u32 view) const;
+        // The style a solve starts from — what the node says, except that the root answers to the
+        // width being previewed when there is one.
+        layout::LayoutStyle BaseLayoutOf(u32 view) const;
         void SetRuntimeVisible(u32 view, bool visible);
         // Scrolling is runtime state, not a document edit. A wheel tick that dirtied the document
         // would rebuild the tree and land on the undo stack, which is not what scrolling is.
@@ -315,6 +341,13 @@ namespace vae::ui {
         // has moved re-derives an answer that is already there, which was the entire per-frame cost
         // of an app sitting still — 1.0 ms at 4,000 views, every frame, for nothing.
         bool m_NeedsSolve = true;
+        // Set while building: does any node author a `<name>:<field>` overlay for a breakpoint the
+        // document declares? Almost no design does, and the ones that do pay for one extra solve.
+        bool m_HasBreakpoints = false;
+        f32 m_PreviewWidth = 0.0f;   // design-time only; 0 is the root's own width
+        // Reads every view's settled width, works out which breakpoints it is inside, and restyles
+        // the ones that changed. True when anything moved, which is when the solve has to run again.
+        bool ApplyBreakpoints();
         Vec2 m_Available{ 0.0f, 0.0f };
         Vec2 m_Origin{ 0.0f, 0.0f };
     };

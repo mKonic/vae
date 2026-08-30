@@ -118,6 +118,12 @@ namespace vae {
         // a page to sit on. Without this, opening one to edit it shows a zero-by-zero canvas.
         if (root->layout.width.mode  != layout::SizeMode::Fixed) size.x = 1280.0f;
         if (root->layout.height.mode != layout::SizeMode::Fixed) size.y = 800.0f;
+
+        // Designing at a breakpoint draws the screen at that width, because an overlay you cannot
+        // see is one you cannot judge. Just inside the widest width that still matches: the far
+        // edge of the range is the case a layout has to survive, and it is the one a designer
+        // reaches for the breakpoint to fix.
+        if (const f32 preview = state.PreviewWidth(); preview > 1.0f) size.x = preview;
         return size;
     }
 
@@ -153,6 +159,10 @@ namespace vae {
         // Whatever language the editor is previewing, every frame: the table lives in the editor
         // state and is swapped there, and the tree redraws from it.
         m_Host.Tree().SetStrings(state.Strings());
+
+        // A screen with a stated width ignores the box it is offered, so previewing a breakpoint
+        // has to force the root's width rather than merely suggest it.
+        m_Host.Tree().SetPreviewWidth(state.PreviewWidth());
 
         const Vec2 available = DesignSize(state);
         m_Host.Update(available, dt);

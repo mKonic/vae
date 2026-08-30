@@ -43,6 +43,7 @@ namespace vae::ui {
 
     void ViewTree::Clear() {
         m_NeedsSolve = true;
+        m_HasBreakpoints = false;
         m_Views.clear();
         m_Frames.clear();
         m_Behaviors.clear();
@@ -135,6 +136,18 @@ namespace vae::ui {
                     if (const doc::Value* value = above.props.Find(prop))
                         view.inherited.Set(prop, *value);
             }
+
+            // Does anything here answer to a width? Checked once while building rather than per
+            // layout, because the answer is no for almost every design and the pass it gates is a
+            // whole extra solve.
+            if (!m_HasBreakpoints && !view.props.Custom().empty())
+                for (const doc::Breakpoint& breakpoint : m_Document->Breakpoints()) {
+                    const std::string prefix = breakpoint.name + ':';
+                    for (const auto& [key, unused] : view.props.Custom())
+                        if (key.starts_with(prefix)) { m_HasBreakpoints = true; break; }
+                    if (m_HasBreakpoints) break;
+                }
+            view.baseLayout = node.layout;
 
             const u32 index = static_cast<u32>(m_Views.size());
             const u32 parentLayout = node.parent == UINT32_MAX
@@ -260,7 +273,26 @@ namespace vae::ui {
                 m_Layout.SetMeasure(view.layoutNode, [this, i](Vec2 box) { return MeasureText(i, box); });
         }
 
+        // Pushed every solve rather than on the change, so turning the preview off restores the
+        // root's own width without anyone having to remember to.
+        m_Layout.SetStyle(m_Views[m_Root].layoutNode, BaseLayoutOf(m_Root));
         m_Layout.Compute(m_Views[m_Root].layoutNode, available);
+
+        // A breakpoint is a fact about a box, and the box is what the solve just decided — so the
+        // answer needs one more solve to take effect, and that solve can change the answer.
+        // Bounded rather than iterated to a fixed point: two rounds settle every layout that
+        // settles at all, and a design that flips between two widths has asked for something
+        // contradictory rather than earned more rounds.
+        if (m_HasBreakpoints) {
+            constexpr int kRounds = 2;
+            int round = 0;
+            for (; round < kRounds && ApplyBreakpoints(); ++round)
+                m_Layout.Compute(m_Views[m_Root].layoutNode, available);
+            if (round == kRounds && ApplyBreakpoints())
+                VAE_CORE_WARN("layout: breakpoints did not settle in {} rounds — a node is "
+                              "changing the width its own query is answered by", kRounds);
+        }
+
         m_LayoutDirty = false;
         ComputeFrames();
 
@@ -280,6 +312,41 @@ namespace vae::ui {
             }
         }
         m_ScrollToEnd.clear();
+    }
+
+    bool ViewTree::ApplyBreakpoints() {
+        const std::vector<doc::Breakpoint>& breakpoints = m_Document->Breakpoints();
+        bool changed = false;
+        for (u32 i = 0; i < m_Views.size(); ++i) {
+            View& view = m_Views[i];
+            // The width the node was GIVEN, which is the honest thing to query: a node sized to
+            // its own content has no width to answer with until its content is laid out, and
+            // asking anyway is how a container query goes circular.
+            const f32 width = m_Layout.NodeRect(view.layoutNode).size.x;
+            const u32 mask = m_Document->BreakpointsAt(width);
+            const layout::LayoutStyle styled =
+                ApplyLayoutBreakpoints(BaseLayoutOf(i), view.props, breakpoints, mask);
+
+            if (mask != view.breakpoints) { view.breakpoints = mask; changed = true; }
+            if (!(m_Layout.Style(view.layoutNode) == styled)) {
+                m_Layout.SetStyle(view.layoutNode, styled);
+                changed = true;
+            }
+        }
+        return changed;
+    }
+
+    void ViewTree::SetPreviewWidth(f32 width) {
+        if (m_PreviewWidth == width) return;
+        m_PreviewWidth = width;
+        InvalidateLayout();
+    }
+
+    layout::LayoutStyle ViewTree::BaseLayoutOf(u32 view) const {
+        layout::LayoutStyle style = m_Views[view].baseLayout;
+        if (view == m_Root && m_PreviewWidth > 1.0f)
+            style.width = layout::Size::Px(m_PreviewWidth);
+        return style;
     }
 
     void ViewTree::SetOrigin(Vec2 origin) {
@@ -376,6 +443,16 @@ namespace vae::ui {
                     return m_Document->ResolveValue(*value);
             }
         }
+        // A width the node is answering to beats what it says unconditionally, and loses to a
+        // state, which is the more immediate statement about the same node.
+        if (node.breakpoints != 0 && !node.props.Custom().empty()) {
+            const std::vector<doc::Breakpoint>& breakpoints = m_Document->Breakpoints();
+            for (std::size_t i = breakpoints.size(); i-- > 0;) {
+                if ((node.breakpoints & (1u << i)) == 0) continue;
+                if (const doc::Value* value = node.props.Find(BreakpointKey(breakpoints[i].name, prop)))
+                    return m_Document->ResolveValue(*value);
+            }
+        }
         if (const doc::Value* value = node.props.Find(prop)) {
             const doc::Value resolved = m_Document->ResolveValue(*value);
             if (const f32 tint = StateTint(view, prop); tint != 0.0f)
@@ -408,6 +485,8 @@ namespace vae::ui {
         // each layer is allowed to be overruled by a more specific decision.
         doc::PropBag bag = m_Views[view].inherited;
         m_Views[view].props.MergeInto(bag);
+        ApplyBreakpointOverlay(bag, m_Views[view].props, m_Document->Breakpoints(),
+                               m_Views[view].breakpoints);
         ApplyStateOverlay(bag, m_Views[view].props, EffectiveState(view));
 
         doc::PropBag out;
@@ -518,6 +597,15 @@ namespace vae::ui {
             doc::Prop::LetterSpacing, doc::Prop::TextAlign, doc::Prop::TextWrap,
         };
         return kProps;
+    }
+
+    u32 ViewTree::BreakpointsOf(u32 view) const {
+        return Valid(view) ? m_Views[view].breakpoints : 0u;
+    }
+
+    std::string_view ViewTree::NarrowestBreakpoint(u32 view) const {
+        if (!Valid(view) || !m_Document) return {};
+        return m_Document->NarrowestAt(m_Layout.NodeRect(m_Views[view].layoutNode).size.x);
     }
 
     const doc::PropBag& ViewTree::InheritedProps(u32 view) const {

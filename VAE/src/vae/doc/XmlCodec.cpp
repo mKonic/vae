@@ -245,7 +245,8 @@ namespace vae::doc {
         // writes nothing.
         void LayoutAttrs(const layout::LayoutStyle& s, std::vector<Attr>& out) {
             for (const LayoutField& field : LayoutFields())
-                if (auto value = field.write(s)) out.push_back({ std::string(field.name), *value });
+                if (field.differs(s, layout::LayoutStyle{}))
+                    out.push_back({ std::string(field.name), field.text(s) });
         }
 
         // `skipText` is set when the text property is going into the element body instead, and
@@ -452,6 +453,16 @@ namespace vae::doc {
             w.Open("tokens", {}, false);
             for (const auto& [name, attrs] : tokens) w.Open("token", attrs, true);
             w.Close("tokens");
+        }
+
+        // The widths this design answers to, written only when the project changed them — the same
+        // "write only what the reader cannot work out" rule the rest of the format follows.
+        if (document.Breakpoints() != DefaultBreakpoints()) {
+            w.Open("breakpoints", {}, false);
+            for (const Breakpoint& breakpoint : document.Breakpoints())
+                w.Open("at", { { "name", breakpoint.name },
+                               { "upTo", text::Number(breakpoint.upTo) } }, true);
+            w.Close("breakpoints");
         }
 
         // Assets are the project's, but the project is one document today, so they travel with it.
@@ -735,6 +746,20 @@ namespace vae::doc {
                     token.description = t.attribute("desc").as_string();
                     out.SetToken(t.attribute("name").as_string(), std::move(token));
                 }
+                continue;
+            }
+            if (tag == "breakpoints") {
+                std::vector<Breakpoint> breakpoints;
+                for (pugi::xml_node b : el.children("at")) {
+                    Breakpoint breakpoint;
+                    breakpoint.name = b.attribute("name").as_string();
+                    if (const auto upTo = text::ParseNumber(b.attribute("upTo").as_string()))
+                        breakpoint.upTo = *upTo;
+                    if (!breakpoint.name.empty()) breakpoints.push_back(std::move(breakpoint));
+                }
+                // An empty <breakpoints/> is a project saying it wants none, which is not the same
+                // as a project that said nothing and gets the defaults.
+                out.SetBreakpoints(std::move(breakpoints));
                 continue;
             }
             if (tag == "asset") {

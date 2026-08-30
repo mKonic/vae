@@ -12,32 +12,41 @@ namespace vae::fields {
         }
     }
 
+    // Every field reads through FieldValue and writes through FieldKey, so picking a breakpoint in
+    // the Inspector is the whole of what makes these author an overlay instead of the base. The
+    // value shown is the one in effect at that width, which is why the field is never blank.
     bool Number(EditorState& state, Uuid node, const char* label, doc::Prop prop, f32 fallback,
                 f32 speed, f32 min, f32 max) {
-        f32 value = AsNumber(state.GetProp(node, prop), fallback);
+        f32 value = AsNumber(state.FieldValue(node, prop), fallback);
         Label(label);
         ImGui::PushID(static_cast<int>(prop));
         const bool changed = ImGui::DragFloat("##v", &value, speed, min, max, "%.2f");
-        if (changed) state.SetProp(node, prop, value);
+        if (changed) state.SetProp(node, state.FieldKey(prop), value);
         if (ImGui::IsItemDeactivatedAfterEdit()) state.EndGesture();
         ImGui::PopID();
         return changed;
     }
 
     bool Toggle(EditorState& state, Uuid node, const char* label, doc::Prop prop, bool fallback) {
-        const doc::Value current = state.GetProp(node, prop);
+        const doc::Value current = state.FieldValue(node, prop);
         bool value = fallback;
         if (const bool* b = std::get_if<bool>(&current)) value = *b;
         Label(label);
         ImGui::PushID(static_cast<int>(prop));
         const bool changed = ImGui::Checkbox("##v", &value);
-        if (changed) { state.SetProp(node, prop, value); state.EndGesture(); }
+        if (changed) { state.SetProp(node, state.FieldKey(prop), value); state.EndGesture(); }
         ImGui::PopID();
         return changed;
     }
 
     bool Colour(EditorState& state, Uuid node, const char* label, doc::Prop prop, Color fallback) {
-        return Colour(state, node, label, doc::PropName(prop), prop, fallback);
+        // At a breakpoint the swatch starts from the colour the node already is rather than from
+        // the caller's default — the same courtesy the States section pays a hover overlay.
+        if (!state.Breakpoint().empty()) {
+            const doc::Value base = state.Doc().ResolveValue(state.GetProp(node, prop));
+            if (const Color* c = std::get_if<Color>(&base)) fallback = *c;
+        }
+        return Colour(state, node, label, state.FieldKey(prop), prop, fallback);
     }
 
     // `key` is what a write is filed under: the property itself, or a state overlay like
@@ -147,7 +156,7 @@ namespace vae::fields {
 
     bool Text(EditorState& state, Uuid node, const char* label, doc::Prop prop,
               const char* hint, bool multiline) {
-        const doc::Value current = state.GetProp(node, prop);
+        const doc::Value current = state.FieldValue(node, prop);
         std::string value;
         if (const auto* s = std::get_if<std::string>(&current)) value = *s;
 
@@ -163,7 +172,7 @@ namespace vae::fields {
             changed = ImGui::InputTextWithHint("##v", hint, buffer, sizeof buffer);
         else
             changed = ImGui::InputText("##v", buffer, sizeof buffer);
-        if (changed) state.SetProp(node, prop, std::string(buffer));
+        if (changed) state.SetProp(node, state.FieldKey(prop), std::string(buffer));
         if (ImGui::IsItemDeactivatedAfterEdit()) state.EndGesture();
         ImGui::PopID();
         return changed;
@@ -171,7 +180,7 @@ namespace vae::fields {
 
     bool Choice(EditorState& state, Uuid node, const char* label, doc::Prop prop,
                 const char* const* options, int count, int fallback) {
-        const doc::Value current = state.GetProp(node, prop);
+        const doc::Value current = state.FieldValue(node, prop);
         int index = fallback;
         if (const auto* s = std::get_if<std::string>(&current)) {
             for (int i = 0; i < count; ++i)
@@ -180,7 +189,10 @@ namespace vae::fields {
         Label(label);
         ImGui::PushID(static_cast<int>(prop));
         const bool changed = ImGui::Combo("##v", &index, options, count);
-        if (changed) { state.SetProp(node, prop, std::string(options[index])); state.EndGesture(); }
+        if (changed) {
+            state.SetProp(node, state.FieldKey(prop), std::string(options[index]));
+            state.EndGesture();
+        }
         ImGui::PopID();
         return changed;
     }

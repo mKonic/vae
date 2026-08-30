@@ -1,6 +1,8 @@
 #pragma once
 
+#include "vae/doc/Document.h"
 #include "vae/doc/PropBag.h"
+#include "vae/layout/LayoutTypes.h"
 
 namespace vae::ui {
 
@@ -84,5 +86,28 @@ namespace vae::ui {
     // Overlays every active state's properties onto `into`, weakest first, so a disabled hovered
     // control looks disabled and a pressed one beats its own hover styling.
     void ApplyStateOverlay(doc::PropBag& into, const doc::PropBag& source, StateMask state);
+
+    // A width a node answers to, spelled the way a state is: "compact:axis", "compact:padding".
+    // Same shape because it is the same idea, and because a designer who has authored one overlay
+    // has already learned the other.
+    std::string BreakpointKey(std::string_view breakpoint, doc::Prop prop);
+    std::string BreakpointKey(std::string_view breakpoint, std::string_view field);
+
+    // The same overlay, for the breakpoints in `mask` — indices into `breakpoints`, which is sorted
+    // widest-first, so applying in order lands the narrowest last and the narrowest wins.
+    void ApplyBreakpointOverlay(doc::PropBag& into, const doc::PropBag& source,
+                                const std::vector<doc::Breakpoint>& breakpoints, u32 mask);
+
+    // And the half a state overlay never needed: the layout fields. A row that becomes a column is
+    // the entire point of a breakpoint, and `axis` is not a property — it lives on the node's
+    // LayoutStyle, which no overlay could reach until doc::LayoutFields existed.
+    //
+    // `width` and `height` are deliberately NOT applied on the axis the query was made against:
+    // the node's box is what was measured to decide which breakpoints match, and letting an
+    // overlay change it is asking the layout to disagree with itself.
+    layout::LayoutStyle ApplyLayoutBreakpoints(const layout::LayoutStyle& base,
+                                               const doc::PropBag& source,
+                                               const std::vector<doc::Breakpoint>& breakpoints,
+                                               u32 mask);
 
 }

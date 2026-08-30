@@ -508,6 +508,62 @@ namespace vae {
             Check(state.Doc().Find(a)->layout.padding.left != 12.0f, "and undoes");
         }
 
+        // Picking a breakpoint puts the whole Inspector into a mode: every field reads what the
+        // design looks like at that width and writes an overlay instead of the base. This is the
+        // plumbing under that — the mode itself, what a field is filed under, and the canvas
+        // drawing the width being designed for.
+        void TestBreakpointAuthoring() {
+            Section("designing at a breakpoint");
+            Driver driver;
+            EditorState& state = driver.State();
+
+            const Uuid card = PlaceFixed(state, "Button", { 40.0f, 40.0f }, { 320.0f, 48.0f });
+            state.SetProp(card, doc::Prop::FontSize, 18.0f);
+            state.EndGesture();
+
+            Check(state.Breakpoint().empty(), "the Inspector starts on the base");
+            Check(state.FieldKey(doc::Prop::FontSize) == "fontSize",
+                  "and a field there is filed under the property itself");
+
+            state.SetBreakpoint("compact");
+            Check(state.Breakpoint() == "compact", "a shipped breakpoint can be picked");
+            Check(state.FieldKey(doc::Prop::FontSize) == "compact:fontSize",
+                  "and now a field writes an overlay");
+
+            // Nothing overlaid yet, so the field shows what the node already is rather than blank —
+            // an empty field would read as "unset" when the answer is "18, from the base".
+            const doc::Value shown = state.FieldValue(card, doc::Prop::FontSize);
+            Check(std::holds_alternative<f32>(shown) && std::get<f32>(shown) == 18.0f,
+                  "an unset overlay shows the value in effect");
+
+            state.SetProp(card, state.FieldKey(doc::Prop::FontSize), 12.0f);
+            state.EndGesture();
+            const doc::Value overlaid = state.FieldValue(card, doc::Prop::FontSize);
+            Check(std::holds_alternative<f32>(overlaid) && std::get<f32>(overlaid) == 12.0f,
+                  "and once set, the overlay is what the field shows");
+            const doc::Value base = state.GetProp(card, doc::Prop::FontSize);
+            Check(std::holds_alternative<f32>(base) && std::get<f32>(base) == 18.0f,
+                  "with the base left exactly as it was");
+
+            Check(state.PreviewWidth() == 600.0f, "the canvas draws the width being designed for");
+            state.SetBreakpoint({});
+            Check(state.PreviewWidth() == 0.0f, "and the screen's own size at the base");
+
+            // A name the document does not define is the base. Otherwise renaming a breakpoint
+            // leaves the Inspector authoring into a width nothing will ever match.
+            state.SetBreakpoint("nonesuch");
+            Check(state.Breakpoint().empty(), "a breakpoint that is not defined is the base");
+
+            state.Execute(CreateScope<doc::SetBreakpointsCommand>(
+                std::vector<doc::Breakpoint>{ { "phone", 480.0f } }));
+            state.EndGesture();
+            state.SetBreakpoint("phone");
+            Check(state.PreviewWidth() == 480.0f, "a project names its own");
+            state.Undo();
+            Check(state.Doc().Breakpoints() == doc::DefaultBreakpoints(),
+                  "and editing the set undoes like any other change");
+        }
+
         void TestSaveLoad() {
             Section("save and load");
             Driver driver;
@@ -2431,6 +2487,7 @@ namespace vae {
         TestResize();
         TestMarquee();
         TestInspectorRoundTrip();
+        TestBreakpointAuthoring();
         TestSaveLoad();
         TestViewport();
         TestDeleteAndDuplicate();

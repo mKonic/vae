@@ -6,6 +6,7 @@
 #include "vae/doc/Serializer.h"
 #include "vae/doc/Strings.h"
 #include "vae/ui/Library.h"
+#include "vae/ui/Widget.h"
 
 #include <string>
 #include <vector>
@@ -1132,26 +1133,25 @@ TEST(layout_fields, the_table_knows_every_field_and_each_one_round_trips) {
 
     CHECK_EQ(LayoutFields().size(), std::size_t(19));
 
-    std::size_t written = 0;
+    std::size_t moved = 0;
     for (const LayoutField& field : LayoutFields()) {
-        // A field at its default writes nothing — that rule lives in the table, once.
-        CHECK_MESSAGE(!field.write(defaults).has_value(),
-                      std::string("'") + std::string(field.name) + "' wrote a default");
-
-        const auto text = field.write(full);
-        CHECK_MESSAGE(text.has_value(),
-                      std::string("'") + std::string(field.name) + "' wrote nothing when set");
-        if (!text) continue;
-        ++written;
+        // A style compared with itself disagrees about nothing, which is what stops the codec
+        // writing a default and the Inspector writing an overlay that changes nothing.
+        CHECK_MESSAGE(!field.differs(defaults, defaults),
+                      std::string("'") + std::string(field.name) + "' differs from itself");
+        CHECK_MESSAGE(field.differs(full, defaults),
+                      std::string("'") + std::string(field.name) + "' was not set by EverythingSet");
+        ++moved;
 
         // ...and what it wrote reads back as the same value, into a style that started empty.
+        const std::string text = field.text(full);
         layout::LayoutStyle back;
-        CHECK_MESSAGE(field.read(back, *text),
-                      std::string("'") + std::string(field.name) + "' cannot read \"" + *text + "\"");
-        CHECK_MESSAGE(field.write(back) == text,
+        CHECK_MESSAGE(field.read(back, text),
+                      std::string("'") + std::string(field.name) + "' cannot read \"" + text + "\"");
+        CHECK_MESSAGE(!field.differs(back, full),
                       std::string("'") + std::string(field.name) + "' did not round trip");
     }
-    CHECK_EQ(written, LayoutFields().size());
+    CHECK_EQ(moved, LayoutFields().size());
 }
 
 TEST(layout_fields, a_name_that_is_not_a_layout_field_is_not_found) {
@@ -1620,6 +1620,45 @@ TEST(xml, tokens_and_assets_travel_with_the_document) {
     CHECK_EQ(loaded.Assets().size(), 1u);
     CHECK_EQ(loaded.Assets()[0].id, asset);
     CHECK_EQ(loaded.Assets()[0].path, std::string("art/logo.png"));
+}
+
+TEST(xml, breakpoints_are_written_only_when_a_project_disagrees_with_the_defaults) {
+    Document doc;
+    const Uuid screen = doc.CreateNode(NodeKind::Screen, Uuid::Invalid(), "Home");
+    doc.SetProp(screen, ui::BreakpointKey("compact", "axis"), std::string("column"));
+
+    // The shipped set is what most projects want, so it is not worth a line in every file.
+    CHECK(ToXmlKeepingIds(doc).find("<breakpoints>") == std::string::npos);
+    // The overlay itself still travels — a `.` on disk, because XML reads `:` as a namespace.
+    CHECK(ToXmlKeepingIds(doc).find("compact.axis=\"column\"") != std::string::npos);
+
+    doc.SetBreakpoints({ { "phone", 480.0f }, { "tablet", 900.0f } });
+    const std::string xml = ToXmlKeepingIds(doc);
+    CHECK(xml.find("<at name=\"tablet\" upTo=\"900\"/>") != std::string::npos);
+
+    Document loaded;
+    std::string error;
+    CHECK_MESSAGE(Serializer::FromXml(xml, loaded, &error), error);
+    CHECK(loaded.Breakpoints() == doc.Breakpoints());
+    // Widest first, whatever order they were named in, because "the narrowest match wins" is a
+    // walk backwards over this vector.
+    CHECK_EQ(loaded.Breakpoints()[0].name, std::string("tablet"));
+    const Value* axis = loaded.Find(screen)->props.Find(ui::BreakpointKey("compact", "axis"));
+    CHECK(axis != nullptr);
+    CHECK_EQ(std::get<std::string>(*axis), std::string("column"));
+}
+
+TEST(xml, a_project_that_wants_no_breakpoints_can_say_so) {
+    // Empty is a decision, and it has to survive the trip — otherwise loading a file that says
+    // "none" hands back the defaults, which is the opposite of what it says.
+    Document doc;
+    doc.CreateNode(NodeKind::Screen, Uuid::Invalid(), "Home");
+    doc.SetBreakpoints({});
+
+    Document loaded;
+    std::string error;
+    CHECK_MESSAGE(Serializer::FromXml(ToXmlKeepingIds(doc), loaded, &error), error);
+    CHECK(loaded.Breakpoints().empty());
 }
 
 TEST(xml, sample_rows_get_an_element_rather_than_an_escaped_attribute) {

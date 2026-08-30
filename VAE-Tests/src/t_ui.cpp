@@ -163,6 +163,194 @@ namespace {
 
 // ------------------------------------------------------------------ state overlays
 
+// ---------------------------------------------------------------------- breakpoints
+
+namespace {
+
+    // A shell that fills the screen, with a fixed sidebar and a filling body. The layout every app
+    // has, and the one a narrow window has to rearrange.
+    struct Shell {
+        Ui ui;
+        Uuid shell, sidebar, body;
+
+        explicit Shell(f32 screenWidth = 1400.0f) {
+            ui.size = { screenWidth, 800.0f };
+            doc::Node* screen = ui.document.Find(ui.screen);
+            screen->layout.mode = layout::LayoutMode::Stack;
+            screen->layout.width = layout::Size::Px(screenWidth);
+            screen->layout.height = layout::Size::Px(800.0f);
+
+            shell = ui.document.CreateNode(doc::NodeKind::Frame, ui.screen, "Shell");
+            doc::Node* s = ui.document.Find(shell);
+            s->layout.mode = layout::LayoutMode::Stack;
+            s->layout.axis = layout::Axis::Row;
+            s->layout.width = layout::Size::Fill();
+            s->layout.height = layout::Size::Fill();
+            s->layout.gap = 24.0f;
+            s->layout.padding = Edges(32.0f);
+
+            // Both children are rows too, so "did this one turn into a column?" is a question
+            // each of them can answer differently — which is the whole of the container-query
+            // test below. A default-Column child could not tell the two answers apart.
+            sidebar = ui.document.CreateNode(doc::NodeKind::Frame, shell, "Sidebar");
+            doc::Node* side = ui.document.Find(sidebar);
+            side->layout.mode = layout::LayoutMode::Stack;
+            side->layout.axis = layout::Axis::Row;
+            side->layout.width = layout::Size::Px(280.0f);
+            side->layout.height = layout::Size::Fill();
+
+            body = ui.document.CreateNode(doc::NodeKind::Frame, shell, "Body");
+            doc::Node* b = ui.document.Find(body);
+            b->layout.mode = layout::LayoutMode::Stack;
+            b->layout.axis = layout::Axis::Row;
+            b->layout.width = layout::Size::Fill();
+            b->layout.height = layout::Size::Fill();
+            ui.Frame();
+        }
+
+        void Width(f32 w) {
+            ui.size = { w, 800.0f };
+            ui.document.Find(ui.screen)->layout.width = layout::Size::Px(w);
+            ui.document.Touch(ui.screen);
+            ui.Frame();
+        }
+        const layout::LayoutStyle& StyleOf(Uuid node) const {
+            return ui.host.Tree().LayoutStyleOf(ui.ViewOfPlain(node));
+        }
+    };
+
+}
+
+TEST(breakpoints, a_row_becomes_a_column_when_its_own_box_gets_narrow) {
+    // The entire point. `axis` is a LayoutStyle field, not a property, so this is the thing no
+    // overlay could reach before doc::LayoutFields existed.
+    Shell app;
+    app.ui.document.SetProp(app.shell, BreakpointKey("compact", "axis"), std::string("column"));
+    app.ui.document.SetProp(app.shell, BreakpointKey("compact", "gap"), std::string("8"));
+    app.ui.document.Touch(app.shell);
+    app.ui.Frame();
+
+    CHECK(app.StyleOf(app.shell).axis == layout::Axis::Row);
+    CHECK_EQ(app.StyleOf(app.shell).gap, 24.0f);
+
+    app.Width(500.0f);
+    CHECK(app.StyleOf(app.shell).axis == layout::Axis::Column);
+    CHECK_EQ(app.StyleOf(app.shell).gap, 8.0f);
+
+    // And back: the overlay is recomputed from the authored style every layout, never stacked on
+    // last frame's answer.
+    app.Width(1400.0f);
+    CHECK(app.StyleOf(app.shell).axis == layout::Axis::Row);
+    CHECK_EQ(app.StyleOf(app.shell).gap, 24.0f);
+}
+
+TEST(breakpoints, the_narrowest_match_wins) {
+    Shell app;
+    app.ui.document.SetProp(app.shell, BreakpointKey("medium", "padding"), std::string("16"));
+    app.ui.document.SetProp(app.shell, BreakpointKey("compact", "padding"), std::string("8"));
+    app.ui.document.Touch(app.shell);
+    app.ui.Frame();
+
+    CHECK_EQ(app.StyleOf(app.shell).padding.left, 32.0f);   // wider than both
+    app.Width(900.0f);
+    CHECK_EQ(app.StyleOf(app.shell).padding.left, 16.0f);   // medium only
+    app.Width(500.0f);
+    CHECK_EQ(app.StyleOf(app.shell).padding.left, 8.0f);    // both match, compact is narrower
+}
+
+TEST(breakpoints, a_property_answers_to_a_width_the_same_way_a_layout_field_does) {
+    Shell app;
+    app.ui.document.SetProp(app.body, doc::Prop::FontSize, 18.0f);
+    app.ui.document.SetProp(app.body, BreakpointKey("compact", doc::Prop::FontSize), 12.0f);
+    app.ui.document.Touch(app.body);
+    app.ui.Frame();
+
+    const u32 view = app.ui.ViewOfPlain(app.body);
+    CHECK_EQ(app.ui.host.Tree().Number(view, doc::Prop::FontSize, 0.0f), 18.0f);
+    app.Width(500.0f);
+    CHECK_EQ(app.ui.host.Tree().Number(app.ui.ViewOfPlain(app.body), doc::Prop::FontSize, 0.0f), 12.0f);
+}
+
+TEST(breakpoints, it_is_the_nodes_own_box_that_answers_not_the_window) {
+    // A container query. The window is wide; the sidebar is 280 and is therefore compact, and the
+    // body beside it is not. A media query would give both the same answer, which is exactly the
+    // thing container queries were invented to fix.
+    Shell app;
+    app.ui.document.SetProp(app.sidebar, BreakpointKey("compact", "axis"), std::string("column"));
+    app.ui.document.SetProp(app.body,    BreakpointKey("compact", "axis"), std::string("column"));
+    app.ui.document.Touch(app.sidebar);
+    app.ui.document.Touch(app.body);
+    app.ui.Frame();
+
+    CHECK(app.StyleOf(app.sidebar).axis == layout::Axis::Column);   // 280 wide
+    CHECK(app.StyleOf(app.body).axis    == layout::Axis::Row);      // the rest of 1400
+    CHECK_EQ(app.ui.host.Tree().NarrowestBreakpoint(app.ui.ViewOfPlain(app.sidebar)),
+             std::string_view("compact"));
+    CHECK(app.ui.host.Tree().NarrowestBreakpoint(app.ui.ViewOfPlain(app.body)).empty());
+}
+
+TEST(breakpoints, a_state_overlay_still_beats_one) {
+    Shell app;
+    // Fill transitions, and this test is about which layer wins rather than how long it takes to
+    // get there — so read the settled answer instead of a frame partway into a fade.
+    app.ui.host.SetMotion({ false });
+    app.ui.document.SetProp(app.body, doc::Prop::Fill, Color{ 1.0f, 0.0f, 0.0f, 1.0f });
+    app.ui.document.SetProp(app.body, BreakpointKey("compact", doc::Prop::Fill),
+                            Color{ 0.0f, 1.0f, 0.0f, 1.0f });
+    app.ui.document.SetProp(app.body, StateKey(StateBit::Hovered, doc::Prop::Fill),
+                            Color{ 0.0f, 0.0f, 1.0f, 1.0f });
+    app.ui.document.Touch(app.body);
+    app.Width(500.0f);
+
+    const u32 view = app.ui.ViewOfPlain(app.body);
+    const doc::Value narrow = app.ui.host.Tree().ResolvedProp(view, doc::Prop::Fill);
+    CHECK(std::get<Color>(narrow).g == 1.0f);
+
+    app.ui.host.Tree().SetState(view, StateBit::Hovered, true);
+    const doc::Value hovered = app.ui.host.Tree().ResolvedProp(view, doc::Prop::Fill);
+    CHECK(std::get<Color>(hovered).b == 1.0f);
+}
+
+TEST(breakpoints, an_overlay_may_not_move_the_width_its_own_query_was_answered_by) {
+    // The one rule that keeps a container query from arguing with itself. Height is fair game — a
+    // column that grows taller is what a narrow layout does — but width is what was measured.
+    Shell app;
+    app.ui.document.SetProp(app.sidebar, BreakpointKey("compact", "width"), std::string("fill"));
+    app.ui.document.SetProp(app.sidebar, BreakpointKey("compact", "height"), std::string("120"));
+    app.ui.document.Touch(app.sidebar);
+    app.ui.Frame();
+
+    CHECK(app.StyleOf(app.sidebar).width == layout::Size::Px(280.0f));
+    CHECK(app.StyleOf(app.sidebar).height == layout::Size::Px(120.0f));
+}
+
+TEST(breakpoints, a_design_that_uses_none_pays_for_none) {
+    Shell app;
+    CHECK(!app.ui.host.Tree().HasBreakpointOverlays());
+    app.ui.document.SetProp(app.shell, BreakpointKey("compact", "axis"), std::string("column"));
+    app.ui.document.Touch(app.shell);
+    app.ui.Frame();
+    CHECK(app.ui.host.Tree().HasBreakpointOverlays());
+}
+
+TEST(breakpoints, a_project_names_its_own_and_the_defaults_are_not_a_law) {
+    Shell app;
+    app.ui.document.SetBreakpoints({ { "phone", 480.0f }, { "tablet", 900.0f } });
+    app.ui.document.SetProp(app.shell, BreakpointKey("phone", "axis"), std::string("column"));
+    app.ui.document.Touch(app.shell);
+
+    app.Width(700.0f);                                        // tablet, not phone
+    CHECK(app.StyleOf(app.shell).axis == layout::Axis::Row);
+    app.Width(400.0f);
+    CHECK(app.StyleOf(app.shell).axis == layout::Axis::Column);
+
+    // And "compact" is not a breakpoint any more, so an overlay named after it does nothing.
+    app.ui.document.SetProp(app.shell, BreakpointKey("compact", "gap"), std::string("2"));
+    app.ui.document.Touch(app.shell);
+    app.ui.Frame();
+    CHECK_EQ(app.StyleOf(app.shell).gap, 24.0f);
+}
+
 // ---------------------------------------------------------------------- inheritance
 
 TEST(inheritance, a_font_set_on_a_container_reaches_the_labels_inside_it) {

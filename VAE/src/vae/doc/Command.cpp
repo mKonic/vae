@@ -262,6 +262,20 @@ namespace vae::doc {
         else           document.RemoveToken(m_Name);
     }
 
+    void SetBreakpointsCommand::Apply(Document& document) {
+        if (!m_Captured) { m_Old = document.Breakpoints(); m_Captured = true; }
+        document.SetBreakpoints(m_New);
+    }
+
+    void SetBreakpointsCommand::Undo(Document& document) { document.SetBreakpoints(m_Old); }
+
+    bool SetBreakpointsCommand::Coalesce(const Command& newer) {
+        const auto* other = dynamic_cast<const SetBreakpointsCommand*>(&newer);
+        if (!other) return false;
+        m_New = other->m_New;
+        return true;
+    }
+
     // Dragging through a colour picker is one edit, the same way dragging a node is one move.
     bool SetTokenCommand::Coalesce(const Command& newer) {
         const auto* other = dynamic_cast<const SetTokenCommand*>(&newer);

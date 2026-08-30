@@ -3,6 +3,7 @@
 #include "vae/base/FileSystem.h"
 #include "vae/base/Log.h"
 #include "vae/core/Input.h"
+#include "vae/ui/Widget.h"
 
 #include <algorithm>
 
@@ -199,6 +200,31 @@ namespace vae {
 
     void EditorState::SetLayout(Uuid node, const layout::LayoutStyle& style) {
         Execute(CreateScope<doc::SetLayoutCommand>(node, style));
+    }
+
+    void EditorState::SetBreakpoint(std::string name) {
+        // A name the document no longer defines is the base — renaming a breakpoint out from under
+        // the Inspector should not leave it authoring into a width that does not exist.
+        for (const doc::Breakpoint& breakpoint : m_Document.Breakpoints())
+            if (breakpoint.name == name) { m_Breakpoint = std::move(name); return; }
+        m_Breakpoint.clear();
+    }
+
+    f32 EditorState::PreviewWidth() const {
+        for (const doc::Breakpoint& breakpoint : m_Document.Breakpoints())
+            if (breakpoint.name == m_Breakpoint) return breakpoint.upTo;
+        return 0.0f;
+    }
+
+    std::string EditorState::FieldKey(doc::Prop prop) const {
+        if (m_Breakpoint.empty()) return std::string(doc::PropName(prop));
+        return ui::BreakpointKey(m_Breakpoint, prop);
+    }
+
+    doc::Value EditorState::FieldValue(Uuid node, doc::Prop prop) const {
+        if (m_Breakpoint.empty()) return GetProp(node, prop);
+        const doc::Value overlay = GetProp(node, ui::BreakpointKey(m_Breakpoint, prop));
+        return doc::IsSet(overlay) ? overlay : GetProp(node, prop);
     }
 
     void EditorState::Rename(Uuid node, std::string name) {

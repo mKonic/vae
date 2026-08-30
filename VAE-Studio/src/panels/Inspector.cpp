@@ -2,6 +2,7 @@
 #include "Widgets.h"
 
 #include "vae/ui/Widget.h"
+#include "vae/doc/LayoutText.h"
 
 #include <imgui.h>
 
@@ -30,8 +31,43 @@ namespace vae {
             return value ? *value : fallback;
         }
 
+        // The style the Layout section edits, and where a change to it goes.
+        //
+        // At the base these are one thing: the node's own style, written back whole. At a
+        // breakpoint the section shows the style as that width resolves it, and a change is filed
+        // per field — `compact.gap` for the one slider that moved, nothing for the eighteen that
+        // did not, and the overlay dropped entirely when a value is dragged back to what the base
+        // already says. That last part is what keeps a design from accumulating overlays that
+        // change nothing.
+        void WriteLayout(EditorState& state, Uuid id, const layout::LayoutStyle& base,
+                         const layout::LayoutStyle& edited) {
+            const std::string& breakpoint = state.Breakpoint();
+            if (breakpoint.empty()) {
+                state.SetLayout(id, edited);
+                return;
+            }
+            for (const doc::LayoutField& field : doc::LayoutFields()) {
+                const std::string key = ui::BreakpointKey(breakpoint, field.name);
+                if (field.differs(edited, base))
+                    state.SetProp(id, key, field.text(edited));
+                else if (doc::IsSet(state.GetProp(id, key)))
+                    state.SetProp(id, key, doc::Value{});
+            }
+        }
+
         void DrawLayoutSection(EditorState& state, Uuid id, const doc::Node& node) {
-            layout::LayoutStyle style = node.layout;
+            const layout::LayoutStyle base = node.layout;
+            layout::LayoutStyle style = base;
+            // The overlays already authored at this breakpoint, so the fields open showing what
+            // the design actually looks like there rather than what it looks like at the base.
+            if (!state.Breakpoint().empty()) {
+                for (const doc::LayoutField& field : doc::LayoutFields()) {
+                    const doc::Value overlay =
+                        state.GetProp(id, ui::BreakpointKey(state.Breakpoint(), field.name));
+                    if (const auto* text = std::get_if<std::string>(&overlay))
+                        field.read(style, *text);
+                }
+            }
             bool changed = false;
 
             int mode = static_cast<int>(style.mode);
@@ -96,8 +132,99 @@ namespace vae {
                 ImGui::TreePop();
             }
 
-            if (changed) state.SetLayout(id, style);
+            // A container query is answered by the node's own width, so an overlay that moved it
+            // would be arguing with the question. The runtime refuses it; the Inspector says so
+            // rather than letting a designer type a value that silently does nothing.
+            if (!state.Breakpoint().empty()) {
+                ImGui::TextDisabled("Width is what the breakpoint was matched on,");
+                ImGui::TextDisabled("so it stays whatever the base says.");
+            }
+
+            if (changed) WriteLayout(state, id, base, style);
             if (ImGui::IsItemDeactivatedAfterEdit()) state.EndGesture();
+        }
+
+        // Which width is being designed for, and the list of widths the project has.
+        //
+        // Figma calls this a variant and Webflow a viewport; either way it is a mode the whole
+        // panel is in, not a section of it — so it sits above every section rather than inside one,
+        // and everything below it writes an overlay while a chip other than Base is lit.
+        void DrawBreakpointBar(EditorState& state) {
+            const std::vector<doc::Breakpoint>& breakpoints = state.Doc().Breakpoints();
+            const std::string& active = state.Breakpoint();
+
+            const bool base = active.empty();
+            if (!base) ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.36f, 0.51f, 0.89f, 0.35f));
+            if (ImGui::SmallButton("Base")) state.SetBreakpoint({});
+            if (!base) ImGui::PopStyleColor();
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("The design at any width nothing narrower matched");
+
+            for (const doc::Breakpoint& breakpoint : breakpoints) {
+                ImGui::SameLine();
+                const bool on = breakpoint.name == active;
+                if (on) ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.36f, 0.51f, 0.89f, 0.75f));
+                if (ImGui::SmallButton(breakpoint.name.c_str())) state.SetBreakpoint(breakpoint.name);
+                if (on) ImGui::PopStyleColor();
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("Where the node's own box is %.0f wide or narrower",
+                                      breakpoint.upTo);
+            }
+
+            ImGui::SameLine();
+            if (ImGui::SmallButton("…")) ImGui::OpenPopup("##breakpoints");
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("The widths this project designs for");
+
+            if (ImGui::BeginPopup("##breakpoints")) {
+                // A project names its own; what VAE ships is a starting point, not a law. Editing
+                // one is a plain document change, so it undoes like everything else.
+                std::vector<doc::Breakpoint> edited = breakpoints;
+                bool changed = false;
+                for (std::size_t i = 0; i < edited.size(); ++i) {
+                    ImGui::PushID(static_cast<int>(i));
+                    char name[64];
+                    std::snprintf(name, sizeof name, "%s", edited[i].name.c_str());
+                    ImGui::SetNextItemWidth(110.0f);
+                    if (ImGui::InputText("##name", name, sizeof name)) {
+                        edited[i].name = name;
+                        changed = true;
+                    }
+                    ImGui::SameLine();
+                    ImGui::SetNextItemWidth(80.0f);
+                    changed |= ImGui::DragFloat("##upTo", &edited[i].upTo, 4.0f, 1.0f, 8192.0f,
+                                                "%.0f");
+                    ImGui::SameLine();
+                    if (ImGui::SmallButton("×")) {
+                        edited.erase(edited.begin() + static_cast<std::ptrdiff_t>(i));
+                        changed = true;
+                        ImGui::PopID();
+                        break;
+                    }
+                    ImGui::PopID();
+                }
+                if (ImGui::SmallButton("Add")) {
+                    edited.push_back({ "narrow", 480.0f });
+                    changed = true;
+                }
+                ImGui::SameLine();
+                if (ImGui::SmallButton("Defaults")) {
+                    edited = doc::DefaultBreakpoints();
+                    changed = true;
+                }
+                if (changed) {
+                    state.Execute(CreateScope<doc::SetBreakpointsCommand>(std::move(edited)));
+                    state.EndGesture();
+                    // A rename can pull the ground out from under the active chip.
+                    state.SetBreakpoint(state.Breakpoint());
+                }
+                ImGui::EndPopup();
+            }
+
+            if (!base) {
+                ImGui::TextColored(ImVec4(0.36f, 0.51f, 0.89f, 1.0f),
+                                   "Editing at %s — changes apply below %.0f wide", active.c_str(),
+                                   state.PreviewWidth());
+            }
         }
 
         void DrawStyleSection(EditorState& state, Uuid id) {
@@ -174,7 +301,12 @@ namespace vae {
             // What it looks like while the pointer is on it. Without this a button recoloured red
             // still hovers whatever colour the library authored, because "hovered:fill" is a
             // property of its own and nothing was re-deriving it.
-            if (ImGui::TreeNode("States")) {
+            // A state and a width are both conditions on the same property, and VAE resolves one
+            // overlay per property rather than a stack of them — so there is no such thing as
+            // "hovered, at compact". The base is where a hover colour is decided.
+            if (!state.Breakpoint().empty()) {
+                ImGui::TextDisabled("Hover and press colours are set on the base.");
+            } else if (ImGui::TreeNode("States")) {
                 static const ui::StateBit kStates[] = {
                     ui::StateBit::Hovered, ui::StateBit::Pressed, ui::StateBit::Focused,
                     ui::StateBit::Disabled, ui::StateBit::Checked, ui::StateBit::Selected,
@@ -363,6 +495,10 @@ namespace vae {
             ImGui::SameLine();
             ImGui::TextColored(ImVec4(0.36f, 0.51f, 0.89f, 1.0f), "· %s", ui::RoleName(role));
         }
+
+        ImGui::Separator();
+        DrawBreakpointBar(state);
+        ImGui::Separator();
 
         if (ImGui::CollapsingHeader("Layout", ImGuiTreeNodeFlags_DefaultOpen))
             DrawLayoutSection(state, id, *node);

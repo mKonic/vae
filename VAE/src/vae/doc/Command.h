@@ -305,6 +305,23 @@ namespace vae::doc {
         bool m_Existed = false, m_Captured = false;
     };
 
+    // The widths the project designs for. A document-level edit like a token, and undoable for the
+    // same reason: dragging a breakpoint's width restyles every node that overlays at it.
+    class SetBreakpointsCommand final : public Command {
+    public:
+        explicit SetBreakpointsCommand(std::vector<Breakpoint> breakpoints)
+            : m_New(std::move(breakpoints)) {}
+
+        void Apply(Document& document) override;
+        void Undo(Document& document) override;
+        std::string_view Name() const override { return "Set breakpoints"; }
+        bool Coalesce(const Command& newer) override;
+
+    private:
+        std::vector<Breakpoint> m_New, m_Old;
+        bool m_Captured = false;
+    };
+
     // --- component properties ---------------------------------------------------------------
 
     // Declaring or editing one of a component's properties. Undoable like everything else, because

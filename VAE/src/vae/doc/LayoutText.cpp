@@ -171,11 +171,8 @@ namespace vae::doc {
 
         using namespace vae::doc::text;
 
-        // Every entry is the same four lines, so the difference between two fields is only ever
-        // the two things that actually differ: which member, and how it is spelled.
-        //
-        // `write` compares against a default-constructed LayoutStyle, which is what "write only
-        // what differs" means and is why it lives in the table rather than at the call site.
+        // Every entry is the same shape, so the difference between two fields is only ever the two
+        // things that actually differ: which member, and how it is spelled.
 #define VAE_LAYOUT_FIELD(NAME, MEMBER, TO_TEXT, FROM_TEXT)                                       \
     LayoutField{                                                                                 \
         NAME,                                                                                    \
@@ -183,9 +180,9 @@ namespace vae::doc {
             if (auto parsed = FROM_TEXT(v)) { s.MEMBER = *parsed; return true; }                 \
             return false;                                                                        \
         },                                                                                       \
-        [](const layout::LayoutStyle& s) -> std::optional<std::string> {                         \
-            if (s.MEMBER == layout::LayoutStyle{}.MEMBER) return std::nullopt;                   \
-            return std::string(TO_TEXT(s.MEMBER));                                               \
+        [](const layout::LayoutStyle& s) { return std::string(TO_TEXT(s.MEMBER)); },             \
+        [](const layout::LayoutStyle& a, const layout::LayoutStyle& b) {                         \
+            return !(a.MEMBER == b.MEMBER);                                                      \
         },                                                                                       \
     }
 

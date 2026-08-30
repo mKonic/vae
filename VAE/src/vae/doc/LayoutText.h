@@ -56,10 +56,14 @@ namespace vae::doc {
         // — which is a document that will not open rather than a field quietly left at its default.
         bool (*read)(layout::LayoutStyle& style, std::string_view text);
 
-        // The field as text, or nothing when it already equals the default and need not be written.
-        // The "write only what the reader can work out for itself" rule lives here, once, instead
-        // of in nineteen hand-written comparisons.
-        std::optional<std::string> (*write)(const layout::LayoutStyle& style);
+        // The field as text, always. What "only write what differs" is written *from*, rather than
+        // the rule itself — the two callers differ about what they are comparing against.
+        std::string (*text)(const layout::LayoutStyle& style);
+
+        // Whether two styles disagree about this one field. The codec asks against a default style,
+        // which is "does this need writing at all"; the Inspector asks against the base style,
+        // which is "is this an overlay the designer just authored".
+        bool (*differs)(const layout::LayoutStyle& a, const layout::LayoutStyle& b);
     };
 
     // In the order LayoutStyle declares them, which is what a written node reads best in — a

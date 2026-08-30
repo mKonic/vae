@@ -60,6 +60,24 @@ namespace vae {
         void SetProp(Uuid node, std::string key, doc::Value value);
         doc::Value GetProp(Uuid node, const std::string& key) const;
         void SetLayout(Uuid node, const layout::LayoutStyle& style);
+
+        // --- the width being designed at ---------------------------------------------------------
+        // Which breakpoint the Inspector authors into. Empty is the base: what the design is at any
+        // width no breakpoint matched, and what every overlay is a departure from.
+        //
+        // This is a view of the document, not a property of it — nothing here is saved, and closing
+        // Studio at `compact` reopens at the base.
+        const std::string& Breakpoint() const { return m_Breakpoint; }
+        void SetBreakpoint(std::string name);
+        // The width the canvas draws a screen at while a breakpoint is picked: just inside the
+        // widest width that still matches it, because that is the case a design has to survive.
+        // Zero at the base, meaning the screen's own size.
+        f32 PreviewWidth() const;
+        // What a field writes under — the property at the base, its overlay at a breakpoint.
+        std::string FieldKey(doc::Prop prop) const;
+        // What a field shows: the overlay when it has one, otherwise what the node already is, so
+        // a field at a breakpoint reads as the value in effect rather than as blank.
+        doc::Value FieldValue(Uuid node, doc::Prop prop) const;
         void Rename(Uuid node, std::string name);
         Uuid CreateChild(doc::NodeKind kind, Uuid parent, std::string name);
         // A piece of artwork, placed as a Vector node of its own. Not a component instance: an
@@ -169,6 +187,7 @@ namespace vae {
         Uuid m_ActiveScreen = Uuid::Invalid();
         Uuid m_ScreenBehind = Uuid::Invalid();   // where CloseComponent goes back to
         std::string m_AssetError;
+        std::string m_Breakpoint;
         std::string m_Locale;
         doc::StringTable m_Strings;
         svc::Audio m_Preview;

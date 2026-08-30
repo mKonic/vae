@@ -1,6 +1,9 @@
 #include "vaepch.h"
 #include "vae/ui/Widget.h"
 
+#include "vae/doc/LayoutText.h"
+#include "vae/doc/ValueText.h"
+
 #include <algorithm>
 #include <array>
 
@@ -65,6 +68,65 @@ namespace vae::ui {
                  colour.g + (target - colour.g) * t,
                  colour.b + (target - colour.b) * t,
                  colour.a };
+    }
+
+    std::string BreakpointKey(std::string_view breakpoint, doc::Prop prop) {
+        return std::string(breakpoint) + ':' + doc::PropName(prop);
+    }
+
+    std::string BreakpointKey(std::string_view breakpoint, std::string_view field) {
+        return std::string(breakpoint) + ':' + std::string(field);
+    }
+
+    void ApplyBreakpointOverlay(doc::PropBag& into, const doc::PropBag& source,
+                                const std::vector<doc::Breakpoint>& breakpoints, u32 mask) {
+        if (mask == 0 || source.Custom().empty()) return;
+
+        for (std::size_t i = 0; i < breakpoints.size() && i < 32; ++i) {
+            if ((mask & (1u << i)) == 0) continue;
+            const std::string prefix = breakpoints[i].name + ':';
+            for (const auto& [key, value] : source.Custom()) {
+                if (!key.starts_with(prefix)) continue;
+                const std::string_view name{ key.data() + prefix.size(), key.size() - prefix.size() };
+                // A layout field is not a property and does not belong in a property bag; it is
+                // applied by ApplyLayoutBreakpoints instead.
+                if (doc::LayoutFieldNamed(name)) continue;
+                if (auto prop = doc::PropFromName(name)) into.Set(*prop, value);
+                else into.Set(std::string(name), value);
+            }
+        }
+    }
+
+    layout::LayoutStyle ApplyLayoutBreakpoints(const layout::LayoutStyle& base,
+                                               const doc::PropBag& source,
+                                               const std::vector<doc::Breakpoint>& breakpoints,
+                                               u32 mask) {
+        layout::LayoutStyle out = base;
+        if (mask == 0 || source.Custom().empty()) return out;
+
+        for (std::size_t i = 0; i < breakpoints.size() && i < 32; ++i) {
+            if ((mask & (1u << i)) == 0) continue;
+            const std::string prefix = breakpoints[i].name + ':';
+            for (const auto& [key, value] : source.Custom()) {
+                if (!key.starts_with(prefix)) continue;
+                const std::string_view name{ key.data() + prefix.size(), key.size() - prefix.size() };
+                // The queried axis is horizontal, so width is what must not move. Height is fair
+                // game: a column that grows taller is exactly what a narrow layout does.
+                if (name == "width") continue;
+                const doc::LayoutField* field = doc::LayoutFieldNamed(name);
+                if (!field) continue;
+                // Overlay values are text in the document's own spelling — "column", "12", "16 8" —
+                // so the field reads them the same way the file does.
+                if (const std::string* spelled = std::get_if<std::string>(&value)) {
+                    field->read(out, *spelled);
+                } else if (const f32* number = std::get_if<f32>(&value)) {
+                    field->read(out, doc::text::Number(*number));
+                } else if (const bool* flag = std::get_if<bool>(&value)) {
+                    field->read(out, *flag ? "true" : "false");
+                }
+            }
+        }
+        return out;
     }
 
     void ApplyStateOverlay(doc::PropBag& into, const doc::PropBag& source, StateMask state) {
