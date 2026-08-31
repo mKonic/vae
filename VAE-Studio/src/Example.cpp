@@ -191,70 +191,137 @@ namespace vae {
         if (!component.Valid()) return;
 
         doc::Blueprint blueprint;
-        blueprint.SetVariable({ "count", doc::ValueType::Number, 0.0f });
+        blueprint.SetVariable({ "count", doc::PinType::Number, 0.0f });
+        blueprint.SetVariable({ "history", doc::PinType::List, std::string() });
 
-        const auto Node = [&](std::string type, Vec2 at, std::string target = {}) {
-            doc::BlueprintNode node;
-            node.type = std::move(type);
-            node.position = at;
-            node.target = std::move(target);
-            return blueprint.AddNode(std::move(node));
+        const auto In = [&](doc::BlueprintCanvas& canvas) {
+            return [&](std::string type, Vec2 at, std::string target = {}) {
+                doc::BlueprintNode node;
+                node.type = std::move(type);
+                node.position = at;
+                node.target = std::move(target);
+                return blueprint.AddNode(canvas, std::move(node));
+            };
         };
-        const auto Lit = [&](u32 id, const char* pin, doc::Value value) {
-            if (doc::BlueprintNode* node = blueprint.Find(id)) node->literals[pin] = std::move(value);
+        const auto Lit = [&](doc::BlueprintCanvas& canvas, u32 id, const char* pin,
+                             doc::Value value) {
+            if (doc::BlueprintNode* node = canvas.Find(id)) node->literals[pin] = std::move(value);
         };
-        const auto Wire = [&](u32 from, const char* out, u32 to, const char* in) {
-            blueprint.AddLink({ 0, from, out, to, in });
+        const auto Wire = [&](doc::BlueprintCanvas& canvas, u32 from, const char* out, u32 to,
+                              const char* in) {
+            blueprint.AddLink(canvas, { 0, from, out, to, in });
         };
-        // Every path ends the same way: put the number on screen. Three copies of one node,
-        // because that is what a blueprint without functions honestly is.
-        const auto Show = [&](Vec2 at) {
-            const u32 id = Node("ui.setText", at);
-            Lit(id, "Node", std::string("Count"));
-            return id;
-        };
+
+        // ---- Show: the one place the number goes on screen -----------------------------------
+        // Three copies of this is what the blueprint had before it had functions. One function,
+        // called from all three paths, is what it is now.
+        {
+            doc::BlueprintFunction show;
+            show.name = "Show";
+            show.params.push_back({ "Value", doc::PinType::Number, 0.0f });
+            blueprint.SetFunction(std::move(show));
+        }
+        doc::BlueprintCanvas& showBody = blueprint.FindFunction("Show")->body;
+        {
+            const auto Node = In(showBody);
+            const u32 entry = Node("func.entry", { 40.0f, 80.0f });
+            const u32 write = Node("ui.setText", { 320.0f, 80.0f });
+            Lit(showBody, write, "Node", std::string("Count"));
+            const u32 back = Node("func.return", { 620.0f, 80.0f });
+            Wire(showBody, entry, "Out", write, "In");
+            Wire(showBody, entry, "Value", write, "Value");
+            Wire(showBody, write, "Out", back, "In");
+        }
+
+        // ---- Announce: a custom event, because it waits ---------------------------------------
+        // A function has to have finished by the time the call hands back, so the Delay goes here.
+        {
+            doc::BlueprintFunction announce;
+            announce.name = "Announce";
+            announce.event = true;
+            blueprint.SetFunction(std::move(announce));
+        }
+        doc::BlueprintCanvas& announceBody = blueprint.FindFunction("Announce")->body;
+        {
+            const auto Node = In(announceBody);
+            const u32 entry = Node("func.entry", { 40.0f, 80.0f });
+            const u32 wait = Node("flow.delay", { 260.0f, 80.0f });
+            Lit(announceBody, wait, "Seconds", 0.4f);
+            const u32 title = Node("ui.setText", { 520.0f, 80.0f });
+            Lit(announceBody, title, "Node", std::string("Title"));
+            const u32 past = Node("var.get", { 260.0f, 300.0f }, "history");
+            const u32 join = Node("list.join", { 460.0f, 300.0f });
+            Lit(announceBody, join, "Separator", std::string(" · "));
+            Wire(announceBody, entry, "Out", wait, "In");
+            Wire(announceBody, wait, "Done", title, "In");
+            Wire(announceBody, past, "Value", join, "List");
+            Wire(announceBody, join, "Value", title, "Value");
+        }
+
+        // ---- the event graph -------------------------------------------------------------------
+        doc::BlueprintCanvas& graph = blueprint.graph;
+        const auto Node = In(graph);
+        const auto Show = [&](Vec2 at) { return Node("func.call", at, "Show"); };
 
         // On Mount: show whatever the count already is.
         const u32 mount = Node("event.mount", { -40.0f, 0.0f });
         const u32 mountGet = Node("var.get", { 300.0f, 110.0f }, "count");
         const u32 mountShow = Show({ 560.0f, 0.0f });
-        Wire(mount, "Out", mountShow, "In");
-        Wire(mountGet, "Value", mountShow, "Value");
+        Wire(graph, mount, "Out", mountShow, "In");
+        Wire(graph, mountGet, "Value", mountShow, "Value");
 
-        // Add one: make a noise, add one, show it. The Set's own output carries the new value
-        // along, which is why nothing has to read the variable back afterwards.
-        const u32 clicked = Node("event.clicked", { -40.0f, 240.0f });
-        Lit(clicked, "Node", std::string("Increment"));
-        const u32 click = Node("sound.play", { 240.0f, 240.0f });
-        Lit(click, "Sound", std::string("click"));
-        Lit(click, "Volume", 0.6f);
-        const u32 get = Node("var.get", { 240.0f, 430.0f }, "count");
-        const u32 add = Node("math.add", { 420.0f, 430.0f });
-        Lit(add, "B", 1.0f);
-        const u32 set = Node("var.set", { 620.0f, 240.0f }, "count");
-        const u32 show = Show({ 860.0f, 240.0f });
-        Wire(clicked, "Out", click, "In");
-        Wire(click, "Out", set, "In");
-        Wire(get, "Value", add, "A");
-        Wire(add, "Value", set, "Value");
-        Wire(set, "Out", show, "In");
-        Wire(set, "Value", show, "Value");
+        // Add one: make a noise, add one, remember it, show it, and say so a moment later. The
+        // Set's own output carries the new value along, which is why nothing reads the variable
+        // back afterwards.
+        const u32 clicked = Node("event.clicked", { -40.0f, 260.0f });
+        Lit(graph, clicked, "Node", std::string("Increment"));
+        const u32 click = Node("sound.play", { 200.0f, 260.0f });
+        Lit(graph, click, "Sound", std::string("click"));
+        Lit(graph, click, "Volume", 0.6f);
+        const u32 get = Node("var.get", { 200.0f, 500.0f }, "count");
+        const u32 add = Node("math.add", { 400.0f, 500.0f });
+        Lit(graph, add, "B", 1.0f);
+        const u32 set = Node("var.set", { 600.0f, 260.0f }, "count");
+        const u32 pastGet = Node("var.get", { 620.0f, 500.0f }, "history");
+        const u32 remember = Node("list.add", { 840.0f, 260.0f });
+        const u32 keep = Node("var.set", { 1100.0f, 260.0f }, "history");
+        const u32 show = Show({ 1320.0f, 260.0f });
+        const u32 say = Node("func.call", { 1520.0f, 260.0f }, "Announce");
+        Wire(graph, clicked, "Out", click, "In");
+        Wire(graph, click, "Out", set, "In");
+        Wire(graph, get, "Value", add, "A");
+        Wire(graph, add, "Value", set, "Value");
+        Wire(graph, set, "Out", remember, "In");
+        Wire(graph, pastGet, "Value", remember, "List");
+        Wire(graph, set, "Value", remember, "Value");
+        Wire(graph, remember, "Out", keep, "In");
+        Wire(graph, remember, "List", keep, "Value");
+        Wire(graph, keep, "Out", show, "In");
+        Wire(graph, set, "Value", show, "Value");
+        Wire(graph, show, "Out", say, "In");
 
-        // Reset: the same shape, with nothing to add.
-        const u32 reset = Node("event.clicked", { -40.0f, 620.0f });
-        Lit(reset, "Node", std::string("Reset"));
-        const u32 resetClick = Node("sound.play", { 240.0f, 620.0f });
-        Lit(resetClick, "Sound", std::string("click"));
-        Lit(resetClick, "Volume", 0.6f);
-        const u32 zero = Node("var.set", { 620.0f, 620.0f }, "count");
-        const u32 resetShow = Show({ 860.0f, 620.0f });
-        Wire(reset, "Out", resetClick, "In");
-        Wire(resetClick, "Out", zero, "In");
-        Wire(zero, "Out", resetShow, "In");
-        Wire(zero, "Value", resetShow, "Value");
+        // Reset: the same shape, with nothing to add and nothing to remember.
+        const u32 reset = Node("event.clicked", { -40.0f, 720.0f });
+        Lit(graph, reset, "Node", std::string("Reset"));
+        const u32 resetClick = Node("sound.play", { 200.0f, 720.0f });
+        Lit(graph, resetClick, "Sound", std::string("click"));
+        Lit(graph, resetClick, "Volume", 0.6f);
+        const u32 zero = Node("var.set", { 600.0f, 720.0f }, "count");
+        const u32 forget = Node("list.clear", { 840.0f, 720.0f });
+        const u32 pastGet2 = Node("var.get", { 620.0f, 940.0f }, "history");
+        const u32 keep2 = Node("var.set", { 1100.0f, 720.0f }, "history");
+        const u32 resetShow = Show({ 1320.0f, 720.0f });
+        Wire(graph, reset, "Out", resetClick, "In");
+        Wire(graph, resetClick, "Out", zero, "In");
+        Wire(graph, zero, "Out", forget, "In");
+        Wire(graph, pastGet2, "Value", forget, "List");
+        Wire(graph, forget, "Out", keep2, "In");
+        Wire(graph, forget, "List", keep2, "Value");
+        Wire(graph, keep2, "Out", resetShow, "In");
+        Wire(graph, zero, "Value", resetShow, "Value");
 
-        blueprint.comments.push_back({ 0, "counting", { -80.0f, 190.0f }, { 1080.0f, 340.0f } });
-        blueprint.comments.back().id = blueprint.MintId();
+        graph.comments.push_back({ 0, "counting", { -80.0f, 210.0f }, { 1740.0f, 400.0f } });
+        graph.comments.back().id = blueprint.MintId();
 
         d.SetBlueprint(component, std::move(blueprint));
         state.ClearSelection();

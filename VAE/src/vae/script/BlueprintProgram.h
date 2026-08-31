@@ -22,6 +22,9 @@ namespace vae::script {
     class BlueprintProgram {
     public:
         struct Diagnostic {
+            // Which canvas: empty for the event graph, otherwise the function's name. The editor
+            // needs it to put the marker on the right drawing surface.
+            std::string function;
             u32 node = 0;                   // 0 when it is about the blueprint rather than one node
             bool error = true;              // false for a warning: it runs, but not as drawn
             std::string message;
@@ -53,10 +56,15 @@ namespace vae::script {
 
     private:
         void Check();
+        void CheckCanvas(std::string_view function, const doc::BlueprintCanvas& canvas);
         // Follows data wires backwards looking for the node it started from. A pure node that
         // feeds itself would evaluate for ever, and the only place to catch that is here — at run
         // time it is a stack overflow with no line number.
-        bool Cycles(u32 node, std::vector<u32>& path, std::vector<u32>& done);
+        bool Cycles(const doc::BlueprintCanvas& canvas, std::string_view function, u32 node,
+                    std::vector<u32>& path, std::vector<u32>& done);
+        // Every node execution can reach from a loop's body, which is what says whether a Break
+        // has a loop to break out of.
+        std::vector<u32> InsideLoops(const doc::BlueprintCanvas& canvas) const;
 
         doc::Blueprint m_Blueprint;
         std::string m_Component;

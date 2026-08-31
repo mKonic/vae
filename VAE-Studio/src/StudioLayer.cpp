@@ -133,6 +133,7 @@ namespace vae {
         ImGui::DockBuilderDockWindow("Inspector###Inspector", right);
         ImGui::DockBuilderDockWindow("Assets###Assets", right);
         ImGui::DockBuilderDockWindow("Tokens###Tokens", right);
+        ImGui::DockBuilderDockWindow("Logic###BlueprintLogic", right);
         ImGui::DockBuilderDockWindow("Console###Console", bottom);
         ImGui::DockBuilderDockWindow("Files###Files", bottom);
         ImGui::DockBuilderDockWindow("Runtime###Runtime", bottom);
@@ -1120,10 +1121,14 @@ namespace vae {
         DrawRuntimePanel(m_Scripts, m_Canvas);
         // A project's logic is written or drawn, never both, so only one of these is a thing this
         // project has. Showing the other would be a tab that can only ever say "not this one".
-        if (m_Scripts.Lang() == ScriptSession::Language::Blueprint)
+        if (m_Scripts.Lang() == ScriptSession::Language::Blueprint) {
             DrawBlueprintPanel(m_Scripts, m_State);
-        else
+            // The graph's declarations, docked with the Inspector: the canvas needs the width and
+            // a list of names does not. Only a project that is drawn has one.
+            DrawBlueprintLogicPanel(m_Scripts, m_State);
+        } else {
             DrawScriptPanel(m_Scripts, m_State);
+        }
         DrawMarkupPanel(m_State);
         m_Canvas.OnImGuiRender(m_State);
 

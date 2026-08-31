@@ -308,7 +308,7 @@ namespace vae::doc {
             return out;
         }
 
-        // ------------------------------------------------------------------ encoding a blueprint
+        // -------------------------------------------------------------- encoding a blueprint
 
         // Logic, as markup, inside the screen or component it drives.
         //
@@ -316,18 +316,9 @@ namespace vae::doc {
         // which nothing refers to and which is minted in document order on the way back in, and a
         // pin literal that is already what the node type says it starts with. What is left is the
         // blueprint somebody drew.
-        void WriteGraph(Writer& w, const Blueprint& blueprint) {
-            w.Open("blueprint", {}, false);
-
-            for (const BlueprintVariable& variable : blueprint.variables) {
-                std::vector<Attr> attrs{ { "name", variable.name },
-                                         { "type", std::string(ValueTypeName(variable.type)) } };
-                if (const auto value = ValueToAttr(variable.defaultValue, variable.type))
-                    attrs.push_back({ "value", *value });
-                w.Open("var", attrs, true);
-            }
-
-            for (const BlueprintNode& node : blueprint.nodes) {
+        void WriteCanvas(Writer& w, const Blueprint& blueprint, const BlueprintCanvas& canvas,
+                         std::string_view function) {
+            for (const BlueprintNode& node : canvas.nodes) {
                 std::vector<Attr> attrs{ { "id", std::to_string(node.id) },
                                          { "type", node.type } };
                 attrs.push_back({ "at", Vec2Text(node.position) });
@@ -337,11 +328,11 @@ namespace vae::doc {
 
                 // A pin's literal is written under the pin's own name. Every pin name starts with
                 // a capital and every reserved name above is lower case, so the two can never
-                // collide — which is a rule worth stating rather than noticing, and t_graph
+                // collide — which is a rule worth stating rather than noticing, and t_blueprint
                 // asserts it against the whole table.
                 std::vector<Attr> pins;
                 std::vector<Attr> longPins;
-                for (const PinSpec& pin : BlueprintInputs(blueprint, node)) {
+                for (const PinSpec& pin : BlueprintInputs(blueprint, node, function)) {
                     if (pin.type == PinType::Exec) continue;
                     const auto it = node.literals.find(std::string(pin.name));
                     if (it == node.literals.end() || !IsSet(it->second)) continue;
@@ -363,13 +354,59 @@ namespace vae::doc {
                 w.Close("node");
             }
 
-            for (const BlueprintLink& link : blueprint.links)
+            for (const BlueprintLink& link : canvas.links)
                 w.Open("link", { { "from", std::to_string(link.from) }, { "out", link.fromPin },
                                  { "to", std::to_string(link.to) }, { "in", link.toPin } }, true);
 
-            for (const BlueprintComment& note : blueprint.comments)
+            for (const BlueprintComment& note : canvas.comments)
                 w.Leaf("note", { { "at", Vec2Text(note.position) },
                                  { "size", Vec2Text(note.size) } }, note.text);
+        }
+
+        void WriteSignature(Writer& w, const char* tag, const std::vector<BlueprintParam>& params) {
+            for (const BlueprintParam& param : params) {
+                std::vector<Attr> attrs{ { "name", param.name },
+                                         { "type", std::string(PinTypeName(param.type)) } };
+                if (const auto value = ValueToAttr(param.defaultValue, ValueTypeOf(param.type)))
+                    attrs.push_back({ "value", *value });
+                w.Open(tag, attrs, true);
+            }
+        }
+
+        void WriteGraph(Writer& w, const Blueprint& blueprint) {
+            w.Open("blueprint", {}, false);
+
+            for (const BlueprintVariable& variable : blueprint.variables) {
+                std::vector<Attr> attrs{ { "name", variable.name },
+                                         { "type", std::string(PinTypeName(variable.type)) } };
+                if (const auto value = ValueToAttr(variable.defaultValue,
+                                                   ValueTypeOf(variable.type)))
+                    attrs.push_back({ "value", *value });
+                w.Open("var", attrs, true);
+            }
+
+            WriteCanvas(w, blueprint, blueprint.graph, {});
+
+            // A function and a custom event are the same declaration with two flags, and the two
+            // element names are those flags: what a reader wants to know first is which of the two
+            // this is, and an attribute would put it after the name.
+            for (const BlueprintFunction& function : blueprint.functions) {
+                const char* tag = function.event ? "event" : "function";
+                std::vector<Attr> attrs{ { "name", function.name } };
+                if (function.pure) attrs.push_back({ "pure", "true" });
+                w.Open(tag, attrs, false);
+                WriteSignature(w, "param", function.params);
+                WriteSignature(w, "return", function.returns);
+                for (const BlueprintVariable& local : function.locals) {
+                    std::vector<Attr> la{ { "name", local.name },
+                                          { "type", std::string(PinTypeName(local.type)) } };
+                    if (const auto value = ValueToAttr(local.defaultValue, ValueTypeOf(local.type)))
+                        la.push_back({ "value", *value });
+                    w.Open("local", la, true);
+                }
+                WriteCanvas(w, blueprint, function.body, function.name);
+                w.Close(tag);
+            }
 
             w.Close("blueprint");
         }
@@ -615,25 +652,20 @@ namespace vae::doc {
         // A <blueprint> back into logic. Node ids come out of the file because links name them; link
         // and note ids are minted here in document order, because nothing in the file refers to
         // one and a number nobody reads is a number nobody should have to write.
-        bool ReadGraph(const pugi::xml_node& el, Blueprint& out, std::string& error) {
+        // A <blueprint> back into logic. Node ids come out of the file because links name them;
+        // link and note ids are minted here in document order, because nothing in the file refers
+        // to one and a number nobody reads is a number nobody should have to write.
+        bool ReadCanvas(const pugi::xml_node& el, Blueprint& blueprint, BlueprintCanvas& out,
+                        std::string_view function, std::string& error) {
             std::vector<std::pair<BlueprintNode, std::vector<std::pair<std::string, std::string>>>>
                 pending;
 
             for (pugi::xml_node child : el.children()) {
                 const std::string_view tag = child.name();
                 if (tag.empty()) continue;
-
-                if (tag == "var") {
-                    BlueprintVariable variable;
-                    variable.name = child.attribute("name").as_string();
-                    variable.type = ValueTypeFromName(child.attribute("type").as_string("number"))
-                                        .value_or(ValueType::Number);
-                    if (const auto attr = child.attribute("value"))
-                        variable.defaultValue = ValueFromAttr(attr.as_string(), variable.type);
-                    if (variable.name.empty()) { error = "a blueprint variable with no name"; return false; }
-                    out.variables.push_back(std::move(variable));
-                    continue;
-                }
+                // Anything a canvas does not own belongs to whoever called this.
+                if (tag == "var" || tag == "param" || tag == "return" || tag == "local"
+                    || tag == "function" || tag == "event") continue;
 
                 if (tag == "note") {
                     BlueprintComment note;
@@ -652,13 +684,13 @@ namespace vae::doc {
                     link.fromPin = child.attribute("out").as_string();
                     link.to      = static_cast<u32>(child.attribute("to").as_uint(0));
                     link.toPin   = child.attribute("in").as_string();
-                    if (link.from == 0 || link.to == 0) { error = "a link with no ends"; return false; }
+                    if (link.from == 0 || link.to == 0) { error = "a wire with no ends"; return false; }
                     out.links.push_back(std::move(link));
                     continue;
                 }
 
                 if (tag != "node") {
-                    error = "unknown element <" + std::string(tag) + "> inside <blueprint>";
+                    error = "unknown element <" + std::string(tag) + "> inside a blueprint";
                     return false;
                 }
 
@@ -693,26 +725,87 @@ namespace vae::doc {
                 pending.emplace_back(std::move(node), std::move(literals));
             }
 
-            // Literals are typed by the pins they sit on, and a variable node's pins are typed by
-            // the variable — which is why this is a second pass: every <var> has been read by now.
+            // Literals are typed by the pins they sit on, and a pin's type can depend on a
+            // variable, a local or a signature — which is why this is a second pass, after every
+            // declaration in the blueprint has been read.
             for (auto& [node, literals] : pending) {
                 for (const auto& [name, text] : literals) {
                     const PinSpec* found = nullptr;
-                    const std::vector<PinSpec> inputs = BlueprintInputs(out, node);
+                    const std::vector<PinSpec> inputs = BlueprintInputs(blueprint, node, function);
                     for (const PinSpec& pin : inputs)
                         if (pin.name == name) { found = &pin; break; }
                     if (!found) {
-                        error = "blueprint node '" + node.type + "' has no pin called '" + name + "'";
+                        error = "blueprint node '" + node.type + "' has no pin called '"
+                              + name + "'";
                         return false;
                     }
                     node.literals[name] = ParsePinLiteral(text, found->type);
                 }
                 out.nodes.push_back(std::move(node));
             }
+            return true;
+        }
+
+        BlueprintParam ReadParam(const pugi::xml_node& el) {
+            BlueprintParam param;
+            param.name = el.attribute("name").as_string();
+            param.type = PinTypeFromName(el.attribute("type").as_string("number"))
+                             .value_or(PinType::Number);
+            if (const auto attr = el.attribute("value"))
+                param.defaultValue = ValueFromAttr(attr.as_string(), ValueTypeOf(param.type));
+            return param;
+        }
+
+        bool ReadGraph(const pugi::xml_node& el, Blueprint& out, std::string& error) {
+            // Declarations first, all of them, because a pin's type can name any of them and the
+            // canvases are read against the answers.
+            for (pugi::xml_node child : el.children("var")) {
+                BlueprintVariable variable;
+                variable.name = child.attribute("name").as_string();
+                variable.type = PinTypeFromName(child.attribute("type").as_string("number"))
+                                    .value_or(PinType::Number);
+                if (const auto attr = child.attribute("value"))
+                    variable.defaultValue = ValueFromAttr(attr.as_string(),
+                                                          ValueTypeOf(variable.type));
+                if (variable.name.empty()) { error = "a blueprint variable with no name"; return false; }
+                out.variables.push_back(std::move(variable));
+            }
+
+            for (pugi::xml_node child : el.children()) {
+                const std::string_view tag = child.name();
+                if (tag != "function" && tag != "event") continue;
+                BlueprintFunction function;
+                function.name  = child.attribute("name").as_string();
+                function.pure  = child.attribute("pure").as_bool(false);
+                function.event = tag == "event";
+                if (function.name.empty()) { error = "a function with no name"; return false; }
+                for (pugi::xml_node p : child.children("param"))  function.params.push_back(ReadParam(p));
+                for (pugi::xml_node p : child.children("return")) function.returns.push_back(ReadParam(p));
+                for (pugi::xml_node p : child.children("local")) {
+                    const BlueprintParam read = ReadParam(p);
+                    function.locals.push_back({ read.name, read.type, read.defaultValue });
+                }
+                out.functions.push_back(std::move(function));
+            }
+
+            // Then the canvases, in the same order, now that every name resolves.
+            if (!ReadCanvas(el, out, out.graph, {}, error)) return false;
+            std::size_t at = 0;
+            for (pugi::xml_node child : el.children()) {
+                const std::string_view tag = child.name();
+                if (tag != "function" && tag != "event") continue;
+                if (at >= out.functions.size()) break;
+                BlueprintFunction& function = out.functions[at++];
+                if (!ReadCanvas(child, out, function.body, function.name, error)) return false;
+            }
 
             out.RecomputeNextId();
-            for (BlueprintLink& link : out.links) link.id = out.MintId();
-            for (BlueprintComment& note : out.comments) note.id = out.MintId();
+            const auto Mint = [&](BlueprintCanvas& canvas) {
+                for (BlueprintLink& link : canvas.links) link.id = out.MintId();
+                for (BlueprintComment& note : canvas.comments) note.id = out.MintId();
+            };
+            Mint(out.graph);
+            for (BlueprintFunction& function : out.functions) Mint(function.body);
             return true;
         }
 

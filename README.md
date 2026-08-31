@@ -94,6 +94,10 @@ Every node is one call in `vae/script/VaeScript.h` â€” the palette says which â€
 what a script can do and nothing else. It is stored inside the screen or component it drives, so
 there is no separate file and nothing to keep in step.
 
+Functions and custom events are second canvases with a signature, called from anywhere in the same
+blueprint; lists and maps are pin types of their own. Ctrl+G collapses a selection into a function
+and leaves a call where it was, working out the parameters from what crossed the boundary.
+
 `design/blueprints.md` has the model, the execution rules and what the compiler refuses.
 
 ## Export

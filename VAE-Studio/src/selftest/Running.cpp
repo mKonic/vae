@@ -158,6 +158,20 @@ namespace vae::selftest {
               "and the right one counted separately: "
                   + TextIn(layer.Surface().Host().Tree(), right, "Count"));
 
+        // The custom event, which is the half of the sample that waits: a function has to have
+        // finished by the time the call hands back, so the Delay lives in an event instead. Until
+        // it comes due the title is what the designer drew.
+        Check(TextIn(layer.Surface().Host().Tree(), left, "Title") == "Clicks",
+              "the announcement has not landed yet: "
+                  + TextIn(layer.Surface().Host().Tree(), left, "Title"));
+        for (int i = 0; i < 40; ++i) driver.Frame();       // 0.66s, past the 0.4s Delay
+        Check(TextIn(layer.Surface().Host().Tree(), left, "Title") == "1 · 2",
+              "and then it says what the list remembered: "
+                  + TextIn(layer.Surface().Host().Tree(), left, "Title"));
+        Check(TextIn(layer.Surface().Host().Tree(), right, "Title") == "1",
+              "one list per copy, like every other variable: "
+                  + TextIn(layer.Surface().Host().Tree(), right, "Title"));
+
         // The wires the app went through, which is what the canvas animates while it runs.
         scripts.Blueprints()->SetWatching(true);
         scripts.Blueprints()->TakeFlow();

@@ -100,7 +100,7 @@ namespace vae {
         void LoadRecents();
         // Bumped whenever the default layout gains a panel, so an existing layout is rebuilt
         // once instead of hiding the new one.
-        static constexpr int kLayoutVersion = 5;   // 5: the Blueprint tab
+        static constexpr int kLayoutVersion = 6;   // 6: the Logic tab
         int  m_LayoutVersion = 0;
 
         void TickAutosave();

@@ -309,12 +309,10 @@ namespace vae {
         m_Diagnostics.clear();
         for (const script::BlueprintHost::Message& message : probe.Messages()) {
             output += message.component + ": " + message.message + "\n";
-            Diagnostic diagnostic;
-            diagnostic.file = message.component;
-            diagnostic.line = static_cast<int>(message.node);
-            diagnostic.error = message.error;
-            diagnostic.message = message.message;
-            m_Diagnostics.push_back(std::move(diagnostic));
+            // Built in one piece rather than field by field: at -O2 GCC cannot see that the
+            // default member initialisers ran and warns about reading `error` uninitialised.
+            m_Diagnostics.push_back({ message.component, static_cast<int>(message.node), 0,
+                                      message.error, message.message });
         }
         m_Output = output;
         if (probe.ErrorCount() > 0) return false;
